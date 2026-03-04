@@ -121,3 +121,4 @@ type ExperienceSettings = {
   "animTracks": []
 }
 ```
+pm2 start npm --name "splatviewer" -- run serve

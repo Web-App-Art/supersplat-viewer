@@ -259,13 +259,17 @@ const initUI = (global: Global) => {
         canvas.dispatchEvent(new WheelEvent(event.type, event));
     }, { passive: false });
 
+    // Tailwind lime palette (hex) for loading bar styling
+    const lime500 = '#84CC16';
+    const lime100 = '#ECFCCB';
+
     // Handle loading progress updates
     events.on('progress:changed', (progress) => {
         dom.loadingText.textContent = `${progress}%`;
         if (progress < 100) {
-            dom.loadingBar.style.backgroundImage = `linear-gradient(90deg, #F60 0%, #F60 ${progress}%, white ${progress}%, white 100%)`;
+            dom.loadingBar.style.backgroundImage = `linear-gradient(90deg, ${lime500} 0%, ${lime500} ${progress}%, ${lime100} ${progress}%, ${lime100} 100%)`;
         } else {
-            dom.loadingBar.style.backgroundImage = 'linear-gradient(90deg, #F60 0%, #F60 100%)';
+            dom.loadingBar.style.backgroundImage = `linear-gradient(90deg, ${lime500} 0%, ${lime500} 100%)`;
         }
     });
 
