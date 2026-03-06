@@ -1,50 +1,32 @@
 import { Vec3 } from 'playcanvas';
 
-import { Picker } from './picker';
+import { ToolPointerHandler } from './tool-pointer-handler';
+import { worldToScreen, drawEdgeLabel } from './tool-utils';
 import type { Global } from './types';
 
 type AreaMeasureState = 'idle' | 'placing' | 'closed';
 
 class AreaMeasureTool {
     private global: Global;
-    private picker: Picker;
+    private pointerHandler: ToolPointerHandler;
     private state: AreaMeasureState = 'idle';
     private currentPoints: Vec3[] = [];
 
     private overlay: HTMLDivElement | null = null;
     private drawCanvas: HTMLCanvasElement | null = null;
     private updateHandler: ((dt: number) => void) | null = null;
-    private mouseX = 0;
-    private mouseY = 0;
-
-    // Vertex selection & drag
-    private selectedIndex = -1;
-    private dragIndex = -1;
-    private dragPlaneNormal = new Vec3();
-    private dragPlanePoint = new Vec3();
-
-    // Pointer tracking
-    private downX = 0;
-    private downY = 0;
-    private isDown = false;
-    private downOnCanvas = false;
-
-    // Bound handlers for cleanup
-    private _onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
-    private _onDocumentPointerMove: ((e: PointerEvent) => void) | null = null;
-    private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
-    private _onCanvasContextMenu: ((e: Event) => void) | null = null;
-    private _keyHandler: ((e: KeyboardEvent) => void) | null = null;
-    private _savedCursor: string = '';
 
     constructor(global: Global) {
         this.global = global;
-        this.picker = new Picker(global.app, global.camera);
+        this.pointerHandler = new ToolPointerHandler(global, {
+            onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
+            getDraggablePoints: () => this.state === 'closed' ? this.currentPoints : [],
+            onClear: () => this.clearAll()
+        });
     }
 
     activate() {
-        const { app, events } = this.global;
-        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+        const { app } = this.global;
 
         // Purely visual overlay — pointer-events: none
         this.overlay = document.createElement('div');
@@ -56,110 +38,37 @@ class AreaMeasureTool {
         this.drawCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;';
         this.overlay.appendChild(this.drawCanvas);
 
-        // Set crosshair cursor on the WebGL canvas
-        this._savedCursor = appCanvas.style.cursor;
-        appCanvas.style.cursor = 'crosshair';
+        this.pointerHandler.activate();
 
-        // -- Document capture-phase pointerdown --
-        // Fires before canvas bubble-phase listeners (PlayCanvas orbit controller).
-        // Only intercepts when starting a vertex drag; otherwise passes through.
-        this._onDocumentPointerDown = (event: PointerEvent) => {
-            if (event.button !== 0) return;
-
-            // Only handle events targeting the WebGL canvas
-            if (event.target !== appCanvas) {
-                this.downOnCanvas = false;
-                return;
-            }
-
-            this.downX = event.clientX;
-            this.downY = event.clientY;
-            this.isDown = true;
-            this.downOnCanvas = true;
-            events.fire('inputEvent', 'interact');
-
-            // In closed state, check if clicking on a vertex to start drag
-            if (this.state === 'closed') {
-                const hitIdx = this.findPointNear(event.clientX, event.clientY);
-                if (hitIdx !== -1) {
-                    this.startDrag(hitIdx);
-                    // Stop propagation so the camera orbit controller never receives this event
-                    event.stopPropagation();
-                }
-            }
-        };
-        document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
-
-        // -- Document pointermove --
-        this._onDocumentPointerMove = (event: PointerEvent) => {
-            this.mouseX = event.clientX;
-            this.mouseY = event.clientY;
-
-            if (this.dragIndex >= 0) {
-                this.updateDrag(event.clientX, event.clientY);
-                appCanvas.style.cursor = 'grabbing';
-            } else if (this.state === 'closed') {
-                const hitIdx = this.findPointNear(event.clientX, event.clientY);
-                appCanvas.style.cursor = hitIdx !== -1 ? 'grab' : 'crosshair';
-            }
-        };
-        document.addEventListener('pointermove', this._onDocumentPointerMove);
-
-        // -- Document pointerup --
-        this._onDocumentPointerUp = (event: PointerEvent) => {
-            if (event.button !== 0 || !this.isDown) return;
-            this.isDown = false;
-
-            // If we were dragging, just stop the drag
-            if (this.dragIndex >= 0) {
-                this.stopDrag();
-                const hitIdx = this.findPointNear(event.clientX, event.clientY);
-                appCanvas.style.cursor = hitIdx !== -1 ? 'grab' : 'crosshair';
-                return;
-            }
-
-            // Ignore if the pointerdown didn't originate on the canvas
-            if (!this.downOnCanvas) return;
-
-            // Ignore camera-orbit drags (> 5px movement)
-            const dx = event.clientX - this.downX;
-            const dy = event.clientY - this.downY;
-            if (dx * dx + dy * dy > 25) return;
-
-            // It's a click on the canvas — place a point or select a vertex
-            events.fire('inputEvent', 'interact');
-
-            const rect = appCanvas.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-
-            this.picker.pick(x, y).then((pos) => {
-                if (!pos) return;
-                this.handleClick(pos, event.clientX, event.clientY);
-            });
-        };
-        document.addEventListener('pointerup', this._onDocumentPointerUp);
-
-        // -- Right-click clears everything --
-        this._onCanvasContextMenu = (event: Event) => {
-            event.preventDefault();
-            this.clearAll();
-        };
-        appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu);
-
-        // -- Escape key --
-        this._keyHandler = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                this.clearAll();
-            }
-        };
-        document.addEventListener('keydown', this._keyHandler);
-
-        // -- Per-frame render --
         this.updateHandler = () => {
             this.render();
         };
         app.on('update', this.updateHandler);
+    }
+
+    deactivate() {
+        const { app } = this.global;
+
+        if (this.updateHandler) {
+            app.off('update', this.updateHandler);
+            this.updateHandler = null;
+        }
+
+        this.pointerHandler.deactivate();
+
+        if (this.overlay) {
+            this.overlay.remove();
+            this.overlay = null;
+        }
+
+        this.drawCanvas = null;
+        this.currentPoints = [];
+        this.state = 'idle';
+    }
+
+    destroy() {
+        this.deactivate();
+        this.pointerHandler.destroy();
     }
 
     private handleClick(pos: Vec3, clientX: number, clientY: number) {
@@ -167,13 +76,13 @@ class AreaMeasureTool {
             this.currentPoints = [pos];
             this.state = 'placing';
         } else if (this.state === 'closed') {
-            // Check if clicking on an existing vertex to select it
-            const hitIdx = this.findPointNear(clientX, clientY);
-            this.selectedIndex = hitIdx; // -1 if no hit = deselect
+            // Vertex clicks are handled by the drag mechanism in ToolPointerHandler.
+            // Here we only handle clicks on empty space → deselect.
+            this.pointerHandler.selectedIndex = -1;
         } else if (this.state === 'placing') {
             // Snap to first point to close polygon
             if (this.currentPoints.length >= 3) {
-                const firstScreen = this.worldToScreen(this.currentPoints[0]);
+                const firstScreen = worldToScreen(this.global.camera, this.currentPoints[0]);
                 if (!firstScreen.behind) {
                     const sdx = clientX - firstScreen.x;
                     const sdy = clientY - firstScreen.y;
@@ -187,144 +96,10 @@ class AreaMeasureTool {
         }
     }
 
-    private startDrag(index: number) {
-        this.dragIndex = index;
-        this.selectedIndex = index;
-
-        // Drag plane: perpendicular to camera forward, passing through the vertex
-        const camera = this.global.camera;
-        this.dragPlaneNormal.copy(camera.forward);
-        this.dragPlanePoint.copy(this.currentPoints[index]);
-    }
-
-    private updateDrag(clientX: number, clientY: number) {
-        if (this.dragIndex < 0 || this.dragIndex >= this.currentPoints.length) return;
-
-        const { app, camera } = this.global;
-        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
-        const rect = appCanvas.getBoundingClientRect();
-
-        // Convert client coords to canvas pixel coords
-        const pixelX = (clientX - rect.left) * (appCanvas.width / rect.width);
-        const pixelY = (clientY - rect.top) * (appCanvas.height / rect.height);
-
-        // Get ray from camera through screen point
-        const nearPoint = new Vec3();
-        const farPoint = new Vec3();
-        camera.camera.screenToWorld(pixelX, pixelY, camera.camera.nearClip, nearPoint);
-        camera.camera.screenToWorld(pixelX, pixelY, camera.camera.farClip, farPoint);
-
-        const rayDir = new Vec3().sub2(farPoint, nearPoint).normalize();
-
-        // Ray-plane intersection
-        const denom = rayDir.dot(this.dragPlaneNormal);
-        if (Math.abs(denom) < 1e-6) return;
-
-        const t = new Vec3().sub2(this.dragPlanePoint, nearPoint).dot(this.dragPlaneNormal) / denom;
-        if (t < 0) return;
-
-        const newPos = new Vec3().add2(nearPoint, new Vec3().copy(rayDir).mulScalar(t));
-        this.currentPoints[this.dragIndex].copy(newPos);
-
-        // Force re-render
-        app.renderNextFrame = true;
-    }
-
-    private stopDrag() {
-        this.dragIndex = -1;
-    }
-
-    deactivate() {
-        const { app } = this.global;
-        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
-
-        if (this.updateHandler) {
-            app.off('update', this.updateHandler);
-            this.updateHandler = null;
-        }
-
-        if (this._keyHandler) {
-            document.removeEventListener('keydown', this._keyHandler);
-            this._keyHandler = null;
-        }
-
-        if (this._onDocumentPointerDown) {
-            document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
-            this._onDocumentPointerDown = null;
-        }
-
-        if (this._onDocumentPointerMove) {
-            document.removeEventListener('pointermove', this._onDocumentPointerMove);
-            this._onDocumentPointerMove = null;
-        }
-
-        if (this._onDocumentPointerUp) {
-            document.removeEventListener('pointerup', this._onDocumentPointerUp);
-            this._onDocumentPointerUp = null;
-        }
-
-        if (this._onCanvasContextMenu) {
-            appCanvas.removeEventListener('contextmenu', this._onCanvasContextMenu);
-            this._onCanvasContextMenu = null;
-        }
-
-        // Restore cursor
-        appCanvas.style.cursor = this._savedCursor;
-
-        if (this.overlay) {
-            this.overlay.remove();
-            this.overlay = null;
-        }
-
-        this.drawCanvas = null;
-        this.currentPoints = [];
-        this.state = 'idle';
-        this.selectedIndex = -1;
-        this.dragIndex = -1;
-        this.isDown = false;
-        this.downOnCanvas = false;
-    }
-
-    destroy() {
-        this.deactivate();
-        this.picker.release();
-    }
-
     private clearAll() {
         this.currentPoints = [];
         this.state = 'idle';
-        this.selectedIndex = -1;
-        this.dragIndex = -1;
-    }
-
-    private findPointNear(clientX: number, clientY: number): number {
-        const threshold = 400; // 20px squared
-        for (let i = 0; i < this.currentPoints.length; i++) {
-            const sp = this.worldToScreen(this.currentPoints[i]);
-            if (sp.behind) continue;
-            const dx = clientX - sp.x;
-            const dy = clientY - sp.y;
-            if (dx * dx + dy * dy < threshold) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private worldToScreen(pos: Vec3): { x: number; y: number; behind: boolean } {
-        const camera = this.global.camera;
-        const cameraPos = camera.getPosition();
-        const forward = camera.forward;
-        const toPoint = new Vec3().sub2(pos, cameraPos);
-        const dot = toPoint.dot(forward);
-
-        if (dot < 0) {
-            return { x: 0, y: 0, behind: true };
-        }
-
-        const screenPos = new Vec3();
-        camera.camera.worldToScreen(pos, screenPos);
-        return { x: screenPos.x, y: screenPos.y, behind: false };
+        this.pointerHandler.reset();
     }
 
     private render() {
@@ -351,7 +126,8 @@ class AreaMeasureTool {
     }
 
     private drawPolygon(ctx: CanvasRenderingContext2D, points: Vec3[], closed: boolean) {
-        const screenPoints = points.map(p => this.worldToScreen(p));
+        const camera = this.global.camera;
+        const screenPoints = points.map(p => worldToScreen(camera, p));
         const allVisible = screenPoints.every(s => !s.behind);
         if (!allVisible) return;
 
@@ -390,7 +166,7 @@ class AreaMeasureTool {
             const last = screenPoints[screenPoints.length - 1];
             ctx.beginPath();
             ctx.moveTo(last.x, last.y);
-            ctx.lineTo(this.mouseX, this.mouseY);
+            ctx.lineTo(this.pointerHandler.mouseX, this.pointerHandler.mouseY);
             ctx.setLineDash([6, 4]);
             ctx.stroke();
             ctx.setLineDash([]);
@@ -399,7 +175,7 @@ class AreaMeasureTool {
         // Draw pins
         for (let i = 0; i < screenPoints.length; i++) {
             const sp = screenPoints[i];
-            const isSelected = closed && i === this.selectedIndex;
+            const isSelected = closed && i === this.pointerHandler.selectedIndex;
             const pinRadius = isSelected ? 8 : 6;
             ctx.beginPath();
             ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
@@ -412,10 +188,10 @@ class AreaMeasureTool {
 
         // Draw distance labels on edges
         for (let i = 0; i < screenPoints.length - 1; i++) {
-            this.drawEdgeLabel(ctx, points[i], points[i + 1], screenPoints[i], screenPoints[i + 1]);
+            drawEdgeLabel(ctx, points[i], points[i + 1], screenPoints[i], screenPoints[i + 1]);
         }
         if (closed && screenPoints.length >= 3) {
-            this.drawEdgeLabel(ctx, points[points.length - 1], points[0], screenPoints[screenPoints.length - 1], screenPoints[0]);
+            drawEdgeLabel(ctx, points[points.length - 1], points[0], screenPoints[screenPoints.length - 1], screenPoints[0]);
         }
 
         // Draw area label at centroid when closed
@@ -443,37 +219,6 @@ class AreaMeasureTool {
             ctx.fillStyle = '#FFFFFF';
             ctx.fillText(areaText, cx, cy);
         }
-    }
-
-    private drawEdgeLabel(
-        ctx: CanvasRenderingContext2D,
-        p1: Vec3, p2: Vec3,
-        s1: { x: number; y: number },
-        s2: { x: number; y: number }
-    ) {
-        const dist = new Vec3().sub2(p1, p2).length();
-        const text = this.formatDistance(dist);
-        const mx = (s1.x + s2.x) / 2;
-        const my = (s1.y + s2.y) / 2;
-
-        ctx.font = '13px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const metrics = ctx.measureText(text);
-        const pw = 6, ph = 3;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.beginPath();
-        ctx.roundRect(mx - metrics.width / 2 - pw, my - 7 - ph, metrics.width + pw * 2, 14 + ph * 2, 4);
-        ctx.fill();
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(text, mx, my);
-    }
-
-    private formatDistance(dist: number): string {
-        if (dist >= 1) {
-            return `${dist.toFixed(2)} m`;
-        }
-        return `${(dist * 100).toFixed(1)} cm`;
     }
 
     private formatArea(area: number): string {

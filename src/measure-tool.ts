@@ -1,129 +1,47 @@
 import { Vec3 } from 'playcanvas';
 
-import { Picker } from './picker';
+import { ToolPointerHandler } from './tool-pointer-handler';
+import { worldToScreen, drawEdgeLabel } from './tool-utils';
 import type { Global } from './types';
 
 type MeasureState = 'idle' | 'first_placed' | 'complete';
 
 class MeasureTool {
     private global: Global;
-    private picker: Picker;
-    private pinA: Vec3 | null = null;
-    private pinB: Vec3 | null = null;
+    private pointerHandler: ToolPointerHandler;
+    private points: Vec3[] = [];
     private measureState: MeasureState = 'idle';
 
     private overlay: HTMLDivElement | null = null;
-    private pinAElement: HTMLDivElement | null = null;
-    private pinBElement: HTMLDivElement | null = null;
-    private lineCanvas: HTMLCanvasElement | null = null;
-    private labelElement: HTMLDivElement | null = null;
-
+    private drawCanvas: HTMLCanvasElement | null = null;
     private updateHandler: ((dt: number) => void) | null = null;
 
     constructor(global: Global) {
         this.global = global;
-        this.picker = new Picker(global.app, global.camera);
+        this.pointerHandler = new ToolPointerHandler(global, {
+            onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
+            getDraggablePoints: () => this.measureState === 'complete' ? this.points : [],
+            onClear: () => this.clearAll()
+        });
     }
 
     activate() {
-        const { app, events } = this.global;
+        const { app } = this.global;
 
-        // Create a full-viewport overlay that intercepts pointer events.
-        // Inserted as the first child of #ui so it sits BELOW the toolbar
-        // buttons (which come later in DOM order) but ABOVE the canvas.
+        // Purely visual overlay — pointer-events: none
         this.overlay = document.createElement('div');
         this.overlay.id = 'measureOverlay';
-
         const ui = document.querySelector('#ui');
         ui.insertBefore(this.overlay, ui.firstChild);
 
-        // Create line canvas
-        this.lineCanvas = document.createElement('canvas');
-        this.lineCanvas.className = 'measure-line-canvas';
-        this.overlay.appendChild(this.lineCanvas);
+        this.drawCanvas = document.createElement('canvas');
+        this.drawCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;';
+        this.overlay.appendChild(this.drawCanvas);
 
-        // Create pin elements
-        this.pinAElement = document.createElement('div');
-        this.pinAElement.className = 'measure-pin';
-        this.overlay.appendChild(this.pinAElement);
+        this.pointerHandler.activate();
 
-        this.pinBElement = document.createElement('div');
-        this.pinBElement.className = 'measure-pin';
-        this.overlay.appendChild(this.pinBElement);
-
-        // Create label
-        this.labelElement = document.createElement('div');
-        this.labelElement.className = 'measure-label';
-        this.overlay.appendChild(this.labelElement);
-
-        // Hide pin/label initially
-        this.pinAElement.style.display = 'none';
-        this.pinBElement.style.display = 'none';
-        this.labelElement.style.display = 'none';
-
-        // Track pointer for click-vs-drag detection
-        let downX = 0;
-        let downY = 0;
-        let isDown = false;
-
-        this.overlay.addEventListener('pointerdown', (event: PointerEvent) => {
-            if (event.button !== 0) return;
-            downX = event.clientX;
-            downY = event.clientY;
-            isDown = true;
-            // Keep toolbar visible
-            events.fire('inputEvent', 'interact');
-        });
-
-        this.overlay.addEventListener('pointerup', async (event: PointerEvent) => {
-            if (event.button !== 0 || !isDown) return;
-            isDown = false;
-
-            // Ignore drags (> 5px movement)
-            const dx = event.clientX - downX;
-            const dy = event.clientY - downY;
-            if (dx * dx + dy * dy > 25) return;
-
-            // Keep toolbar visible
-            events.fire('inputEvent', 'interact');
-
-            const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
-            const rect = canvas.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-
-            const pos = await this.picker.pick(x, y);
-            if (!pos) return;
-
-            if (this.measureState === 'idle') {
-                this.pinA = pos;
-                this.measureState = 'first_placed';
-                this.pinAElement.style.display = 'block';
-                this.pinBElement.style.display = 'none';
-                this.labelElement.style.display = 'none';
-                this.updateProjection();
-            } else if (this.measureState === 'first_placed') {
-                this.pinB = pos;
-                this.measureState = 'complete';
-                this.pinBElement.style.display = 'block';
-                this.labelElement.style.display = 'block';
-                this.updateProjection();
-            } else {
-                // Reset: start new measurement
-                this.pinA = pos;
-                this.pinB = null;
-                this.measureState = 'first_placed';
-                this.pinAElement.style.display = 'block';
-                this.pinBElement.style.display = 'none';
-                this.labelElement.style.display = 'none';
-                this.clearLine();
-                this.updateProjection();
-            }
-        });
-
-        // Update projection each frame
         this.updateHandler = () => {
-            this.updateProjection();
+            this.render();
         };
         app.on('update', this.updateHandler);
     }
@@ -136,119 +54,102 @@ class MeasureTool {
             this.updateHandler = null;
         }
 
+        this.pointerHandler.deactivate();
+
         if (this.overlay) {
             this.overlay.remove();
             this.overlay = null;
         }
 
-        this.pinA = null;
-        this.pinB = null;
+        this.drawCanvas = null;
+        this.points = [];
         this.measureState = 'idle';
-        this.pinAElement = null;
-        this.pinBElement = null;
-        this.lineCanvas = null;
-        this.labelElement = null;
     }
 
-    private worldToScreen(pos: Vec3): { x: number; y: number; behind: boolean } {
-        const camera = this.global.camera;
-
-        // Check if point is behind camera
-        const cameraPos = camera.getPosition();
-        const forward = camera.forward;
-        const toPoint = new Vec3().sub2(pos, cameraPos);
-        const dot = toPoint.dot(forward);
-
-        if (dot < 0) {
-            return { x: 0, y: 0, behind: true };
-        }
-
-        const screenPos = new Vec3();
-        camera.camera.worldToScreen(pos, screenPos);
-
-        return {
-            x: screenPos.x,
-            y: screenPos.y,
-            behind: false
-        };
+    destroy() {
+        this.deactivate();
+        this.pointerHandler.destroy();
     }
 
-    private updateProjection() {
-        if (!this.pinA || !this.pinAElement) return;
-
-        const screenA = this.worldToScreen(this.pinA);
-        this.pinAElement.style.display = screenA.behind ? 'none' : 'block';
-        this.pinAElement.style.left = `${screenA.x}px`;
-        this.pinAElement.style.top = `${screenA.y}px`;
-
-        if (this.pinB && this.pinBElement && this.measureState === 'complete') {
-            const screenB = this.worldToScreen(this.pinB);
-            this.pinBElement.style.display = screenB.behind ? 'none' : 'block';
-            this.pinBElement.style.left = `${screenB.x}px`;
-            this.pinBElement.style.top = `${screenB.y}px`;
-
-            if (!screenA.behind && !screenB.behind) {
-                this.drawLine(screenA.x, screenA.y, screenB.x, screenB.y);
+    private handleClick(pos: Vec3, clientX: number, clientY: number) {
+        if (this.measureState === 'idle') {
+            this.points = [pos];
+            this.measureState = 'first_placed';
+        } else if (this.measureState === 'first_placed') {
+            this.points.push(pos);
+            this.measureState = 'complete';
+        } else if (this.measureState === 'complete') {
+            // Vertex clicks are handled by the drag mechanism in ToolPointerHandler
+            // (clicking a vertex starts a zero-length drag, setting selectedIndex).
+            // Here we only handle clicks on empty space.
+            if (this.pointerHandler.selectedIndex >= 0) {
+                // A vertex was selected — clicking elsewhere deselects
+                this.pointerHandler.selectedIndex = -1;
             } else {
-                this.clearLine();
-            }
-
-            if (this.labelElement && !screenA.behind && !screenB.behind) {
-                const dist = new Vec3().sub2(this.pinA, this.pinB).length();
-                this.labelElement.textContent = this.formatDistance(dist);
-                this.labelElement.style.display = 'block';
-                this.labelElement.style.left = `${(screenA.x + screenB.x) / 2}px`;
-                this.labelElement.style.top = `${(screenA.y + screenB.y) / 2}px`;
-            } else if (this.labelElement) {
-                this.labelElement.style.display = 'none';
+                // No vertex selected — start new measurement
+                this.points = [pos];
+                this.measureState = 'first_placed';
+                this.pointerHandler.reset();
             }
         }
     }
 
-    private formatDistance(dist: number): string {
-        if (dist >= 1) {
-            return `${dist.toFixed(2)} m`;
-        }
-        return `${(dist * 100).toFixed(1)} cm`;
+    private clearAll() {
+        this.points = [];
+        this.measureState = 'idle';
+        this.pointerHandler.reset();
     }
 
-    private drawLine(x1: number, y1: number, x2: number, y2: number) {
-        if (!this.lineCanvas) return;
+    private render() {
+        if (!this.drawCanvas) return;
 
         const dpr = window.devicePixelRatio || 1;
         const width = window.innerWidth;
         const height = window.innerHeight;
 
-        if (this.lineCanvas.width !== width * dpr || this.lineCanvas.height !== height * dpr) {
-            this.lineCanvas.width = width * dpr;
-            this.lineCanvas.height = height * dpr;
-            this.lineCanvas.style.width = `${width}px`;
-            this.lineCanvas.style.height = `${height}px`;
+        if (this.drawCanvas.width !== width * dpr || this.drawCanvas.height !== height * dpr) {
+            this.drawCanvas.width = width * dpr;
+            this.drawCanvas.height = height * dpr;
+            this.drawCanvas.style.width = `${width}px`;
+            this.drawCanvas.style.height = `${height}px`;
         }
 
-        const ctx = this.lineCanvas.getContext('2d');
-        ctx.clearRect(0, 0, this.lineCanvas.width, this.lineCanvas.height);
+        const ctx = this.drawCanvas.getContext('2d');
+        ctx.clearRect(0, 0, this.drawCanvas.width, this.drawCanvas.height);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = '#FF6600';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
+        if (this.points.length === 0) return;
 
-    private clearLine() {
-        if (!this.lineCanvas) return;
-        const ctx = this.lineCanvas.getContext('2d');
-        if (ctx) {
-            ctx.clearRect(0, 0, this.lineCanvas.width, this.lineCanvas.height);
+        const camera = this.global.camera;
+        const screenPoints = this.points.map(p => worldToScreen(camera, p));
+        const allVisible = screenPoints.every(s => !s.behind);
+        if (!allVisible) return;
+
+        // Draw line between points
+        if (this.points.length === 2) {
+            ctx.strokeStyle = '#FF6600';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
+            ctx.lineTo(screenPoints[1].x, screenPoints[1].y);
+            ctx.stroke();
+
+            drawEdgeLabel(ctx, this.points[0], this.points[1], screenPoints[0], screenPoints[1]);
         }
-    }
 
-    destroy() {
-        this.deactivate();
-        this.picker.release();
+        // Draw pins
+        for (let i = 0; i < screenPoints.length; i++) {
+            const sp = screenPoints[i];
+            const isSelected = this.measureState === 'complete' && i === this.pointerHandler.selectedIndex;
+            const pinRadius = isSelected ? 8 : 6;
+            ctx.beginPath();
+            ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
+            ctx.fillStyle = isSelected ? '#FFFFFF' : '#FF6600';
+            ctx.fill();
+            ctx.strokeStyle = isSelected ? '#FF6600' : '#FFFFFF';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
     }
 }
 
