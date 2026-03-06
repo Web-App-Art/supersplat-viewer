@@ -212,6 +212,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         hasCollision: false,
         hasVoxelOverlay: false,
         voxelOverlayEnabled: false,
+        measureMode: false,
         isFullscreen: false,
         controlsHidden: false
     });

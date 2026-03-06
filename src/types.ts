@@ -44,6 +44,7 @@ type State = {
     hasCollision: boolean;
     hasVoxelOverlay: boolean;
     voxelOverlayEnabled: boolean;
+    measureMode: boolean;
     isFullscreen: boolean;
     controlsHidden: boolean;
 };

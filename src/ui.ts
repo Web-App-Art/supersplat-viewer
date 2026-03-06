@@ -238,6 +238,7 @@ const initUI = (global: Global) => {
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
         'showVoxels',
+        'measure',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
         'supersplatBranding'
@@ -420,7 +421,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible) {
+            if (!annotationVisible && !state.measureMode) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -554,6 +555,15 @@ const initUI = (global: Global) => {
         dom.showVoxels.classList.toggle('active', value);
     });
 
+    // Measure tool toggle
+    dom.measure.addEventListener('click', () => {
+        state.measureMode = !state.measureMode;
+    });
+
+    events.on('measureMode:changed', (value: boolean) => {
+        dom.measure.classList.toggle('active', value);
+    });
+
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');
     });
@@ -599,6 +609,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.fpsCamera, 'Walk Mode', 'top');
     tooltip.register(dom.reset, 'Reset Camera', 'bottom');
     tooltip.register(dom.frame, 'Frame Scene', 'bottom');
+    tooltip.register(dom.measure, 'Measure', 'top');
     tooltip.register(dom.showVoxels, 'Show Voxels', 'top');
     tooltip.register(dom.settings, 'Settings', 'top');
     tooltip.register(dom.info, 'Help', 'top');

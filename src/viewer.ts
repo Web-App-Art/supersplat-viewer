@@ -29,6 +29,7 @@ import { CameraManager } from './camera-manager';
 import { Camera } from './cameras/camera';
 import { nearlyEquals } from './core/math';
 import { InputController } from './input-controller';
+import { MeasureTool } from './measure-tool';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Global } from './types';
 import type { VoxelCollider } from './voxel-collider';
@@ -127,6 +128,8 @@ class Viewer {
     forceRenderNextFrame = false;
 
     voxelOverlay: VoxelDebugOverlay | null = null;
+
+    measureTool: MeasureTool;
 
     origChunks: {
         glsl: {
@@ -322,6 +325,16 @@ class Viewer {
                     app.renderNextFrame = true;
                 });
             }
+
+            // Measure tool
+            this.measureTool = new MeasureTool(global);
+            events.on('measureMode:changed', (value: boolean) => {
+                if (value) {
+                    this.measureTool.activate();
+                } else {
+                    this.measureTool.deactivate();
+                }
+            });
 
             this.cameraManager = new CameraManager(global, sceneBound, collider);
             applyCamera(this.cameraManager.camera);
