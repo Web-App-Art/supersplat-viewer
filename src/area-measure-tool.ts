@@ -5,23 +5,29 @@ import type { Global } from './types';
 
 type AreaMeasureState = 'idle' | 'placing' | 'closed';
 
-interface Polygon {
-    points: Vec3[];
-    closed: boolean;
-}
-
 class AreaMeasureTool {
     private global: Global;
     private picker: Picker;
     private state: AreaMeasureState = 'idle';
     private currentPoints: Vec3[] = [];
-    private completedPolygons: Polygon[] = [];
 
     private overlay: HTMLDivElement | null = null;
     private canvas: HTMLCanvasElement | null = null;
     private updateHandler: ((dt: number) => void) | null = null;
     private mouseX = 0;
     private mouseY = 0;
+
+    // Drag-to-move state
+    private draggingIndex = -1;
+    private isDragging = false;
+
+    // Bound handlers for cleanup
+    private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
+    private _onDocumentPointerMove: ((e: PointerEvent) => void) | null = null;
+    private _keyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+    // Camera passthrough state
+    private _cameraPassthrough = false;
 
     constructor(global: Global) {
         this.global = global;
@@ -30,6 +36,7 @@ class AreaMeasureTool {
 
     activate() {
         const { app, events } = this.global;
+        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
 
         this.overlay = document.createElement('div');
         this.overlay.id = 'areaMeasureOverlay';
@@ -45,93 +52,207 @@ class AreaMeasureTool {
         let downY = 0;
         let isDown = false;
 
+        // -- pointerdown on overlay --
         this.overlay.addEventListener('pointerdown', (event: PointerEvent) => {
+            if (event.button === 2) {
+                // Right-click: prevent default and clear
+                return;
+            }
             if (event.button !== 0) return;
+
             downX = event.clientX;
             downY = event.clientY;
             isDown = true;
+            this.isDragging = false;
+            this.draggingIndex = -1;
+            this._cameraPassthrough = false;
+
+            // Check if clicking near a vertex of the closed polygon
+            if (this.state === 'closed' && this.currentPoints.length > 0) {
+                const hitIdx = this.findPointNear(event.clientX, event.clientY);
+                if (hitIdx !== -1) {
+                    this.draggingIndex = hitIdx;
+                    // Capture so we get pointermove/up even outside the overlay
+                    this.overlay.setPointerCapture(event.pointerId);
+                }
+            }
+
             events.fire('inputEvent', 'interact');
         });
 
-        this.overlay.addEventListener('pointermove', (event: PointerEvent) => {
+        // -- pointermove on document (to track mouse and handle drags) --
+        this._onDocumentPointerMove = (event: PointerEvent) => {
             this.mouseX = event.clientX;
             this.mouseY = event.clientY;
-        });
 
-        this.overlay.addEventListener('pointerup', async (event: PointerEvent) => {
+            if (!isDown) return;
+
+            const dx = event.clientX - downX;
+            const dy = event.clientY - downY;
+            const moved = dx * dx + dy * dy > 25;
+
+            if (!moved) return;
+
+            // Vertex drag: pick new 3D position
+            if (this.draggingIndex !== -1) {
+                if (!this.isDragging) {
+                    this.isDragging = true;
+                }
+                const rect = appCanvas.getBoundingClientRect();
+                const x = (event.clientX - rect.left) / rect.width;
+                const y = (event.clientY - rect.top) / rect.height;
+
+                this.picker.pick(x, y).then((pos) => {
+                    if (pos && this.draggingIndex !== -1) {
+                        this.currentPoints[this.draggingIndex].copy(pos);
+                    }
+                });
+                return;
+            }
+
+            // No vertex hit: this is a camera orbit drag.
+            // Disable pointer-events on overlay so the canvas underneath
+            // receives all subsequent pointer events (orbit, pan, zoom).
+            if (!this._cameraPassthrough && this.overlay) {
+                this._cameraPassthrough = true;
+                this.overlay.style.pointerEvents = 'none';
+
+                // Replay the pointerdown on the real canvas so PlayCanvas
+                // input picks it up from the start of the drag.
+                appCanvas.dispatchEvent(new PointerEvent('pointerdown', {
+                    clientX: downX,
+                    clientY: downY,
+                    button: 0,
+                    pointerId: event.pointerId,
+                    pointerType: event.pointerType,
+                    bubbles: true
+                }));
+            }
+        };
+        document.addEventListener('pointermove', this._onDocumentPointerMove);
+
+        // -- pointerup on document --
+        this._onDocumentPointerUp = (event: PointerEvent) => {
+            // Restore overlay pointer-events after camera orbit ends
+            if (this._cameraPassthrough && this.overlay) {
+                this._cameraPassthrough = false;
+                this.overlay.style.pointerEvents = 'auto';
+            }
+
             if (event.button !== 0 || !isDown) return;
             isDown = false;
 
+            // Finish vertex drag
+            if (this.isDragging && this.draggingIndex !== -1) {
+                try { this.overlay?.releasePointerCapture(event.pointerId); } catch (_) {}
+                this.isDragging = false;
+                this.draggingIndex = -1;
+                return;
+            }
+
+            this.isDragging = false;
+            this.draggingIndex = -1;
+
+            // Ignore camera-orbit drags (> 5px movement)
             const dx = event.clientX - downX;
             const dy = event.clientY - downY;
             if (dx * dx + dy * dy > 25) return;
 
             events.fire('inputEvent', 'interact');
 
-            const canvasEl = app.graphicsDevice.canvas as HTMLCanvasElement;
-            const rect = canvasEl.getBoundingClientRect();
+            const rect = appCanvas.getBoundingClientRect();
             const x = (event.clientX - rect.left) / rect.width;
             const y = (event.clientY - rect.top) / rect.height;
 
-            const pos = await this.picker.pick(x, y);
-            if (!pos) return;
+            this.picker.pick(x, y).then((pos) => {
+                if (!pos) return;
+                this.handleClick(pos, event.clientX, event.clientY);
+            });
+        };
+        document.addEventListener('pointerup', this._onDocumentPointerUp);
 
-            if (this.state === 'idle' || this.state === 'closed') {
-                if (this.state === 'closed') {
-                    this.completedPolygons.push({
-                        points: [...this.currentPoints],
-                        closed: true
-                    });
-                }
-                this.currentPoints = [pos];
-                this.state = 'placing';
-            } else if (this.state === 'placing') {
-                // Check snap to first point
-                if (this.currentPoints.length >= 3) {
-                    const firstScreen = this.worldToScreen(this.currentPoints[0]);
-                    if (!firstScreen.behind) {
-                        const sdx = event.clientX - firstScreen.x;
-                        const sdy = event.clientY - firstScreen.y;
-                        if (sdx * sdx + sdy * sdy < 400) {
-                            this.state = 'closed';
-                            return;
-                        }
-                    }
-                }
-                this.currentPoints.push(pos);
-            }
-        });
-
+        // -- contextmenu (right-click) on overlay --
         this.overlay.addEventListener('contextmenu', (event: Event) => {
             event.preventDefault();
-            this.cancelCurrent();
+            this.clearAll();
         });
 
-        const keyHandler = (event: KeyboardEvent) => {
+        // Also handle contextmenu on the canvas (in case overlay is in passthrough)
+        appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu = (event: Event) => {
+            if (this.state !== 'idle' || this.currentPoints.length > 0) {
+                event.preventDefault();
+                this.clearAll();
+            }
+        });
+
+        // -- Escape key --
+        this._keyHandler = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
-                this.cancelCurrent();
+                this.clearAll();
             }
         };
-        document.addEventListener('keydown', keyHandler);
-        (this as any)._keyHandler = keyHandler;
+        document.addEventListener('keydown', this._keyHandler);
 
+        // -- per-frame render --
         this.updateHandler = () => {
             this.render();
         };
         app.on('update', this.updateHandler);
     }
 
+    private _onCanvasContextMenu: ((e: Event) => void) | null = null;
+
+    private handleClick(pos: Vec3, clientX: number, clientY: number) {
+        if (this.state === 'idle') {
+            this.currentPoints = [pos];
+            this.state = 'placing';
+        } else if (this.state === 'closed') {
+            // In closed state, only vertex drag is allowed.
+            // A simple click away from vertices does nothing.
+        } else if (this.state === 'placing') {
+            // Snap to first point to close polygon
+            if (this.currentPoints.length >= 3) {
+                const firstScreen = this.worldToScreen(this.currentPoints[0]);
+                if (!firstScreen.behind) {
+                    const sdx = clientX - firstScreen.x;
+                    const sdy = clientY - firstScreen.y;
+                    if (sdx * sdx + sdy * sdy < 400) {
+                        this.state = 'closed';
+                        return;
+                    }
+                }
+            }
+            this.currentPoints.push(pos);
+        }
+    }
+
     deactivate() {
         const { app } = this.global;
+        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
 
         if (this.updateHandler) {
             app.off('update', this.updateHandler);
             this.updateHandler = null;
         }
 
-        if ((this as any)._keyHandler) {
-            document.removeEventListener('keydown', (this as any)._keyHandler);
-            (this as any)._keyHandler = null;
+        if (this._keyHandler) {
+            document.removeEventListener('keydown', this._keyHandler);
+            this._keyHandler = null;
+        }
+
+        if (this._onDocumentPointerUp) {
+            document.removeEventListener('pointerup', this._onDocumentPointerUp);
+            this._onDocumentPointerUp = null;
+        }
+
+        if (this._onDocumentPointerMove) {
+            document.removeEventListener('pointermove', this._onDocumentPointerMove);
+            this._onDocumentPointerMove = null;
+        }
+
+        if (this._onCanvasContextMenu) {
+            appCanvas.removeEventListener('contextmenu', this._onCanvasContextMenu);
+            this._onCanvasContextMenu = null;
         }
 
         if (this.overlay) {
@@ -141,8 +262,10 @@ class AreaMeasureTool {
 
         this.canvas = null;
         this.currentPoints = [];
-        this.completedPolygons = [];
         this.state = 'idle';
+        this.draggingIndex = -1;
+        this.isDragging = false;
+        this._cameraPassthrough = false;
     }
 
     destroy() {
@@ -150,11 +273,25 @@ class AreaMeasureTool {
         this.picker.release();
     }
 
-    private cancelCurrent() {
-        if (this.state === 'placing') {
-            this.currentPoints = [];
-            this.state = 'idle';
+    private clearAll() {
+        this.currentPoints = [];
+        this.state = 'idle';
+        this.draggingIndex = -1;
+        this.isDragging = false;
+    }
+
+    private findPointNear(clientX: number, clientY: number): number {
+        const threshold = 400; // 20px squared
+        for (let i = 0; i < this.currentPoints.length; i++) {
+            const sp = this.worldToScreen(this.currentPoints[i]);
+            if (sp.behind) continue;
+            const dx = clientX - sp.x;
+            const dy = clientY - sp.y;
+            if (dx * dx + dy * dy < threshold) {
+                return i;
+            }
         }
+        return -1;
     }
 
     private worldToScreen(pos: Vec3): { x: number; y: number; behind: boolean } {
@@ -191,12 +328,6 @@ class AreaMeasureTool {
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        // Draw completed polygons
-        for (const poly of this.completedPolygons) {
-            this.drawPolygon(ctx, poly.points, true);
-        }
-
-        // Draw current polygon
         if (this.currentPoints.length > 0) {
             this.drawPolygon(ctx, this.currentPoints, this.state === 'closed');
         }
@@ -248,10 +379,11 @@ class AreaMeasureTool {
             ctx.setLineDash([]);
         }
 
-        // Draw pins
+        // Draw pins (larger hit area visual for closed state)
+        const pinRadius = closed ? 7 : 6;
         for (const sp of screenPoints) {
             ctx.beginPath();
-            ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
+            ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
             ctx.fillStyle = '#FF6600';
             ctx.fill();
             ctx.strokeStyle = '#FFFFFF';
