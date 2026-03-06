@@ -21,6 +21,8 @@ import {
     BLENDMODE_SRC_ALPHA
 } from 'playcanvas';
 
+import { ACCENT_R, ACCENT_G, ACCENT_B } from './tool-utils';
+
 // clamp the vertices of the hotspot so it is never clipped by the near or far plane
 const depthClampGlsl = `
     float f = gl_Position.z / gl_Position.w;
@@ -57,7 +59,7 @@ export class Annotation extends Script {
 
     static hotspotColor = new Color(0.8, 0.8, 0.8);
 
-    static hoverColor = new Color(1.0, 0.4, 0.0);
+    static hoverColor = new Color(ACCENT_R / 255, ACCENT_G / 255, ACCENT_B / 255);
 
     static parentDom: HTMLElement | null = null;
 
