@@ -12,22 +12,30 @@ class AreaMeasureTool {
     private currentPoints: Vec3[] = [];
 
     private overlay: HTMLDivElement | null = null;
-    private canvas: HTMLCanvasElement | null = null;
+    private drawCanvas: HTMLCanvasElement | null = null;
     private updateHandler: ((dt: number) => void) | null = null;
     private mouseX = 0;
     private mouseY = 0;
 
-    // Drag-to-move state
-    private draggingIndex = -1;
-    private isDragging = false;
+    // Vertex selection & drag
+    private selectedIndex = -1;
+    private dragIndex = -1;
+    private dragPlaneNormal = new Vec3();
+    private dragPlanePoint = new Vec3();
+
+    // Pointer tracking
+    private downX = 0;
+    private downY = 0;
+    private isDown = false;
+    private downOnCanvas = false;
 
     // Bound handlers for cleanup
-    private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
+    private _onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
     private _onDocumentPointerMove: ((e: PointerEvent) => void) | null = null;
+    private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
+    private _onCanvasContextMenu: ((e: Event) => void) | null = null;
     private _keyHandler: ((e: KeyboardEvent) => void) | null = null;
-
-    // Camera passthrough state
-    private _cameraPassthrough = false;
+    private _savedCursor: string = '';
 
     constructor(global: Global) {
         this.global = global;
@@ -38,126 +46,87 @@ class AreaMeasureTool {
         const { app, events } = this.global;
         const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
 
+        // Purely visual overlay — pointer-events: none
         this.overlay = document.createElement('div');
         this.overlay.id = 'areaMeasureOverlay';
-
         const ui = document.querySelector('#ui');
         ui.insertBefore(this.overlay, ui.firstChild);
 
-        this.canvas = document.createElement('canvas');
-        this.canvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;';
-        this.overlay.appendChild(this.canvas);
+        this.drawCanvas = document.createElement('canvas');
+        this.drawCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;';
+        this.overlay.appendChild(this.drawCanvas);
 
-        let downX = 0;
-        let downY = 0;
-        let isDown = false;
+        // Set crosshair cursor on the WebGL canvas
+        this._savedCursor = appCanvas.style.cursor;
+        appCanvas.style.cursor = 'crosshair';
 
-        // -- pointerdown on overlay --
-        this.overlay.addEventListener('pointerdown', (event: PointerEvent) => {
-            if (event.button === 2) {
-                // Right-click: prevent default and clear
-                return;
-            }
+        // -- Document capture-phase pointerdown --
+        // Fires before canvas bubble-phase listeners (PlayCanvas orbit controller).
+        // Only intercepts when starting a vertex drag; otherwise passes through.
+        this._onDocumentPointerDown = (event: PointerEvent) => {
             if (event.button !== 0) return;
 
-            downX = event.clientX;
-            downY = event.clientY;
-            isDown = true;
-            this.isDragging = false;
-            this.draggingIndex = -1;
-            this._cameraPassthrough = false;
-
-            // Check if clicking near a vertex of the closed polygon
-            if (this.state === 'closed' && this.currentPoints.length > 0) {
-                const hitIdx = this.findPointNear(event.clientX, event.clientY);
-                if (hitIdx !== -1) {
-                    this.draggingIndex = hitIdx;
-                    // Capture so we get pointermove/up even outside the overlay
-                    this.overlay.setPointerCapture(event.pointerId);
-                }
+            // Only handle events targeting the WebGL canvas
+            if (event.target !== appCanvas) {
+                this.downOnCanvas = false;
+                return;
             }
 
+            this.downX = event.clientX;
+            this.downY = event.clientY;
+            this.isDown = true;
+            this.downOnCanvas = true;
             events.fire('inputEvent', 'interact');
-        });
 
-        // -- pointermove on document (to track mouse and handle drags) --
+            // In closed state, check if clicking on a vertex to start drag
+            if (this.state === 'closed') {
+                const hitIdx = this.findPointNear(event.clientX, event.clientY);
+                if (hitIdx !== -1) {
+                    this.startDrag(hitIdx);
+                    // Stop propagation so the camera orbit controller never receives this event
+                    event.stopPropagation();
+                }
+            }
+        };
+        document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
+
+        // -- Document pointermove --
         this._onDocumentPointerMove = (event: PointerEvent) => {
             this.mouseX = event.clientX;
             this.mouseY = event.clientY;
 
-            if (!isDown) return;
-
-            const dx = event.clientX - downX;
-            const dy = event.clientY - downY;
-            const moved = dx * dx + dy * dy > 25;
-
-            if (!moved) return;
-
-            // Vertex drag: pick new 3D position
-            if (this.draggingIndex !== -1) {
-                if (!this.isDragging) {
-                    this.isDragging = true;
-                }
-                const rect = appCanvas.getBoundingClientRect();
-                const x = (event.clientX - rect.left) / rect.width;
-                const y = (event.clientY - rect.top) / rect.height;
-
-                this.picker.pick(x, y).then((pos) => {
-                    if (pos && this.draggingIndex !== -1) {
-                        this.currentPoints[this.draggingIndex].copy(pos);
-                    }
-                });
-                return;
-            }
-
-            // No vertex hit: this is a camera orbit drag.
-            // Disable pointer-events on overlay so the canvas underneath
-            // receives all subsequent pointer events (orbit, pan, zoom).
-            if (!this._cameraPassthrough && this.overlay) {
-                this._cameraPassthrough = true;
-                this.overlay.style.pointerEvents = 'none';
-
-                // Replay the pointerdown on the real canvas so PlayCanvas
-                // input picks it up from the start of the drag.
-                appCanvas.dispatchEvent(new PointerEvent('pointerdown', {
-                    clientX: downX,
-                    clientY: downY,
-                    button: 0,
-                    pointerId: event.pointerId,
-                    pointerType: event.pointerType,
-                    bubbles: true
-                }));
+            if (this.dragIndex >= 0) {
+                this.updateDrag(event.clientX, event.clientY);
+                appCanvas.style.cursor = 'grabbing';
+            } else if (this.state === 'closed') {
+                const hitIdx = this.findPointNear(event.clientX, event.clientY);
+                appCanvas.style.cursor = hitIdx !== -1 ? 'grab' : 'crosshair';
             }
         };
         document.addEventListener('pointermove', this._onDocumentPointerMove);
 
-        // -- pointerup on document --
+        // -- Document pointerup --
         this._onDocumentPointerUp = (event: PointerEvent) => {
-            // Restore overlay pointer-events after camera orbit ends
-            if (this._cameraPassthrough && this.overlay) {
-                this._cameraPassthrough = false;
-                this.overlay.style.pointerEvents = 'auto';
-            }
+            if (event.button !== 0 || !this.isDown) return;
+            this.isDown = false;
 
-            if (event.button !== 0 || !isDown) return;
-            isDown = false;
-
-            // Finish vertex drag
-            if (this.isDragging && this.draggingIndex !== -1) {
-                try { this.overlay?.releasePointerCapture(event.pointerId); } catch (_) {}
-                this.isDragging = false;
-                this.draggingIndex = -1;
+            // If we were dragging, just stop the drag
+            if (this.dragIndex >= 0) {
+                this.stopDrag();
+                const hitIdx = this.findPointNear(event.clientX, event.clientY);
+                appCanvas.style.cursor = hitIdx !== -1 ? 'grab' : 'crosshair';
                 return;
             }
 
-            this.isDragging = false;
-            this.draggingIndex = -1;
+            // Ignore if the pointerdown didn't originate on the canvas
+            if (!this.downOnCanvas) return;
 
             // Ignore camera-orbit drags (> 5px movement)
-            const dx = event.clientX - downX;
-            const dy = event.clientY - downY;
+            const dx = event.clientX - this.downX;
+            const dy = event.clientY - this.downY;
             if (dx * dx + dy * dy > 25) return;
 
+            // It's a click on the canvas — place a point or select a vertex
             events.fire('inputEvent', 'interact');
 
             const rect = appCanvas.getBoundingClientRect();
@@ -171,19 +140,12 @@ class AreaMeasureTool {
         };
         document.addEventListener('pointerup', this._onDocumentPointerUp);
 
-        // -- contextmenu (right-click) on overlay --
-        this.overlay.addEventListener('contextmenu', (event: Event) => {
+        // -- Right-click clears everything --
+        this._onCanvasContextMenu = (event: Event) => {
             event.preventDefault();
             this.clearAll();
-        });
-
-        // Also handle contextmenu on the canvas (in case overlay is in passthrough)
-        appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu = (event: Event) => {
-            if (this.state !== 'idle' || this.currentPoints.length > 0) {
-                event.preventDefault();
-                this.clearAll();
-            }
-        });
+        };
+        appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu);
 
         // -- Escape key --
         this._keyHandler = (event: KeyboardEvent) => {
@@ -193,22 +155,21 @@ class AreaMeasureTool {
         };
         document.addEventListener('keydown', this._keyHandler);
 
-        // -- per-frame render --
+        // -- Per-frame render --
         this.updateHandler = () => {
             this.render();
         };
         app.on('update', this.updateHandler);
     }
 
-    private _onCanvasContextMenu: ((e: Event) => void) | null = null;
-
     private handleClick(pos: Vec3, clientX: number, clientY: number) {
         if (this.state === 'idle') {
             this.currentPoints = [pos];
             this.state = 'placing';
         } else if (this.state === 'closed') {
-            // In closed state, only vertex drag is allowed.
-            // A simple click away from vertices does nothing.
+            // Check if clicking on an existing vertex to select it
+            const hitIdx = this.findPointNear(clientX, clientY);
+            this.selectedIndex = hitIdx; // -1 if no hit = deselect
         } else if (this.state === 'placing') {
             // Snap to first point to close polygon
             if (this.currentPoints.length >= 3) {
@@ -226,6 +187,53 @@ class AreaMeasureTool {
         }
     }
 
+    private startDrag(index: number) {
+        this.dragIndex = index;
+        this.selectedIndex = index;
+
+        // Drag plane: perpendicular to camera forward, passing through the vertex
+        const camera = this.global.camera;
+        this.dragPlaneNormal.copy(camera.forward);
+        this.dragPlanePoint.copy(this.currentPoints[index]);
+    }
+
+    private updateDrag(clientX: number, clientY: number) {
+        if (this.dragIndex < 0 || this.dragIndex >= this.currentPoints.length) return;
+
+        const { app, camera } = this.global;
+        const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+        const rect = appCanvas.getBoundingClientRect();
+
+        // Convert client coords to canvas pixel coords
+        const pixelX = (clientX - rect.left) * (appCanvas.width / rect.width);
+        const pixelY = (clientY - rect.top) * (appCanvas.height / rect.height);
+
+        // Get ray from camera through screen point
+        const nearPoint = new Vec3();
+        const farPoint = new Vec3();
+        camera.camera.screenToWorld(pixelX, pixelY, camera.camera.nearClip, nearPoint);
+        camera.camera.screenToWorld(pixelX, pixelY, camera.camera.farClip, farPoint);
+
+        const rayDir = new Vec3().sub2(farPoint, nearPoint).normalize();
+
+        // Ray-plane intersection
+        const denom = rayDir.dot(this.dragPlaneNormal);
+        if (Math.abs(denom) < 1e-6) return;
+
+        const t = new Vec3().sub2(this.dragPlanePoint, nearPoint).dot(this.dragPlaneNormal) / denom;
+        if (t < 0) return;
+
+        const newPos = new Vec3().add2(nearPoint, new Vec3().copy(rayDir).mulScalar(t));
+        this.currentPoints[this.dragIndex].copy(newPos);
+
+        // Force re-render
+        app.renderNextFrame = true;
+    }
+
+    private stopDrag() {
+        this.dragIndex = -1;
+    }
+
     deactivate() {
         const { app } = this.global;
         const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
@@ -240,9 +248,9 @@ class AreaMeasureTool {
             this._keyHandler = null;
         }
 
-        if (this._onDocumentPointerUp) {
-            document.removeEventListener('pointerup', this._onDocumentPointerUp);
-            this._onDocumentPointerUp = null;
+        if (this._onDocumentPointerDown) {
+            document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
+            this._onDocumentPointerDown = null;
         }
 
         if (this._onDocumentPointerMove) {
@@ -250,22 +258,31 @@ class AreaMeasureTool {
             this._onDocumentPointerMove = null;
         }
 
+        if (this._onDocumentPointerUp) {
+            document.removeEventListener('pointerup', this._onDocumentPointerUp);
+            this._onDocumentPointerUp = null;
+        }
+
         if (this._onCanvasContextMenu) {
             appCanvas.removeEventListener('contextmenu', this._onCanvasContextMenu);
             this._onCanvasContextMenu = null;
         }
+
+        // Restore cursor
+        appCanvas.style.cursor = this._savedCursor;
 
         if (this.overlay) {
             this.overlay.remove();
             this.overlay = null;
         }
 
-        this.canvas = null;
+        this.drawCanvas = null;
         this.currentPoints = [];
         this.state = 'idle';
-        this.draggingIndex = -1;
-        this.isDragging = false;
-        this._cameraPassthrough = false;
+        this.selectedIndex = -1;
+        this.dragIndex = -1;
+        this.isDown = false;
+        this.downOnCanvas = false;
     }
 
     destroy() {
@@ -276,8 +293,8 @@ class AreaMeasureTool {
     private clearAll() {
         this.currentPoints = [];
         this.state = 'idle';
-        this.draggingIndex = -1;
-        this.isDragging = false;
+        this.selectedIndex = -1;
+        this.dragIndex = -1;
     }
 
     private findPointNear(clientX: number, clientY: number): number {
@@ -311,21 +328,21 @@ class AreaMeasureTool {
     }
 
     private render() {
-        if (!this.canvas) return;
+        if (!this.drawCanvas) return;
 
         const dpr = window.devicePixelRatio || 1;
         const width = window.innerWidth;
         const height = window.innerHeight;
 
-        if (this.canvas.width !== width * dpr || this.canvas.height !== height * dpr) {
-            this.canvas.width = width * dpr;
-            this.canvas.height = height * dpr;
-            this.canvas.style.width = `${width}px`;
-            this.canvas.style.height = `${height}px`;
+        if (this.drawCanvas.width !== width * dpr || this.drawCanvas.height !== height * dpr) {
+            this.drawCanvas.width = width * dpr;
+            this.drawCanvas.height = height * dpr;
+            this.drawCanvas.style.width = `${width}px`;
+            this.drawCanvas.style.height = `${height}px`;
         }
 
-        const ctx = this.canvas.getContext('2d');
-        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        const ctx = this.drawCanvas.getContext('2d');
+        ctx.clearRect(0, 0, this.drawCanvas.width, this.drawCanvas.height);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         if (this.currentPoints.length > 0) {
@@ -379,14 +396,16 @@ class AreaMeasureTool {
             ctx.setLineDash([]);
         }
 
-        // Draw pins (larger hit area visual for closed state)
-        const pinRadius = closed ? 7 : 6;
-        for (const sp of screenPoints) {
+        // Draw pins
+        for (let i = 0; i < screenPoints.length; i++) {
+            const sp = screenPoints[i];
+            const isSelected = closed && i === this.selectedIndex;
+            const pinRadius = isSelected ? 8 : 6;
             ctx.beginPath();
             ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
-            ctx.fillStyle = '#FF6600';
+            ctx.fillStyle = isSelected ? '#FFFFFF' : '#FF6600';
             ctx.fill();
-            ctx.strokeStyle = '#FFFFFF';
+            ctx.strokeStyle = isSelected ? '#FF6600' : '#FFFFFF';
             ctx.lineWidth = 2;
             ctx.stroke();
         }
@@ -467,7 +486,6 @@ class AreaMeasureTool {
     private calculateArea(points: Vec3[]): number {
         if (points.length < 3) return 0;
 
-        // Compute polygon normal using Newell's method
         const normal = new Vec3(0, 0, 0);
         for (let i = 0; i < points.length; i++) {
             const curr = points[i];
@@ -480,7 +498,6 @@ class AreaMeasureTool {
         if (len < 1e-10) return 0;
         normal.mulScalar(1 / len);
 
-        // Build local 2D coordinate system on the polygon's plane
         const absX = Math.abs(normal.x);
         const absY = Math.abs(normal.y);
         const absZ = Math.abs(normal.z);
@@ -497,7 +514,6 @@ class AreaMeasureTool {
         const uAxis = new Vec3().cross(up, normal).normalize();
         const vAxis = new Vec3().cross(normal, uAxis).normalize();
 
-        // Project points to 2D
         const origin = points[0];
         const coords2d: { u: number; v: number }[] = [];
         for (const p of points) {
@@ -508,7 +524,6 @@ class AreaMeasureTool {
             });
         }
 
-        // Shoelace formula
         let area = 0;
         for (let i = 0; i < coords2d.length; i++) {
             const j = (i + 1) % coords2d.length;
