@@ -239,6 +239,7 @@ const initUI = (global: Global) => {
         'joystickBase', 'joystick',
         'showVoxels',
         'measure',
+        'areaMeasure',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
         'supersplatBranding'
@@ -421,7 +422,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !state.measureMode) {
+            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -558,10 +559,25 @@ const initUI = (global: Global) => {
     // Measure tool toggle
     dom.measure.addEventListener('click', () => {
         state.measureMode = !state.measureMode;
+        if (state.measureMode) {
+            state.areaMeasureMode = false;
+        }
     });
 
     events.on('measureMode:changed', (value: boolean) => {
         dom.measure.classList.toggle('active', value);
+    });
+
+    // Area measure tool toggle
+    dom.areaMeasure.addEventListener('click', () => {
+        state.areaMeasureMode = !state.areaMeasureMode;
+        if (state.areaMeasureMode) {
+            state.measureMode = false;
+        }
+    });
+
+    events.on('areaMeasureMode:changed', (value: boolean) => {
+        dom.areaMeasure.classList.toggle('active', value);
     });
 
     dom.settings.addEventListener('click', () => {
@@ -610,6 +626,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.reset, 'Reset Camera', 'bottom');
     tooltip.register(dom.frame, 'Frame Scene', 'bottom');
     tooltip.register(dom.measure, 'Measure', 'top');
+    tooltip.register(dom.areaMeasure, 'Area Measure', 'top');
     tooltip.register(dom.showVoxels, 'Show Voxels', 'top');
     tooltip.register(dom.settings, 'Settings', 'top');
     tooltip.register(dom.info, 'Help', 'top');

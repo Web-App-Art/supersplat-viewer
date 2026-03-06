@@ -213,6 +213,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         hasVoxelOverlay: false,
         voxelOverlayEnabled: false,
         measureMode: false,
+        areaMeasureMode: false,
         isFullscreen: false,
         controlsHidden: false
     });

@@ -29,6 +29,7 @@ import { CameraManager } from './camera-manager';
 import { Camera } from './cameras/camera';
 import { nearlyEquals } from './core/math';
 import { InputController } from './input-controller';
+import { AreaMeasureTool } from './area-measure-tool';
 import { MeasureTool } from './measure-tool';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Global } from './types';
@@ -130,6 +131,8 @@ class Viewer {
     voxelOverlay: VoxelDebugOverlay | null = null;
 
     measureTool: MeasureTool;
+
+    areaMeasureTool: AreaMeasureTool;
 
     origChunks: {
         glsl: {
@@ -333,6 +336,16 @@ class Viewer {
                     this.measureTool.activate();
                 } else {
                     this.measureTool.deactivate();
+                }
+            });
+
+            // Area measure tool
+            this.areaMeasureTool = new AreaMeasureTool(global);
+            events.on('areaMeasureMode:changed', (value: boolean) => {
+                if (value) {
+                    this.areaMeasureTool.activate();
+                } else {
+                    this.areaMeasureTool.deactivate();
                 }
             });
 
