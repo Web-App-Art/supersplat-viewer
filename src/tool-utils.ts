@@ -1,6 +1,16 @@
 import { Vec3 } from 'playcanvas';
 import type { Entity } from 'playcanvas';
 
+// Accent color for measure tools — must match $clr-accent in index.scss
+export const ACCENT_COLOR = '#84cc16';
+const ACCENT_R = 132;
+const ACCENT_G = 204;
+const ACCENT_B = 22;
+
+export function accentRgba(alpha: number): string {
+    return `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, ${alpha})`;
+}
+
 export function worldToScreen(camera: Entity, pos: Vec3): { x: number; y: number; behind: boolean } {
     const cameraPos = camera.getPosition();
     const forward = camera.forward;

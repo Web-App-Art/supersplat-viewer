@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, drawEdgeLabel } from './tool-utils';
+import { worldToScreen, drawEdgeLabel, ACCENT_COLOR } from './tool-utils';
 import type { Global } from './types';
 
 type MeasureState = 'idle' | 'first_placed' | 'complete';
@@ -127,7 +127,7 @@ class MeasureTool {
 
         // Draw line between points
         if (this.points.length === 2) {
-            ctx.strokeStyle = '#FF6600';
+            ctx.strokeStyle = ACCENT_COLOR;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
@@ -144,9 +144,9 @@ class MeasureTool {
             const pinRadius = isSelected ? 8 : 6;
             ctx.beginPath();
             ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
-            ctx.fillStyle = isSelected ? '#FFFFFF' : '#FF6600';
+            ctx.fillStyle = isSelected ? '#FFFFFF' : ACCENT_COLOR;
             ctx.fill();
-            ctx.strokeStyle = isSelected ? '#FF6600' : '#FFFFFF';
+            ctx.strokeStyle = isSelected ? ACCENT_COLOR : '#FFFFFF';
             ctx.lineWidth = 2;
             ctx.stroke();
         }

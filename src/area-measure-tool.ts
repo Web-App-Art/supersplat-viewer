@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, drawEdgeLabel } from './tool-utils';
+import { worldToScreen, drawEdgeLabel, ACCENT_COLOR, accentRgba } from './tool-utils';
 import type { Global } from './types';
 
 type AreaMeasureState = 'idle' | 'placing' | 'closed';
@@ -139,12 +139,12 @@ class AreaMeasureTool {
                 ctx.lineTo(screenPoints[i].x, screenPoints[i].y);
             }
             ctx.closePath();
-            ctx.fillStyle = 'rgba(255, 102, 0, 0.2)';
+            ctx.fillStyle = accentRgba(0.2);
             ctx.fill();
         }
 
         // Draw edges
-        ctx.strokeStyle = '#FF6600';
+        ctx.strokeStyle = ACCENT_COLOR;
         ctx.lineWidth = 2;
         for (let i = 0; i < screenPoints.length - 1; i++) {
             ctx.beginPath();
@@ -179,9 +179,9 @@ class AreaMeasureTool {
             const pinRadius = isSelected ? 8 : 6;
             ctx.beginPath();
             ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
-            ctx.fillStyle = isSelected ? '#FFFFFF' : '#FF6600';
+            ctx.fillStyle = isSelected ? '#FFFFFF' : ACCENT_COLOR;
             ctx.fill();
-            ctx.strokeStyle = isSelected ? '#FF6600' : '#FFFFFF';
+            ctx.strokeStyle = isSelected ? ACCENT_COLOR : '#FFFFFF';
             ctx.lineWidth = 2;
             ctx.stroke();
         }
