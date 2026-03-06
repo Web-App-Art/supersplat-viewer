@@ -272,6 +272,13 @@ button {
                 color: $clr-accent;
             }
 
+            /* measure button: white icon on colored background when active */
+            &#measure.active {
+                color: $clr-text;
+                background-color: $clr-accent;
+                border-radius: 4px;
+            }
+
             /* camera toggle styling */
             &.toggle {
                 background: linear-gradient(
