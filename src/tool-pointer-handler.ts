@@ -41,6 +41,10 @@ class ToolPointerHandler {
     private isDown = false;
     private downOnCanvas = false;
 
+    private rightDownX = 0;
+    private rightDownY = 0;
+    private rightIsDown = false;
+
     private _onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
     private _onDocumentPointerMove: ((e: PointerEvent) => void) | null = null;
     private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
@@ -69,6 +73,14 @@ class ToolPointerHandler {
         // Fires before canvas bubble-phase listeners (PlayCanvas orbit controller).
         // Only intercepts (stopPropagation) when starting a vertex drag.
         this._onDocumentPointerDown = (event: PointerEvent) => {
+            // Track right-click start position (for distinguishing click vs drag)
+            if (event.button === 2 && event.target === appCanvas) {
+                this.rightDownX = event.clientX;
+                this.rightDownY = event.clientY;
+                this.rightIsDown = true;
+                return;
+            }
+
             if (event.button !== 0) return;
 
             if (event.target !== appCanvas) {
@@ -141,6 +153,17 @@ class ToolPointerHandler {
         document.addEventListener('pointermove', this._onDocumentPointerMove);
 
         this._onDocumentPointerUp = (event: PointerEvent) => {
+            // Right-click release: clear only if it was a short click (not a pan drag)
+            if (event.button === 2 && this.rightIsDown) {
+                this.rightIsDown = false;
+                const dx = event.clientX - this.rightDownX;
+                const dy = event.clientY - this.rightDownY;
+                if (dx * dx + dy * dy < 25) {
+                    this.callbacks.onClear();
+                }
+                return;
+            }
+
             if (event.button !== 0 || !this.isDown) return;
             this.isDown = false;
 
@@ -179,7 +202,6 @@ class ToolPointerHandler {
 
         this._onCanvasContextMenu = (event: Event) => {
             event.preventDefault();
-            this.callbacks.onClear();
         };
         appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu);
 
@@ -223,6 +245,7 @@ class ToolPointerHandler {
         this.hoverAxis = null;
         this.isDown = false;
         this.downOnCanvas = false;
+        this.rightIsDown = false;
     }
 
     destroy() {
