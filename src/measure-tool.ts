@@ -150,6 +150,14 @@ class MeasureTool {
             ctx.lineWidth = 2;
             ctx.stroke();
         }
+
+        // Draw gizmo on selected point
+        if (this.measureState === 'complete' && this.pointerHandler.selectedIndex >= 0) {
+            const selIdx = this.pointerHandler.selectedIndex;
+            if (selIdx < this.points.length) {
+                this.pointerHandler.renderGizmo(ctx, camera, this.points[selIdx]);
+            }
+        }
     }
 }
 

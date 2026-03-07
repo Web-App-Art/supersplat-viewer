@@ -1,7 +1,10 @@
 import { Vec3 } from 'playcanvas';
+import type { Entity } from 'playcanvas';
 
 import { Picker } from './picker';
 import { findPointNear } from './tool-utils';
+import { TranslateGizmo } from './translate-gizmo';
+import type { GizmoAxis } from './translate-gizmo';
 import type { Global } from './types';
 
 export interface ToolPointerCallbacks {
@@ -23,6 +26,12 @@ class ToolPointerHandler {
     private picker: Picker;
     private callbacks: ToolPointerCallbacks;
 
+    private gizmo = new TranslateGizmo();
+    private activeAxis: GizmoAxis = null;
+    private hoverAxis: GizmoAxis = null;
+    private dragOrigin = new Vec3();
+    private dragAxisGrabOffset = new Vec3();
+
     private dragIndex = -1;
     private dragPlaneNormal = new Vec3();
     private dragPlanePoint = new Vec3();
@@ -43,6 +52,10 @@ class ToolPointerHandler {
         this.global = global;
         this.picker = new Picker(global.app, global.camera);
         this.callbacks = callbacks;
+    }
+
+    renderGizmo(ctx: CanvasRenderingContext2D, camera: Entity, worldPos: Vec3) {
+        this.gizmo.render(ctx, camera, worldPos, this.activeAxis, this.hoverAxis);
     }
 
     activate() {
@@ -70,6 +83,17 @@ class ToolPointerHandler {
             events.fire('inputEvent', 'interact');
 
             const points = this.callbacks.getDraggablePoints();
+
+            // Check gizmo axis hit first when a point is selected
+            if (this.selectedIndex >= 0 && this.selectedIndex < points.length) {
+                const hitAxis = this.gizmo.hitTest(this.global.camera, points[this.selectedIndex], event.clientX, event.clientY);
+                if (hitAxis) {
+                    this.startAxisDrag(points, this.selectedIndex, hitAxis, event.clientX, event.clientY);
+                    event.stopPropagation();
+                    return;
+                }
+            }
+
             if (points.length > 0) {
                 const hitIdx = findPointNear(this.global.camera, points, event.clientX, event.clientY);
                 if (hitIdx !== -1) {
@@ -86,10 +110,26 @@ class ToolPointerHandler {
 
             if (this.dragIndex >= 0) {
                 const points = this.callbacks.getDraggablePoints();
-                this.updateDrag(points, event.clientX, event.clientY);
+                if (this.activeAxis) {
+                    this.updateAxisDrag(points, event.clientX, event.clientY);
+                } else {
+                    this.updateDrag(points, event.clientX, event.clientY);
+                }
                 appCanvas.style.cursor = 'grabbing';
             } else {
                 const points = this.callbacks.getDraggablePoints();
+
+                // Check gizmo hover first
+                if (this.selectedIndex >= 0 && this.selectedIndex < points.length) {
+                    const hitAxis = this.gizmo.hitTest(this.global.camera, points[this.selectedIndex], event.clientX, event.clientY);
+                    if (hitAxis) {
+                        this.hoverAxis = hitAxis;
+                        appCanvas.style.cursor = 'grab';
+                        return;
+                    }
+                }
+                this.hoverAxis = null;
+
                 if (points.length > 0) {
                     const hitIdx = findPointNear(this.global.camera, points, event.clientX, event.clientY);
                     appCanvas.style.cursor = hitIdx !== -1 ? 'grab' : 'crosshair';
@@ -179,6 +219,8 @@ class ToolPointerHandler {
         appCanvas.style.cursor = this._savedCursor;
         this.selectedIndex = -1;
         this.dragIndex = -1;
+        this.activeAxis = null;
+        this.hoverAxis = null;
         this.isDown = false;
         this.downOnCanvas = false;
     }
@@ -191,20 +233,70 @@ class ToolPointerHandler {
     reset() {
         this.selectedIndex = -1;
         this.dragIndex = -1;
+        this.activeAxis = null;
+        this.hoverAxis = null;
     }
 
     private startDrag(points: Vec3[], index: number) {
         this.dragIndex = index;
         this.selectedIndex = index;
+        this.activeAxis = null;
+        this.dragOrigin.copy(points[index]);
 
         const camera = this.global.camera;
         this.dragPlaneNormal.copy(camera.forward);
         this.dragPlanePoint.copy(points[index]);
     }
 
+    private startAxisDrag(points: Vec3[], index: number, axis: GizmoAxis, clientX: number, clientY: number) {
+        this.dragIndex = index;
+        this.selectedIndex = index;
+        this.activeAxis = axis;
+        this.dragOrigin.copy(points[index]);
+
+        // Use camera-facing plane (same as free drag) to compute where the click
+        // lands, then store the offset for the active axis component only.
+        const { camera } = this.global;
+        this.dragPlaneNormal.copy(camera.forward);
+        this.dragPlanePoint.copy(points[index]);
+
+        this.dragAxisGrabOffset.set(0, 0, 0);
+        const hitPos = this.rayPlaneHit(clientX, clientY);
+        if (hitPos) {
+            if (axis === 'x') this.dragAxisGrabOffset.x = hitPos.x - this.dragOrigin.x;
+            else if (axis === 'y') this.dragAxisGrabOffset.y = hitPos.y - this.dragOrigin.y;
+            else if (axis === 'z') this.dragAxisGrabOffset.z = hitPos.z - this.dragOrigin.z;
+        }
+    }
+
     private updateDrag(points: Vec3[], clientX: number, clientY: number) {
         if (this.dragIndex < 0 || this.dragIndex >= points.length) return;
 
+        const hitPos = this.rayPlaneHit(clientX, clientY);
+        if (!hitPos) return;
+
+        points[this.dragIndex].copy(hitPos);
+        this.global.app.renderNextFrame = true;
+    }
+
+    private updateAxisDrag(points: Vec3[], clientX: number, clientY: number) {
+        if (this.dragIndex < 0 || this.dragIndex >= points.length) return;
+        if (!this.activeAxis) return;
+
+        const hitPos = this.rayPlaneHit(clientX, clientY);
+        if (!hitPos) return;
+
+        // Start from the original position, then update only the active axis component
+        const p = points[this.dragIndex];
+        p.copy(this.dragOrigin);
+        if (this.activeAxis === 'x') p.x = hitPos.x - this.dragAxisGrabOffset.x;
+        else if (this.activeAxis === 'y') p.y = hitPos.y - this.dragAxisGrabOffset.y;
+        else if (this.activeAxis === 'z') p.z = hitPos.z - this.dragAxisGrabOffset.z;
+
+        this.global.app.renderNextFrame = true;
+    }
+
+    private rayPlaneHit(clientX: number, clientY: number): Vec3 | null {
         const { app, camera } = this.global;
         const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
         const rect = appCanvas.getBoundingClientRect();
@@ -220,19 +312,17 @@ class ToolPointerHandler {
         const rayDir = new Vec3().sub2(farPoint, nearPoint).normalize();
 
         const denom = rayDir.dot(this.dragPlaneNormal);
-        if (Math.abs(denom) < 1e-6) return;
+        if (Math.abs(denom) < 1e-6) return null;
 
         const t = new Vec3().sub2(this.dragPlanePoint, nearPoint).dot(this.dragPlaneNormal) / denom;
-        if (t < 0) return;
+        if (t < 0) return null;
 
-        const newPos = new Vec3().add2(nearPoint, new Vec3().copy(rayDir).mulScalar(t));
-        points[this.dragIndex].copy(newPos);
-
-        app.renderNextFrame = true;
+        return new Vec3().add2(nearPoint, new Vec3().copy(rayDir).mulScalar(t));
     }
 
     private stopDrag() {
         this.dragIndex = -1;
+        this.activeAxis = null;
     }
 }
 

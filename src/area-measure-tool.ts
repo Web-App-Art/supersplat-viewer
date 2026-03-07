@@ -186,6 +186,14 @@ class AreaMeasureTool {
             ctx.stroke();
         }
 
+        // Draw gizmo on selected point
+        if (closed && this.pointerHandler.selectedIndex >= 0) {
+            const selIdx = this.pointerHandler.selectedIndex;
+            if (selIdx < points.length) {
+                this.pointerHandler.renderGizmo(ctx, camera, points[selIdx]);
+            }
+        }
+
         // Draw distance labels on edges
         for (let i = 0; i < screenPoints.length - 1; i++) {
             drawEdgeLabel(ctx, points[i], points[i + 1], screenPoints[i], screenPoints[i + 1]);
