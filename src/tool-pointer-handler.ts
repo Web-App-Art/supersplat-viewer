@@ -30,6 +30,7 @@ class ToolPointerHandler {
     private activeAxis: GizmoAxis = null;
     private hoverAxis: GizmoAxis = null;
     private dragOrigin = new Vec3();
+    private dragGrabOffset = new Vec3();
     private dragAxisGrabOffset = new Vec3();
 
     private dragIndex = -1;
@@ -109,7 +110,7 @@ class ToolPointerHandler {
             if (points.length > 0) {
                 const hitIdx = findPointNear(this.global.camera, points, event.clientX, event.clientY);
                 if (hitIdx !== -1) {
-                    this.startDrag(points, hitIdx);
+                    this.startDrag(points, hitIdx, event.clientX, event.clientY);
                     event.stopPropagation();
                 }
             }
@@ -260,7 +261,7 @@ class ToolPointerHandler {
         this.hoverAxis = null;
     }
 
-    private startDrag(points: Vec3[], index: number) {
+    private startDrag(points: Vec3[], index: number, clientX: number, clientY: number) {
         this.dragIndex = index;
         this.selectedIndex = index;
         this.activeAxis = null;
@@ -269,6 +270,13 @@ class ToolPointerHandler {
         const camera = this.global.camera;
         this.dragPlaneNormal.copy(camera.forward);
         this.dragPlanePoint.copy(points[index]);
+
+        // Compute grab offset so the point doesn't jump on first move
+        this.dragGrabOffset.set(0, 0, 0);
+        const hitPos = this.rayPlaneHit(clientX, clientY);
+        if (hitPos) {
+            this.dragGrabOffset.sub2(hitPos, this.dragOrigin);
+        }
     }
 
     private startAxisDrag(points: Vec3[], index: number, axis: GizmoAxis, clientX: number, clientY: number) {
@@ -298,7 +306,10 @@ class ToolPointerHandler {
         const hitPos = this.rayPlaneHit(clientX, clientY);
         if (!hitPos) return;
 
-        points[this.dragIndex].copy(hitPos);
+        const p = points[this.dragIndex];
+        p.x = hitPos.x - this.dragGrabOffset.x;
+        p.y = hitPos.y - this.dragGrabOffset.y;
+        p.z = hitPos.z - this.dragGrabOffset.z;
         this.global.app.renderNextFrame = true;
     }
 
