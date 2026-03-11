@@ -272,9 +272,10 @@ button {
                 color: $clr-accent;
             }
 
-            /* measure button: white icon on colored background when active */
+            /* measure/floorplan button: white icon on colored background when active */
             &#measure.active,
-            &#areaMeasure.active {
+            &#areaMeasure.active,
+            &#floorplan.active {
                 color: $clr-text;
                 background-color: $clr-accent;
                 border-radius: 4px;
@@ -769,4 +770,153 @@ button {
 
 #supersplatBranding {
     visibility: hidden;
+}
+
+/* Floorplan tool */
+
+#floorplanOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+}
+
+#floorplanPanel {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 2;
+    width: 220px;
+    background: rgba(#141414, 0.92);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: auto;
+    color: $clr-text;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    backdrop-filter: blur(8px);
+}
+
+.floorplan-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: $clr-text-light;
+    margin-bottom: 4px;
+}
+
+.floorplan-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.floorplan-slider-label {
+    color: $clr-text-dark;
+    font-size: 11px;
+}
+
+.floorplan-slider-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.floorplan-slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: $clr-bkg-light;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+
+    &::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: $clr-accent;
+        cursor: pointer;
+    }
+}
+
+.floorplan-slider-value {
+    min-width: 50px;
+    text-align: right;
+    color: $clr-text-light;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.floorplan-btn {
+    width: 100%;
+    padding: 6px 0;
+    border: 1px solid $clr-bkg-light;
+    border-radius: 4px;
+    background: $clr-bkg;
+    color: $clr-text;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+        background: $clr-bkg-light;
+    }
+}
+
+.floorplan-btn-primary {
+    background: $clr-accent;
+    color: #fff;
+    border-color: $clr-accent;
+
+    &:hover {
+        background: lighten($clr-accent, 8%);
+    }
+}
+
+.floorplan-desc {
+    color: $clr-text-dark;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.floorplan-row-inline {
+    flex-direction: row;
+    align-items: center;
+}
+
+.floorplan-check-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: $clr-text;
+    font-size: 12px;
+
+    input[type="checkbox"] {
+        accent-color: $clr-accent;
+    }
+}
+
+#floorplanCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+    pointer-events: auto;
+    cursor: grab;
+    background: #e8e8e8;
+
+    &:active {
+        cursor: grabbing;
+    }
 }

@@ -214,6 +214,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         voxelOverlayEnabled: false,
         measureMode: false,
         areaMeasureMode: false,
+        floorplanMode: false,
         isFullscreen: false,
         controlsHidden: false
     });

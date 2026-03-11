@@ -30,6 +30,7 @@ import { Camera } from './cameras/camera';
 import { nearlyEquals } from './core/math';
 import { InputController } from './input-controller';
 import { AreaMeasureTool } from './area-measure-tool';
+import { FloorplanTool } from './tools/floorplan-tool';
 import { MeasureTool } from './measure-tool';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Global } from './types';
@@ -133,6 +134,8 @@ class Viewer {
     measureTool: MeasureTool;
 
     areaMeasureTool: AreaMeasureTool;
+
+    floorplanTool: FloorplanTool;
 
     origChunks: {
         glsl: {
@@ -346,6 +349,16 @@ class Viewer {
                     this.areaMeasureTool.activate();
                 } else {
                     this.areaMeasureTool.deactivate();
+                }
+            });
+
+            // Floorplan tool
+            this.floorplanTool = new FloorplanTool(global);
+            events.on('floorplanMode:changed', (value: boolean) => {
+                if (value) {
+                    this.floorplanTool.activate();
+                } else {
+                    this.floorplanTool.deactivate();
                 }
             });
 

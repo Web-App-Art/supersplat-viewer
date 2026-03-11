@@ -46,6 +46,7 @@ type State = {
     voxelOverlayEnabled: boolean;
     measureMode: boolean;
     areaMeasureMode: boolean;
+    floorplanMode: boolean;
     isFullscreen: boolean;
     controlsHidden: boolean;
 };

@@ -240,6 +240,7 @@ const initUI = (global: Global) => {
         'showVoxels',
         'measure',
         'areaMeasure',
+        'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
         'supersplatBranding'
@@ -422,7 +423,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode) {
+            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.floorplanMode) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -561,6 +562,7 @@ const initUI = (global: Global) => {
         state.measureMode = !state.measureMode;
         if (state.measureMode) {
             state.areaMeasureMode = false;
+            state.floorplanMode = false;
         }
     });
 
@@ -573,11 +575,25 @@ const initUI = (global: Global) => {
         state.areaMeasureMode = !state.areaMeasureMode;
         if (state.areaMeasureMode) {
             state.measureMode = false;
+            state.floorplanMode = false;
         }
     });
 
     events.on('areaMeasureMode:changed', (value: boolean) => {
         dom.areaMeasure.classList.toggle('active', value);
+    });
+
+    // Floorplan tool toggle
+    dom.floorplan.addEventListener('click', () => {
+        state.floorplanMode = !state.floorplanMode;
+        if (state.floorplanMode) {
+            state.measureMode = false;
+            state.areaMeasureMode = false;
+        }
+    });
+
+    events.on('floorplanMode:changed', (value: boolean) => {
+        dom.floorplan.classList.toggle('active', value);
     });
 
     dom.settings.addEventListener('click', () => {
@@ -627,6 +643,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.frame, 'Frame Scene', 'bottom');
     tooltip.register(dom.measure, 'Measure', 'top');
     tooltip.register(dom.areaMeasure, 'Area Measure', 'top');
+    tooltip.register(dom.floorplan, 'Floorplan', 'top');
     tooltip.register(dom.showVoxels, 'Show Voxels', 'top');
     tooltip.register(dom.settings, 'Settings', 'top');
     tooltip.register(dom.info, 'Help', 'top');
