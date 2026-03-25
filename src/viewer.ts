@@ -30,6 +30,7 @@ import { Camera } from './cameras/camera';
 import { nearlyEquals } from './core/math';
 import { InputController } from './input-controller';
 import { AreaMeasureTool } from './area-measure-tool';
+import { FlatnessTool } from './flatness-tool';
 import { FloorplanTool } from './tools/floorplan-tool';
 import { MeasureTool } from './measure-tool';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
@@ -134,6 +135,8 @@ class Viewer {
     measureTool: MeasureTool;
 
     areaMeasureTool: AreaMeasureTool;
+
+    flatnessTool: FlatnessTool;
 
     floorplanTool: FloorplanTool;
 
@@ -349,6 +352,16 @@ class Viewer {
                     this.areaMeasureTool.activate();
                 } else {
                     this.areaMeasureTool.deactivate();
+                }
+            });
+
+            // Flatness measure tool
+            this.flatnessTool = new FlatnessTool(global);
+            events.on('flatnessMeasureMode:changed', (value: boolean) => {
+                if (value) {
+                    this.flatnessTool.activate();
+                } else {
+                    this.flatnessTool.deactivate();
                 }
             });
 

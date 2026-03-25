@@ -47,6 +47,7 @@ type State = {
     measureMode: boolean;
     areaMeasureMode: boolean;
     floorplanMode: boolean;
+    flatnessMeasureMode: boolean;
     isFullscreen: boolean;
     controlsHidden: boolean;
 };

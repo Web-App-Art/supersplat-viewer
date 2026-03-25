@@ -215,6 +215,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         measureMode: false,
         areaMeasureMode: false,
         floorplanMode: false,
+        flatnessMeasureMode: false,
         isFullscreen: false,
         controlsHidden: false
     });
