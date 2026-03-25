@@ -275,7 +275,7 @@ class FlatnessTool {
         const U = this.planeU;
         const V = this.planeV;
         const res = this.gridResolution;
-        const MAX_DIST = 0.5;
+        const MAX_DIST = 0.15;
 
         // Project the 4 quad corners into UV space
         const quadUV = this.currentPoints.map(p => {

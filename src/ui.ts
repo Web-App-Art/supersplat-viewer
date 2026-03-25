@@ -652,24 +652,24 @@ const initUI = (global: Global) => {
     // tooltips
     const tooltip = new Tooltip(dom.tooltip);
 
-    tooltip.register(dom.play, 'Play', 'top');
+    tooltip.register(dom.play, 'Lecture', 'top');
     tooltip.register(dom.pause, 'Pause', 'top');
-    tooltip.register(dom.orbitCamera, 'Orbit Camera', 'top');
-    tooltip.register(dom.flyCamera, 'Fly Camera', 'top');
-    tooltip.register(dom.fpsCamera, 'Walk Mode', 'top');
-    tooltip.register(dom.reset, 'Reset Camera', 'bottom');
-    tooltip.register(dom.frame, 'Frame Scene', 'bottom');
-    tooltip.register(dom.measure, 'Measure', 'top');
-    tooltip.register(dom.areaMeasure, 'Area Measure', 'top');
-    tooltip.register(dom.flatnessMeasure, 'Flatness', 'top');
-    tooltip.register(dom.floorplan, 'Floorplan', 'top');
-    tooltip.register(dom.showVoxels, 'Show Voxels', 'top');
-    tooltip.register(dom.settings, 'Settings', 'top');
-    tooltip.register(dom.info, 'Help', 'top');
-    tooltip.register(dom.arMode, 'Enter AR', 'top');
-    tooltip.register(dom.vrMode, 'Enter VR', 'top');
-    tooltip.register(dom.enterFullscreen, 'Fullscreen', 'top');
-    tooltip.register(dom.exitFullscreen, 'Fullscreen', 'top');
+    tooltip.register(dom.orbitCamera, 'Caméra orbitale', 'top');
+    tooltip.register(dom.flyCamera, 'Caméra libre', 'top');
+    tooltip.register(dom.fpsCamera, 'Mode marche', 'top');
+    tooltip.register(dom.reset, 'Réinitialiser caméra', 'bottom');
+    tooltip.register(dom.frame, 'Cadrer la scène', 'bottom');
+    tooltip.register(dom.measure, 'Mesure', 'top');
+    tooltip.register(dom.areaMeasure, 'Mesure de surface', 'top');
+    tooltip.register(dom.flatnessMeasure, 'Planéité', 'top');
+    tooltip.register(dom.floorplan, 'Plan au sol', 'top');
+    tooltip.register(dom.showVoxels, 'Afficher voxels', 'top');
+    tooltip.register(dom.settings, 'Paramètres', 'top');
+    tooltip.register(dom.info, 'Aide', 'top');
+    tooltip.register(dom.arMode, 'Mode AR', 'top');
+    tooltip.register(dom.vrMode, 'Mode VR', 'top');
+    tooltip.register(dom.enterFullscreen, 'Plein écran', 'top');
+    tooltip.register(dom.exitFullscreen, 'Plein écran', 'top');
 
     const isThirdPartyEmbedded = () => {
         try {

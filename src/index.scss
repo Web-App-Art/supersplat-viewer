@@ -272,10 +272,10 @@ button {
                 color: $clr-accent;
             }
 
-            /* measure/floorplan button: white icon on colored background when active */
+            /* measure/flatness button: white icon on colored background when active */
             &#measure.active,
             &#areaMeasure.active,
-            &#floorplan.active {
+            &#flatnessMeasure.active {
                 color: $clr-text;
                 background-color: $clr-accent;
                 border-radius: 4px;
