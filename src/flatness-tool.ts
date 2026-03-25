@@ -35,7 +35,7 @@ class FlatnessTool {
     private planeU: Vec3 | null = null;
     private planeV: Vec3 | null = null;
     private gridData: GridData | null = null;
-    private gridResolution = 20;
+    private gridResolution = 100;
 
     private overlay: HTMLDivElement | null = null;
     private drawCanvas: HTMLCanvasElement | null = null;
@@ -542,8 +542,8 @@ class FlatnessTool {
 
         const slider = document.createElement('input');
         slider.type = 'range';
-        slider.min = '5';
-        slider.max = '50';
+        slider.min = '50';
+        slider.max = '250';
         slider.value = String(this.gridResolution);
         slider.style.cssText = 'flex: 1; accent-color: #84cc16; cursor: pointer;';
 
