@@ -37,6 +37,16 @@ class FlatnessTool {
     private gridData: GridData | null = null;
     private gridResolution = 100;
 
+    // Raw data for post-processing
+    private rawGrid: (number | null)[][] | null = null;
+    private insideMask: boolean[][] | null = null;
+    private quadUV: { u: number; v: number }[] | null = null;
+    private rawSplatCount = 0;
+
+    // Post-processing toggles
+    private interpolationEnabled = true;
+    private localPlaneEnabled = false;
+
     private overlay: HTMLDivElement | null = null;
     private drawCanvas: HTMLCanvasElement | null = null;
     private updateHandler: ((dt: number) => void) | null = null;
@@ -127,6 +137,10 @@ class FlatnessTool {
         this.planeU = null;
         this.planeV = null;
         this.gridData = null;
+        this.rawGrid = null;
+        this.insideMask = null;
+        this.quadUV = null;
+        this.rawSplatCount = 0;
         this.removePanel();
         this.pointerHandler.reset();
     }
@@ -265,6 +279,7 @@ class FlatnessTool {
             const dx = p.x - O.x, dy = p.y - O.y, dz = p.z - O.z;
             return { u: dx * U.x + dy * U.y + dz * U.z, v: dx * V.x + dy * V.y + dz * V.z };
         });
+        this.quadUV = quadUV;
 
         // Compute UV bounding box of the quad
         let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
@@ -307,23 +322,125 @@ class FlatnessTool {
             totalSplats++;
         }
 
-        // Build grid with average deviation per cell
-        const grid: (number | null)[][] = [];
-        const allValues: number[] = [];
-
+        // Build raw grid with average deviation per cell
+        const rawGrid: (number | null)[][] = [];
         for (let j = 0; j < res; j++) {
             const row: (number | null)[] = [];
             for (let i = 0; i < res; i++) {
                 const k = j * res + i;
-                if (gridCount[k] > 0) {
-                    const avg = gridSum[k] / gridCount[k];
-                    row.push(avg);
-                    allValues.push(avg);
-                } else {
-                    row.push(null);
+                row.push(gridCount[k] > 0 ? gridSum[k] / gridCount[k] : null);
+            }
+            rawGrid.push(row);
+        }
+
+        // Build inside mask: check each cell center against the quad
+        const insideMask: boolean[][] = [];
+        for (let j = 0; j < res; j++) {
+            const row: boolean[] = [];
+            for (let i = 0; i < res; i++) {
+                const cellU = uMin + (i + 0.5) / res * uRange;
+                const cellV = vMin + (j + 0.5) / res * vRange;
+                row.push(this.pointInQuad(cellU, cellV, quadUV));
+            }
+            insideMask.push(row);
+        }
+
+        this.rawGrid = rawGrid;
+        this.insideMask = insideMask;
+        this.rawSplatCount = totalSplats;
+
+        this.postProcessGrid();
+    }
+
+    // ── Post-processing: interpolation + local plane smoothing ──
+
+    private postProcessGrid() {
+        if (!this.rawGrid || !this.insideMask) return;
+
+        const res = this.gridResolution;
+
+        // Deep copy raw grid
+        const grid: (number | null)[][] = this.rawGrid.map(row => [...row]);
+        const mask = this.insideMask;
+
+        // Interpolation: fill null cells INSIDE the quad by averaging neighbors
+        if (this.interpolationEnabled) {
+            for (let pass = 0; pass < 5; pass++) {
+                let filled = false;
+                for (let j = 0; j < res; j++) {
+                    for (let i = 0; i < res; i++) {
+                        if (grid[j][i] !== null || !mask[j][i]) continue;
+                        let sum = 0;
+                        let count = 0;
+                        for (let dj = -1; dj <= 1; dj++) {
+                            for (let di = -1; di <= 1; di++) {
+                                if (di === 0 && dj === 0) continue;
+                                const ni = i + di, nj = j + dj;
+                                if (ni >= 0 && ni < res && nj >= 0 && nj < res && grid[nj][ni] !== null) {
+                                    sum += grid[nj][ni];
+                                    count++;
+                                }
+                            }
+                        }
+                        if (count >= 2) {
+                            grid[j][i] = sum / count;
+                            filled = true;
+                        }
+                    }
+                }
+                if (!filled) break;
+            }
+        }
+
+        // Local plane smoothing: box blur to remove tile noise, reveal large-scale deformations
+        if (this.localPlaneEnabled) {
+            const radius = Math.max(3, Math.round(res * 0.08));
+            // Horizontal pass
+            const hBlur: (number | null)[][] = grid.map(row => [...row]);
+            for (let j = 0; j < res; j++) {
+                for (let i = 0; i < res; i++) {
+                    if (!mask[j][i]) continue;
+                    let sum = 0, count = 0;
+                    for (let di = -radius; di <= radius; di++) {
+                        const ni = i + di;
+                        if (ni >= 0 && ni < res && grid[j][ni] !== null) {
+                            sum += grid[j][ni];
+                            count++;
+                        }
+                    }
+                    hBlur[j][i] = count > 0 ? sum / count : null;
                 }
             }
-            grid.push(row);
+            // Vertical pass
+            for (let j = 0; j < res; j++) {
+                for (let i = 0; i < res; i++) {
+                    if (!mask[j][i]) continue;
+                    let sum = 0, count = 0;
+                    for (let dj = -radius; dj <= radius; dj++) {
+                        const nj = j + dj;
+                        if (nj >= 0 && nj < res && hBlur[nj][i] !== null) {
+                            sum += hBlur[nj][i];
+                            count++;
+                        }
+                    }
+                    grid[j][i] = count > 0 ? sum / count : null;
+                }
+            }
+        }
+
+        // Nullify cells outside the quad
+        for (let j = 0; j < res; j++) {
+            for (let i = 0; i < res; i++) {
+                if (!mask[j][i]) grid[j][i] = null;
+            }
+        }
+
+        // Compute stats from non-null cells
+        const allValues: number[] = [];
+        for (let j = 0; j < res; j++) {
+            for (let i = 0; i < res; i++) {
+                if (grid[j][i] !== null) allValues.push(grid[j][i]);
+            }
         }
 
         if (allValues.length === 0) return;
@@ -335,7 +452,7 @@ class FlatnessTool {
         const variance = absValues.reduce((a, v) => a + (v - mean) * (v - mean), 0) / absValues.length;
         const stdDev = Math.sqrt(variance);
 
-        this.gridData = { grid, resolution: res, min, max, mean, stdDev, splatCount: totalSplats };
+        this.gridData = { grid, resolution: res, min, max, mean, stdDev, splatCount: this.rawSplatCount };
     }
 
     // ── Heatmap color mapping ──
@@ -411,6 +528,19 @@ class FlatnessTool {
 
         // Resolution slider
         this.panel.appendChild(this.createResolutionControl());
+
+        // Toggles
+        this.panel.appendChild(this.createToggle('Interpolation', this.interpolationEnabled, (enabled) => {
+            this.interpolationEnabled = enabled;
+            this.postProcessGrid();
+            this.showPanel();
+        }));
+
+        this.panel.appendChild(this.createToggle('Lissage local', this.localPlaneEnabled, (enabled) => {
+            this.localPlaneEnabled = enabled;
+            this.postProcessGrid();
+            this.showPanel();
+        }));
 
         // Heatmap canvas (last child)
         this.heatmapCanvas = document.createElement('canvas');
@@ -568,6 +698,41 @@ class FlatnessTool {
         wrapper.appendChild(label);
         wrapper.appendChild(slider);
         wrapper.appendChild(valueLabel);
+
+        return wrapper;
+    }
+
+    private createToggle(labelText: string, initialValue: boolean, onChange: (enabled: boolean) => void): HTMLDivElement {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-top: 8px;';
+
+        const label = document.createElement('span');
+        label.style.cssText = 'color: #a1a1aa; font-size: 12px;';
+        label.textContent = labelText;
+
+        const toggle = document.createElement('div');
+        const updateStyle = (on: boolean) => {
+            toggle.style.cssText = `
+                width: 36px; height: 20px; border-radius: 10px; cursor: pointer; position: relative; transition: background 0.2s;
+                background: ${on ? '#84cc16' : 'rgba(255,255,255,0.15)'};
+            `;
+            toggle.innerHTML = `<div style="
+                width: 16px; height: 16px; border-radius: 50%; background: #fff; position: absolute; top: 2px; transition: left 0.2s;
+                left: ${on ? '18px' : '2px'};
+            "></div>`;
+        };
+
+        let state = initialValue;
+        updateStyle(state);
+
+        toggle.addEventListener('click', () => {
+            state = !state;
+            updateStyle(state);
+            onChange(state);
+        });
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(toggle);
 
         return wrapper;
     }
