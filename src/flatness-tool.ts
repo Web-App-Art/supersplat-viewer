@@ -46,6 +46,7 @@ class FlatnessTool {
     // Post-processing toggles
     private interpolationEnabled = true;
     private localPlaneEnabled = false;
+    private redThreshold = 0.10; // meters — full red above this deviation
 
     private overlay: HTMLDivElement | null = null;
     private drawCanvas: HTMLCanvasElement | null = null;
@@ -435,11 +436,12 @@ class FlatnessTool {
             }
         }
 
-        // Compute stats from non-null cells
+        // Compute stats only from cells that have real splat data (not interpolated)
+        const rawGrid = this.rawGrid;
         const allValues: number[] = [];
         for (let j = 0; j < res; j++) {
             for (let i = 0; i < res; i++) {
-                if (grid[j][i] !== null) allValues.push(grid[j][i]);
+                if (rawGrid[j][i] !== null) allValues.push(rawGrid[j][i]);
             }
         }
 
@@ -470,8 +472,8 @@ class FlatnessTool {
                 b: Math.round(128 + t * (60 - 128))
             };
         } else {
-            // Interpolate orange → red (cap at 10cm for full red)
-            const t = Math.min((absDeviation - THRESH_ORANGE) / (0.10 - THRESH_ORANGE), 1);
+            // Interpolate orange → red
+            const t = Math.min((absDeviation - THRESH_ORANGE) / (this.redThreshold - THRESH_ORANGE), 1);
             return {
                 r: Math.round(251 + t * (239 - 251)),
                 g: Math.round(146 + t * (68 - 146)),
@@ -541,6 +543,9 @@ class FlatnessTool {
             this.postProcessGrid();
             this.showPanel();
         }));
+
+        // Red threshold slider
+        this.panel.appendChild(this.createRedThresholdControl());
 
         // Heatmap canvas (last child)
         this.heatmapCanvas = document.createElement('canvas');
@@ -621,7 +626,8 @@ class FlatnessTool {
         // Labels
         const labels = document.createElement('div');
         labels.style.cssText = 'display: flex; justify-content: space-between; font-size: 11px; color: #a1a1aa;';
-        labels.innerHTML = '<span>0 cm</span><span>2 cm</span><span>5 cm</span><span>&gt;10 cm</span>';
+        const redCm = Math.round(this.redThreshold * 100);
+        labels.innerHTML = `<span>0 cm</span><span>2 cm</span><span>5 cm</span><span>&gt;${redCm} cm</span>`;
         wrapper.appendChild(labels);
 
         return wrapper;
@@ -733,6 +739,44 @@ class FlatnessTool {
 
         wrapper.appendChild(label);
         wrapper.appendChild(toggle);
+
+        return wrapper;
+    }
+
+    private createRedThresholdControl(): HTMLDivElement {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-top: 8px;';
+
+        const label = document.createElement('span');
+        label.style.cssText = 'color: #a1a1aa; font-size: 12px; white-space: nowrap;';
+        label.textContent = 'Seuil rouge';
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '1';
+        slider.max = '30';
+        slider.value = String(Math.round(this.redThreshold * 100));
+        slider.style.cssText = 'flex: 1; accent-color: #ef4444; cursor: pointer;';
+
+        const valueLabel = document.createElement('span');
+        valueLabel.style.cssText = 'color: #fafafa; font-size: 12px; min-width: 40px; text-align: right;';
+        valueLabel.textContent = `${Math.round(this.redThreshold * 100)} cm`;
+
+        slider.addEventListener('input', () => {
+            valueLabel.textContent = `${slider.value} cm`;
+        });
+
+        slider.addEventListener('change', () => {
+            const newThresh = parseInt(slider.value, 10) / 100;
+            if (newThresh !== this.redThreshold) {
+                this.redThreshold = newThresh;
+                this.showPanel();
+            }
+        });
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(slider);
+        wrapper.appendChild(valueLabel);
 
         return wrapper;
     }
