@@ -42,6 +42,7 @@ class FlatnessTool {
     private insideMask: boolean[][] | null = null;
     private quadUV: { u: number; v: number }[] | null = null;
     private rawSplatCount = 0;
+    private rawSplatStats: { min: number; max: number; mean: number; stdDev: number } | null = null;
 
     // Post-processing toggles
     private interpolationEnabled = true;
@@ -142,6 +143,7 @@ class FlatnessTool {
         this.insideMask = null;
         this.quadUV = null;
         this.rawSplatCount = 0;
+        this.rawSplatStats = null;
         this.removePanel();
         this.pointerHandler.reset();
     }
@@ -291,10 +293,10 @@ class FlatnessTool {
         const uRange = uMax - uMin;
         const vRange = vMax - vMin;
 
-        // Grid accumulators
+        // Grid accumulators + collect per-splat deviations
         const gridSum: number[] = new Array(res * res).fill(0);
         const gridCount: number[] = new Array(res * res).fill(0);
-        let totalSplats = 0;
+        const splatDeviations: number[] = [];
 
         for (let i = 0; i < numSplats; i++) {
             const idx = i * 3;
@@ -320,7 +322,39 @@ class FlatnessTool {
 
             gridSum[gj * res + gi] += dist;
             gridCount[gj * res + gi]++;
-            totalSplats++;
+            splatDeviations.push(Math.abs(dist));
+        }
+
+        const totalSplats = splatDeviations.length;
+
+        // Compute per-splat stats using percentiles (P2/P98) to exclude outliers
+        if (totalSplats > 0) {
+            splatDeviations.sort((a, b) => a - b);
+            const p = (pct: number) => splatDeviations[Math.min(Math.floor(pct / 100 * totalSplats), totalSplats - 1)];
+            const p2 = p(2);
+            const p98 = p(98);
+
+            // Compute mean/stdDev only on values within P2–P98
+            let sum = 0, sumSq = 0, count = 0;
+            for (let i = 0; i < totalSplats; i++) {
+                const v = splatDeviations[i];
+                if (v >= p2 && v <= p98) {
+                    sum += v;
+                    sumSq += v * v;
+                    count++;
+                }
+            }
+            const mean = count > 0 ? sum / count : 0;
+            const variance = count > 0 ? sumSq / count - mean * mean : 0;
+
+            this.rawSplatStats = {
+                min: p2,
+                max: p98,
+                mean,
+                stdDev: Math.sqrt(Math.max(0, variance))
+            };
+        } else {
+            this.rawSplatStats = null;
         }
 
         // Build raw grid with average deviation per cell
@@ -436,23 +470,9 @@ class FlatnessTool {
             }
         }
 
-        // Compute stats only from cells that have real splat data (not interpolated)
-        const rawGrid = this.rawGrid;
-        const allValues: number[] = [];
-        for (let j = 0; j < res; j++) {
-            for (let i = 0; i < res; i++) {
-                if (rawGrid[j][i] !== null) allValues.push(rawGrid[j][i]);
-            }
-        }
-
-        if (allValues.length === 0) return;
-
-        const absValues = allValues.map(v => Math.abs(v));
-        const min = Math.min(...absValues);
-        const max = Math.max(...absValues);
-        const mean = absValues.reduce((a, b) => a + b, 0) / absValues.length;
-        const variance = absValues.reduce((a, v) => a + (v - mean) * (v - mean), 0) / absValues.length;
-        const stdDev = Math.sqrt(variance);
+        // Use per-splat stats (resolution-independent)
+        if (!this.rawSplatStats) return;
+        const { min, max, mean, stdDev } = this.rawSplatStats;
 
         this.gridData = { grid, resolution: res, min, max, mean, stdDev, splatCount: this.rawSplatCount };
     }
