@@ -122,10 +122,10 @@ type ExperienceSettings = {
 }
 ```
 pm2 start npm --name "splatviewer" -- run serve
-splat-transform -w -O 0,1 -H 1 -i 16 -r 90,0,0 Maison_Nico.lcc lod-output/lod-meta.json
+
 
 # pour créer les lod depuis un lcc source
-
+splat-transform -w -O 0,1,2 -H 1 -i 16 -C 256 Maison_Nico.lcc -r 90,0,0 ../lod-output/lod-meta.json
 
 # pour créer les lod depuis un ply source
 ## Étape 1 : Créer les LODs décimés (PLY intermédiaires)
