@@ -122,3 +122,19 @@ type ExperienceSettings = {
 }
 ```
 pm2 start npm --name "splatviewer" -- run serve
+splat-transform -w -O 0,1 -H 1 -i 16 -r 90,0,0 Maison_Nico.lcc lod-output/lod-meta.json
+
+# pour créer les lod depuis un lcc source
+
+
+# pour créer les lod depuis un ply source
+## Étape 1 : Créer les LODs décimés (PLY intermédiaires)
+splat-transform -w -F 50% ton-modele.ply lod1.ply
+splat-transform -w -F 25% ton-modele.ply lod2.ply
+
+## Étape 2 : Combiner en LOD streaming avec filtrage SH
+splat-transform -w -H 1 -i 16 -C 256 \
+ton-modele.ply -l 0 \
+lod1.ply -l 1 \
+lod2.ply -l 2 \
+output/lod-meta.json

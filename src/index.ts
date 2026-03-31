@@ -139,7 +139,7 @@ const initCanvas = (global: Global) => {
     const { canvas } = app.graphicsDevice;
 
     // maximum pixel dimension we will allow along the shortest screen dimension based on platform
-    const maxPixelDim = platform.mobile ? 1080 : 2160;
+    const maxPixelDim = platform.mobile ? 720 : 2160;
 
     // cap pixel ratio to limit resolution on high-DPI devices
     const calcPixelRatio = () => Math.min(maxPixelDim / Math.min(screen.width, screen.height), window.devicePixelRatio);
@@ -153,12 +153,17 @@ const initCanvas = (global: Global) => {
         deviceSize.height = height * ratio;
     };
 
+    // Adaptive resolution: reduce during camera movement, restore when idle
+    const MOVE_SCALE = platform.mobile ? 0.55 : 0.75;
+    const IDLE_FRAMES = 10;  // frames of no movement before restoring full resolution
+    let motionScale = 1.0;
+    let idleFrameCount = IDLE_FRAMES;
+    let isMoving = false;
+
     const apply = () => {
-        // don't resize the canvas during XR - the XR system manages its own framebuffers
-        // and resetting canvas dimensions can invalidate the XRWebGLLayer
         if (app.xr?.active) return;
 
-        const s = state.hqMode ? 1.0 : 0.5;
+        const s = (state.hqMode ? 1.0 : 0.5) * motionScale;
         const w = Math.ceil(deviceSize.width * s);
         const h = Math.ceil(deviceSize.height * s);
         if (w !== canvas.width || h !== canvas.height) {
@@ -182,6 +187,29 @@ const initCanvas = (global: Global) => {
 
     // Resize canvas before render() so the swap chain texture is acquired at the correct size.
     app.on('framerender', apply);
+
+    // Track camera movement to adapt resolution
+    app.on('framerender', () => {
+        if (!state.readyToRender) return;
+
+        if (app.renderNextFrame && isMoving === false) {
+            // Camera just started moving
+            isMoving = true;
+            motionScale = MOVE_SCALE;
+            idleFrameCount = 0;
+        } else if (app.renderNextFrame) {
+            // Still moving
+            idleFrameCount = 0;
+        } else if (isMoving) {
+            // Camera stopped — count idle frames
+            idleFrameCount++;
+            if (idleFrameCount >= IDLE_FRAMES) {
+                isMoving = false;
+                motionScale = 1.0;
+                app.renderNextFrame = true;
+            }
+        }
+    });
 
     // Disable the engine's built-in canvas resize — we handle it via ResizeObserver
     // @ts-ignore

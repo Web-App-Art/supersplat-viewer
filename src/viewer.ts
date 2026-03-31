@@ -408,8 +408,8 @@ class Viewer {
                 // quality ranges (in millions of splats)
                 const ranges = {
                     mobile: {
-                        low: 0.5,
-                        high: 1
+                        low: 0.3,
+                        high: 0.7
                     },
                     desktop: {
                         low: 2,
@@ -424,7 +424,7 @@ class Viewer {
 
                 // these two allow LOD behind camera to drop, saves lots of splats
                 gsplat.lodUpdateAngle = 90;
-                gsplat.lodBehindPenalty = 5;
+                gsplat.lodBehindPenalty = platform.mobile ? 10 : 5;
 
                 // same performance, but rotating on slow devices does not give us unsorted splats on sides
                 gsplat.radialSorting = true;
