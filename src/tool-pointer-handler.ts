@@ -69,6 +69,7 @@ class ToolPointerHandler {
 
         this._savedCursor = appCanvas.style.cursor;
         appCanvas.style.cursor = 'crosshair';
+        document.getElementById('ui')?.style.setProperty('cursor', 'crosshair');
 
         // Document capture-phase pointerdown.
         // Fires before canvas bubble-phase listeners (PlayCanvas orbit controller).
@@ -84,7 +85,11 @@ class ToolPointerHandler {
 
             if (event.button !== 0) return;
 
-            if (event.target !== appCanvas) {
+            // Accept clicks on the canvas or on transparent overlays above it
+            const rect = appCanvas.getBoundingClientRect();
+            const overCanvas = event.clientX >= rect.left && event.clientX <= rect.right &&
+                               event.clientY >= rect.top && event.clientY <= rect.bottom;
+            if (!overCanvas || (event.target !== appCanvas && (event.target as HTMLElement)?.closest?.('#ui .controlBar, #flatnessPanel, #settingsPanel, #infoPanelContent'))) {
                 this.downOnCanvas = false;
                 return;
             }
@@ -195,11 +200,8 @@ class ToolPointerHandler {
             const y = (event.clientY - rect.top) / rect.height;
 
             this.picker.pick(x, y).then((pos) => {
-                console.log('[ToolPointer] pick result:', pos);
                 if (!pos) return;
                 this.callbacks.onCanvasClick(pos, event.clientX, event.clientY);
-            }).catch((err) => {
-                console.error('[ToolPointer] pick error:', err);
             });
         };
         document.addEventListener('pointerup', this._onDocumentPointerUp);
@@ -243,6 +245,7 @@ class ToolPointerHandler {
         }
 
         appCanvas.style.cursor = this._savedCursor;
+        document.getElementById('ui')?.style.removeProperty('cursor');
         this.selectedIndex = -1;
         this.dragIndex = -1;
         this.activeAxis = null;

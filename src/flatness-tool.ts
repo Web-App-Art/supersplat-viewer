@@ -9,19 +9,11 @@ type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
 
 // Grid cell data for heatmap
 interface GridData {
-    grid: (number | null)[][];  // deviation values per cell (null = no data)
+    grid: (number | null)[][];  // signed deviation values per cell (null = no data)
     resolution: number;
-    min: number;
-    max: number;
-    mean: number;
-    stdDev: number;
-    splatCount: number;
+    min: number;               // min signed deviation
+    max: number;               // max signed deviation
 }
-
-// Heatmap color thresholds (in meters)
-const THRESH_GREEN = 0.02;  // 0–2cm = green (flat)
-const THRESH_ORANGE = 0.05; // 2–5cm = orange (moderate)
-// > 5cm = red (significant)
 
 class FlatnessTool {
     private global: Global;
@@ -40,14 +32,14 @@ class FlatnessTool {
     // Raw data for post-processing
     private rawGrid: (number | null)[][] | null = null;
     private insideMask: boolean[][] | null = null;
-    private quadUV: { u: number; v: number }[] | null = null;
+    private polyUV: { u: number; v: number }[] | null = null;
     private rawSplatCount = 0;
-    private rawSplatStats: { min: number; max: number; mean: number; stdDev: number } | null = null;
+    private rawSplatStats: { min: number; max: number } | null = null;
 
     // Post-processing toggles
     private interpolationEnabled = true;
     private localPlaneEnabled = false;
-    private redThreshold = 0.10; // meters — full red above this deviation
+    private colorScale = 0.10; // meters — symmetric range [-scale, +scale]
 
     private overlay: HTMLDivElement | null = null;
     private drawCanvas: HTMLCanvasElement | null = null;
@@ -119,19 +111,25 @@ class FlatnessTool {
         } else if (this.state === 'closed') {
             this.pointerHandler.selectedIndex = -1;
         } else if (this.state === 'placing') {
+            // Snap to first point to close polygon (>= 3 points, within 20px)
             if (this.currentPoints.length >= 3) {
-                this.currentPoints.push(pos);
-                this.state = 'closed';
-                console.log('[Flatness] 4 points placed, computing...');
-                this.computePlane();
-                console.log('[Flatness] plane:', !!this.planeOrigin, !!this.planeNormal);
-                this.computeDeviations();
-                console.log('[Flatness] gridData:', !!this.gridData, 'rawSplatStats:', !!this.rawSplatStats, 'rawSplatCount:', this.rawSplatCount);
-                this.showPanel();
-                console.log('[Flatness] panel:', !!this.panel, 'overlay:', !!this.overlay);
-                return;
+                const firstScreen = worldToScreen(this.global.camera, this.currentPoints[0]);
+                if (!firstScreen.behind) {
+                    const sdx = clientX - firstScreen.x;
+                    const sdy = clientY - firstScreen.y;
+                    if (sdx * sdx + sdy * sdy < 400) {
+                        this.state = 'closed';
+                        this.computePlane();
+                        this.computeDeviations();
+                        this.showPanel();
+                        return;
+                    }
+                }
             }
-            this.currentPoints.push(pos);
+            // Max 8 sides
+            if (this.currentPoints.length < 8) {
+                this.currentPoints.push(pos);
+            }
         }
     }
 
@@ -145,14 +143,14 @@ class FlatnessTool {
         this.gridData = null;
         this.rawGrid = null;
         this.insideMask = null;
-        this.quadUV = null;
+        this.polyUV = null;
         this.rawSplatCount = 0;
         this.rawSplatStats = null;
         this.removePanel();
         this.pointerHandler.reset();
     }
 
-    // ── Splat data access (same pattern as floorplan-tool) ──
+    // ── Splat data access ──
 
     private getSplatInfo() {
         const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
@@ -180,7 +178,6 @@ class FlatnessTool {
             const allCenters: Float32Array[] = [];
             let totalSplats = 0;
 
-            // Iterate all camera→layer GSplatManagers
             for (const cameraData of director.camerasMap.values()) {
                 for (const layerData of cameraData.layersMap.values()) {
                     const manager = layerData.gsplatManager;
@@ -216,11 +213,11 @@ class FlatnessTool {
         return null;
     }
 
-    // ── Best-fit plane from 4 points (least squares) ──
+    // ── Best-fit plane from N points (least squares) ──
 
     private computePlane() {
         const pts = this.currentPoints;
-        if (pts.length !== 4) return;
+        if (pts.length < 3) return;
 
         // Centroid
         const O = new Vec3(0, 0, 0);
@@ -286,27 +283,27 @@ class FlatnessTool {
         this.planeV = V;
     }
 
-    // ── Point-in-quad test (split into 2 triangles) ──
+    // ── Point-in-polygon test (winding number) ──
 
-    private pointInTriangle(px: number, py: number, ax: number, ay: number, bx: number, by: number, cx: number, cy: number): boolean {
-        const v0x = cx - ax, v0y = cy - ay;
-        const v1x = bx - ax, v1y = by - ay;
-        const v2x = px - ax, v2y = py - ay;
-        const dot00 = v0x * v0x + v0y * v0y;
-        const dot01 = v0x * v1x + v0y * v1y;
-        const dot02 = v0x * v2x + v0y * v2y;
-        const dot11 = v1x * v1x + v1y * v1y;
-        const dot12 = v1x * v2x + v1y * v2y;
-        const inv = 1 / (dot00 * dot11 - dot01 * dot01);
-        const u = (dot11 * dot02 - dot01 * dot12) * inv;
-        const v = (dot00 * dot12 - dot01 * dot02) * inv;
-        return u >= 0 && v >= 0 && u + v <= 1;
-    }
-
-    private pointInQuad(pu: number, pv: number, quadUV: { u: number; v: number }[]): boolean {
-        const [a, b, c, d] = quadUV;
-        return this.pointInTriangle(pu, pv, a.u, a.v, b.u, b.v, c.u, c.v) ||
-               this.pointInTriangle(pu, pv, a.u, a.v, c.u, c.v, d.u, d.v);
+    private pointInPolygon(pu: number, pv: number, polyUV: { u: number; v: number }[]): boolean {
+        let winding = 0;
+        const n = polyUV.length;
+        for (let i = 0; i < n; i++) {
+            const a = polyUV[i];
+            const b = polyUV[(i + 1) % n];
+            if (a.v <= pv) {
+                if (b.v > pv) {
+                    const cross = (b.u - a.u) * (pv - a.v) - (pu - a.u) * (b.v - a.v);
+                    if (cross > 0) winding++;
+                }
+            } else {
+                if (b.v <= pv) {
+                    const cross = (b.u - a.u) * (pv - a.v) - (pu - a.u) * (b.v - a.v);
+                    if (cross < 0) winding--;
+                }
+            }
+        }
+        return winding !== 0;
     }
 
     // ── Compute deviations: iterate splats, project, bucket into grid ──
@@ -315,7 +312,6 @@ class FlatnessTool {
         if (!this.planeOrigin || !this.planeNormal || !this.planeU || !this.planeV) return;
 
         const info = this.getSplatInfo();
-        console.log('[Flatness] getSplatInfo result:', info ? `${info.numSplats} splats` : 'null');
         if (!info) return;
 
         const { centers, numSplats, worldMatrix: m } = info;
@@ -323,115 +319,130 @@ class FlatnessTool {
         const N = this.planeNormal;
         const U = this.planeU;
         const V = this.planeV;
-        const res = this.gridResolution;
-        const MAX_DIST = 0.15;
+        const COARSE_DIST = 0.15;  // first pass: generous filter to find plane offset
+        const FINE_DIST = 0.05;    // second pass: tight filter for actual measurements
 
-        // Project the 4 quad corners into UV space
-        const quadUV = this.currentPoints.map(p => {
+        // Project polygon corners into UV space
+        const polyUV = this.currentPoints.map(p => {
             const dx = p.x - O.x, dy = p.y - O.y, dz = p.z - O.z;
             return { u: dx * U.x + dy * U.y + dz * U.z, v: dx * V.x + dy * V.y + dz * V.z };
         });
-        this.quadUV = quadUV;
+        this.polyUV = polyUV;
 
-        // Compute UV bounding box of the quad
+        // Compute UV bounding box of the polygon
         let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-        for (const q of quadUV) {
+        for (const q of polyUV) {
             if (q.u < uMin) uMin = q.u; if (q.u > uMax) uMax = q.u;
             if (q.v < vMin) vMin = q.v; if (q.v > vMax) vMax = q.v;
         }
         const uRange = uMax - uMin;
         const vRange = vMax - vMin;
 
-        // Grid accumulators + collect per-splat deviations
-        const gridSum: number[] = new Array(res * res).fill(0);
-        const gridCount: number[] = new Array(res * res).fill(0);
-        const splatDeviations: number[] = [];
-
-        for (let i = 0; i < numSplats; i++) {
-            const idx = i * 3;
-            const lx = centers[idx], ly = centers[idx + 1], lz = centers[idx + 2];
-
-            const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
-            const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
-            const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
-
-            const dx = wx - O.x, dy = wy - O.y, dz = wz - O.z;
-            const dist = dx * N.x + dy * N.y + dz * N.z;
-
-            if (Math.abs(dist) > MAX_DIST) continue;
-
-            const pu = dx * U.x + dy * U.y + dz * U.z;
-            const pv = dx * V.x + dy * V.y + dz * V.z;
-
-            if (pu < uMin || pu > uMax || pv < vMin || pv > vMax) continue;
-            if (!this.pointInQuad(pu, pv, quadUV)) continue;
-
-            const gi = Math.min(Math.floor((pu - uMin) / uRange * res), res - 1);
-            const gj = Math.min(Math.floor((pv - vMin) / vRange * res), res - 1);
-
-            gridSum[gj * res + gi] += dist;
-            gridCount[gj * res + gi]++;
-            splatDeviations.push(Math.abs(dist));
-        }
-
-        const totalSplats = splatDeviations.length;
-
-        // Compute per-splat stats using percentiles (P2/P98) to exclude outliers
-        if (totalSplats > 0) {
-            splatDeviations.sort((a, b) => a - b);
-            const p = (pct: number) => splatDeviations[Math.min(Math.floor(pct / 100 * totalSplats), totalSplats - 1)];
-            const p2 = p(2);
-            const p98 = p(98);
-
-            // Compute mean/stdDev only on values within P2–P98
-            let sum = 0, sumSq = 0, count = 0;
-            for (let i = 0; i < totalSplats; i++) {
-                const v = splatDeviations[i];
-                if (v >= p2 && v <= p98) {
-                    sum += v;
-                    sumSq += v * v;
-                    count++;
-                }
+        // Helper: collect splats within maxDist of plane, return signed distances
+        const collectSplats = (maxDist: number, planeShift: number) => {
+            const dists: { dist: number; pu: number; pv: number }[] = [];
+            for (let i = 0; i < numSplats; i++) {
+                const idx = i * 3;
+                const lx = centers[idx], ly = centers[idx + 1], lz = centers[idx + 2];
+                const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+                const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+                const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+                const dx = wx - O.x, dy = wy - O.y, dz = wz - O.z;
+                const rawDist = dx * N.x + dy * N.y + dz * N.z;
+                const dist = rawDist - planeShift;
+                if (Math.abs(dist) > maxDist) continue;
+                const pu = dx * U.x + dy * U.y + dz * U.z;
+                const pv = dx * V.x + dy * V.y + dz * V.z;
+                if (pu < uMin || pu > uMax || pv < vMin || pv > vMax) continue;
+                if (!this.pointInPolygon(pu, pv, polyUV)) continue;
+                dists.push({ dist, pu, pv });
             }
-            const mean = count > 0 ? sum / count : 0;
-            const variance = count > 0 ? sumSq / count - mean * mean : 0;
+            return dists;
+        };
 
-            this.rawSplatStats = {
-                min: p2,
-                max: p98,
-                mean,
-                stdDev: Math.sqrt(Math.max(0, variance))
-            };
-        } else {
-            this.rawSplatStats = null;
+        // === Pass 1: Find plane offset with coarse filter ===
+        const coarseSplats = collectSplats(COARSE_DIST, 0);
+        if (coarseSplats.length === 0) return;
+
+        // Median of all coarse distances = plane offset
+        const coarseDists = coarseSplats.map(s => s.dist + 0); // copy raw dists (shift=0)
+        coarseDists.sort((a, b) => a - b);
+        const planeOffset = coarseDists[Math.floor(coarseDists.length / 2)];
+
+
+        // === Pass 2: Re-collect with recentered plane and tight filter ===
+        const fineSplats = collectSplats(FINE_DIST, planeOffset);
+
+
+        if (fineSplats.length === 0) return;
+
+        // Adaptive resolution: target ~3 splats per cell, clamped to [40, 200]
+        const TARGET_SPLATS_PER_CELL = 3;
+        const res = Math.max(40, Math.min(200, Math.round(Math.sqrt(fineSplats.length / TARGET_SPLATS_PER_CELL))));
+        this.gridResolution = res;
+
+
+        // Bucket into grid
+        const gridValues: number[][] = new Array(res * res);
+        for (let k = 0; k < res * res; k++) gridValues[k] = [];
+
+        for (const s of fineSplats) {
+            const gi = Math.min(Math.floor((s.pu - uMin) / uRange * res), res - 1);
+            const gj = Math.min(Math.floor((s.pv - vMin) / vRange * res), res - 1);
+            gridValues[gj * res + gi].push(s.dist);
         }
 
-        // Build raw grid with average deviation per cell
+        // Build raw grid with MEDIAN signed deviation per cell
         const rawGrid: (number | null)[][] = [];
         for (let j = 0; j < res; j++) {
             const row: (number | null)[] = [];
             for (let i = 0; i < res; i++) {
-                const k = j * res + i;
-                row.push(gridCount[k] > 0 ? gridSum[k] / gridCount[k] : null);
+                const vals = gridValues[j * res + i];
+                if (vals.length >= 1) {
+                    vals.sort((a, b) => a - b);
+                    const mid = Math.floor(vals.length / 2);
+                    row.push(vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2);
+                } else {
+                    row.push(null);
+                }
             }
             rawGrid.push(row);
         }
 
-        // Build inside mask: check each cell center against the quad
+        // Compute stats from valid cells
+        const cellValues: number[] = [];
+        for (let j = 0; j < res; j++) {
+            for (let i = 0; i < res; i++) {
+                if (rawGrid[j][i] !== null) cellValues.push(rawGrid[j][i]);
+            }
+        }
+
+
+        if (cellValues.length > 0) {
+            cellValues.sort((a, b) => a - b);
+            // Use P5/P95 for displayed stats
+            const p5 = cellValues[Math.floor(0.05 * cellValues.length)];
+            const p95 = cellValues[Math.min(Math.floor(0.95 * cellValues.length), cellValues.length - 1)];
+            this.rawSplatStats = { min: p5, max: p95 };
+        } else {
+            this.rawSplatStats = null;
+        }
+
+        // Build inside mask
         const insideMask: boolean[][] = [];
         for (let j = 0; j < res; j++) {
             const row: boolean[] = [];
             for (let i = 0; i < res; i++) {
                 const cellU = uMin + (i + 0.5) / res * uRange;
                 const cellV = vMin + (j + 0.5) / res * vRange;
-                row.push(this.pointInQuad(cellU, cellV, quadUV));
+                row.push(this.pointInPolygon(cellU, cellV, polyUV));
             }
             insideMask.push(row);
         }
 
         this.rawGrid = rawGrid;
         this.insideMask = insideMask;
-        this.rawSplatCount = totalSplats;
+        this.rawSplatCount = fineSplats.length;
 
         this.postProcessGrid();
     }
@@ -447,9 +458,9 @@ class FlatnessTool {
         const grid: (number | null)[][] = this.rawGrid.map(row => [...row]);
         const mask = this.insideMask;
 
-        // Interpolation: fill null cells INSIDE the quad by averaging neighbors
+        // Interpolation: fill null cells INSIDE the polygon by averaging neighbors
         if (this.interpolationEnabled) {
-            for (let pass = 0; pass < 5; pass++) {
+            for (let pass = 0; pass < 20; pass++) {
                 let filled = false;
                 for (let j = 0; j < res; j++) {
                     for (let i = 0; i < res; i++) {
@@ -476,10 +487,9 @@ class FlatnessTool {
             }
         }
 
-        // Local plane smoothing: box blur to remove tile noise, reveal large-scale deformations
+        // Local plane smoothing: box blur to remove tile noise
         if (this.localPlaneEnabled) {
             const radius = Math.max(3, Math.round(res * 0.08));
-            // Horizontal pass
             const hBlur: (number | null)[][] = grid.map(row => [...row]);
             for (let j = 0; j < res; j++) {
                 for (let i = 0; i < res; i++) {
@@ -495,7 +505,6 @@ class FlatnessTool {
                     hBlur[j][i] = count > 0 ? sum / count : null;
                 }
             }
-            // Vertical pass
             for (let j = 0; j < res; j++) {
                 for (let i = 0; i < res; i++) {
                     if (!mask[j][i]) continue;
@@ -512,41 +521,41 @@ class FlatnessTool {
             }
         }
 
-        // Nullify cells outside the quad
+        // Nullify cells outside the polygon
         for (let j = 0; j < res; j++) {
             for (let i = 0; i < res; i++) {
                 if (!mask[j][i]) grid[j][i] = null;
             }
         }
 
-        // Use per-splat stats (resolution-independent)
         if (!this.rawSplatStats) return;
-        const { min, max, mean, stdDev } = this.rawSplatStats;
+        const { min, max } = this.rawSplatStats;
 
-        this.gridData = { grid, resolution: res, min, max, mean, stdDev, splatCount: this.rawSplatCount };
+        this.gridData = { grid, resolution: res, min, max };
     }
 
-    // ── Heatmap color mapping ──
+    // ── Heatmap color mapping (diverging: blue → green → red) ──
 
-    private deviationToColor(absDeviation: number): { r: number; g: number; b: number } {
-        if (absDeviation <= THRESH_GREEN) {
-            // Green: #4ade80
-            return { r: 74, g: 222, b: 128 };
-        } else if (absDeviation <= THRESH_ORANGE) {
-            // Interpolate green → orange
-            const t = (absDeviation - THRESH_GREEN) / (THRESH_ORANGE - THRESH_GREEN);
+    private deviationToColor(signedDeviation: number): { r: number; g: number; b: number } {
+        const scale = this.colorScale;
+        // Normalize to [-1, 1] and clamp
+        const t = Math.max(-1, Math.min(1, signedDeviation / scale));
+
+        if (t < 0) {
+            // Negative (inward): blue (#3b82f6) → green (#4ade80)
+            const s = -t; // 0..1
             return {
-                r: Math.round(74 + t * (251 - 74)),
-                g: Math.round(222 + t * (146 - 222)),
-                b: Math.round(128 + t * (60 - 128))
+                r: Math.round(74 + s * (59 - 74)),
+                g: Math.round(222 + s * (130 - 222)),
+                b: Math.round(128 + s * (246 - 128))
             };
         } else {
-            // Interpolate orange → red
-            const t = Math.min((absDeviation - THRESH_ORANGE) / (this.redThreshold - THRESH_ORANGE), 1);
+            // Positive (outward): green (#4ade80) → red (#ef4444)
+            const s = t; // 0..1
             return {
-                r: Math.round(251 + t * (239 - 251)),
-                g: Math.round(146 + t * (68 - 146)),
-                b: Math.round(60 + t * (68 - 60))
+                r: Math.round(74 + s * (239 - 74)),
+                g: Math.round(222 + s * (68 - 222)),
+                b: Math.round(128 + s * (68 - 128))
             };
         }
     }
@@ -594,9 +603,6 @@ class FlatnessTool {
         // Color legend bar
         this.panel.appendChild(this.createLegend());
 
-        // Stats
-        this.panel.appendChild(this.createStats(data));
-
         // Toggles
         this.panel.appendChild(this.createToggle('Lissage local', this.localPlaneEnabled, (enabled) => {
             this.localPlaneEnabled = enabled;
@@ -604,27 +610,27 @@ class FlatnessTool {
             this.showPanel();
         }));
 
-        // Red threshold slider
-        this.panel.appendChild(this.createRedThresholdControl());
+        // Color scale slider
+        this.panel.appendChild(this.createColorScaleControl());
 
-        // Heatmap canvas (last child)
+        // Heatmap canvas — render at display size with nearest-neighbor upscale
+        const DISPLAY_SIZE = 268;
         this.heatmapCanvas = document.createElement('canvas');
-        this.heatmapCanvas.width = res;
-        this.heatmapCanvas.height = res;
+        this.heatmapCanvas.width = DISPLAY_SIZE;
+        this.heatmapCanvas.height = DISPLAY_SIZE;
         this.heatmapCanvas.style.cssText = `
             position: relative;
             width: 100%;
             height: auto;
             aspect-ratio: 1;
             border-radius: 6px;
-            image-rendering: pixelated;
             display: block;
             margin-top: 25px;
         `;
         this.panel.appendChild(this.heatmapCanvas);
         this.drawHeatmap();
 
-        // Insert into overlay (above the overlay canvas)
+        // Insert into overlay
         this.overlay.appendChild(this.panel);
     }
 
@@ -641,22 +647,25 @@ class FlatnessTool {
 
         const data = this.gridData;
         const res = data.resolution;
+        const displaySize = this.heatmapCanvas.width;
         const ctx = this.heatmapCanvas.getContext('2d');
-        const imageData = ctx.createImageData(res, res);
+        const imageData = ctx.createImageData(displaySize, displaySize);
         const pixels = imageData.data;
+        const scale = displaySize / res;
 
-        for (let j = 0; j < res; j++) {
-            for (let i = 0; i < res; i++) {
-                const k = (j * res + i) * 4;
-                const val = data.grid[j][i];
+        for (let dj = 0; dj < displaySize; dj++) {
+            const gj = Math.min(Math.floor(dj / scale), res - 1);
+            for (let di = 0; di < displaySize; di++) {
+                const gi = Math.min(Math.floor(di / scale), res - 1);
+                const k = (dj * displaySize + di) * 4;
+                const val = data.grid[gj][gi];
                 if (val === null) {
-                    // No data — dark gray
                     pixels[k] = 63;
                     pixels[k + 1] = 63;
                     pixels[k + 2] = 70;
                     pixels[k + 3] = 255;
                 } else {
-                    const c = this.deviationToColor(Math.abs(val));
+                    const c = this.deviationToColor(val);
                     pixels[k] = c.r;
                     pixels[k + 1] = c.g;
                     pixels[k + 2] = c.b;
@@ -672,21 +681,21 @@ class FlatnessTool {
         const wrapper = document.createElement('div');
         wrapper.style.cssText = 'margin-bottom: 12px;';
 
-        // Gradient bar
+        // Gradient bar: blue → green → red
         const bar = document.createElement('div');
         bar.style.cssText = `
             height: 12px;
             border-radius: 3px;
-            background: linear-gradient(to right, #4ade80 0%, #fb923c 50%, #ef4444 100%);
+            background: linear-gradient(to right, #3b82f6 0%, #4ade80 50%, #ef4444 100%);
             margin-bottom: 4px;
         `;
         wrapper.appendChild(bar);
 
-        // Labels
+        // Labels (symmetric)
         const labels = document.createElement('div');
         labels.style.cssText = 'display: flex; justify-content: space-between; font-size: 11px; color: #a1a1aa;';
-        const redCm = Math.round(this.redThreshold * 100);
-        labels.innerHTML = `<span>0 cm</span><span>2 cm</span><span>5 cm</span><span>&gt;${redCm} cm</span>`;
+        const scaleCm = (this.colorScale * 100).toFixed(0);
+        labels.innerHTML = `<span>-${scaleCm} cm</span><span>0</span><span>+${scaleCm} cm</span>`;
         wrapper.appendChild(labels);
 
         return wrapper;
@@ -720,46 +729,6 @@ class FlatnessTool {
             row.appendChild(valueEl);
             wrapper.appendChild(row);
         }
-
-        return wrapper;
-    }
-
-    private createResolutionControl(): HTMLDivElement {
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display: flex; align-items: center; gap: 10px;';
-
-        const label = document.createElement('span');
-        label.style.cssText = 'color: #a1a1aa; font-size: 12px; white-space: nowrap;';
-        label.textContent = 'Résolution';
-
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.min = '50';
-        slider.max = '250';
-        slider.value = String(this.gridResolution);
-        slider.style.cssText = 'flex: 1; accent-color: #84cc16; cursor: pointer;';
-
-        const valueLabel = document.createElement('span');
-        valueLabel.style.cssText = 'color: #fafafa; font-size: 12px; min-width: 40px; text-align: right;';
-        valueLabel.textContent = `${this.gridResolution}×${this.gridResolution}`;
-
-        slider.addEventListener('input', () => {
-            const newRes = parseInt(slider.value, 10);
-            valueLabel.textContent = `${newRes}×${newRes}`;
-        });
-
-        slider.addEventListener('change', () => {
-            const newRes = parseInt(slider.value, 10);
-            if (newRes !== this.gridResolution) {
-                this.gridResolution = newRes;
-                this.computeDeviations();
-                this.showPanel();
-            }
-        });
-
-        wrapper.appendChild(label);
-        wrapper.appendChild(slider);
-        wrapper.appendChild(valueLabel);
 
         return wrapper;
     }
@@ -799,33 +768,33 @@ class FlatnessTool {
         return wrapper;
     }
 
-    private createRedThresholdControl(): HTMLDivElement {
+    private createColorScaleControl(): HTMLDivElement {
         const wrapper = document.createElement('div');
         wrapper.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-top: 8px;';
 
         const label = document.createElement('span');
         label.style.cssText = 'color: #a1a1aa; font-size: 12px; white-space: nowrap;';
-        label.textContent = 'Seuil rouge';
+        label.textContent = 'Échelle';
 
         const slider = document.createElement('input');
         slider.type = 'range';
         slider.min = '1';
         slider.max = '30';
-        slider.value = String(Math.round(this.redThreshold * 100));
-        slider.style.cssText = 'flex: 1; accent-color: #ef4444; cursor: pointer;';
+        slider.value = String(Math.round(this.colorScale * 100));
+        slider.style.cssText = 'flex: 1; accent-color: #84cc16; cursor: pointer;';
 
         const valueLabel = document.createElement('span');
-        valueLabel.style.cssText = 'color: #fafafa; font-size: 12px; min-width: 40px; text-align: right;';
-        valueLabel.textContent = `${Math.round(this.redThreshold * 100)} cm`;
+        valueLabel.style.cssText = 'color: #fafafa; font-size: 12px; min-width: 50px; text-align: right;';
+        valueLabel.textContent = `± ${Math.round(this.colorScale * 100)} cm`;
 
         slider.addEventListener('input', () => {
-            valueLabel.textContent = `${slider.value} cm`;
+            valueLabel.textContent = `± ${slider.value} cm`;
         });
 
         slider.addEventListener('change', () => {
-            const newThresh = parseInt(slider.value, 10) / 100;
-            if (newThresh !== this.redThreshold) {
-                this.redThreshold = newThresh;
+            const newScale = parseInt(slider.value, 10) / 100;
+            if (newScale !== this.colorScale) {
+                this.colorScale = newScale;
                 this.showPanel();
             }
         });
@@ -858,18 +827,18 @@ class FlatnessTool {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         if (this.currentPoints.length > 0) {
-            this.drawQuad(ctx, this.currentPoints, this.state === 'closed');
+            this.drawPolygon(ctx, this.currentPoints, this.state === 'closed');
         }
     }
 
-    private drawQuad(ctx: CanvasRenderingContext2D, points: Vec3[], closed: boolean) {
+    private drawPolygon(ctx: CanvasRenderingContext2D, points: Vec3[], closed: boolean) {
         const camera = this.global.camera;
         const screenPoints = points.map(p => worldToScreen(camera, p));
         const allVisible = screenPoints.every(s => !s.behind);
         if (!allVisible) return;
 
-        // Draw filled quad
-        if (closed && screenPoints.length === 4) {
+        // Draw filled polygon
+        if (closed && screenPoints.length >= 3) {
             ctx.beginPath();
             ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
             for (let i = 1; i < screenPoints.length; i++) {
@@ -891,9 +860,9 @@ class FlatnessTool {
         }
 
         // Close line
-        if (closed && screenPoints.length === 4) {
+        if (closed && screenPoints.length >= 3) {
             ctx.beginPath();
-            ctx.moveTo(screenPoints[3].x, screenPoints[3].y);
+            ctx.moveTo(screenPoints[screenPoints.length - 1].x, screenPoints[screenPoints.length - 1].y);
             ctx.lineTo(screenPoints[0].x, screenPoints[0].y);
             ctx.stroke();
         }
@@ -913,12 +882,16 @@ class FlatnessTool {
         for (let i = 0; i < screenPoints.length; i++) {
             const sp = screenPoints[i];
             const isSelected = closed && i === this.pointerHandler.selectedIndex;
-            const pinRadius = isSelected ? 8 : 6;
+
+            // Highlight first point when placing and >= 3 points
+            const isSnapTarget = !closed && this.state === 'placing' && i === 0 && points.length >= 3;
+
+            const pinRadius = isSelected ? 8 : isSnapTarget ? 8 : 6;
             ctx.beginPath();
             ctx.arc(sp.x, sp.y, pinRadius, 0, Math.PI * 2);
-            ctx.fillStyle = isSelected ? '#FFFFFF' : ACCENT_COLOR;
+            ctx.fillStyle = isSelected ? '#FFFFFF' : isSnapTarget ? '#FFFFFF' : ACCENT_COLOR;
             ctx.fill();
-            ctx.strokeStyle = isSelected ? ACCENT_COLOR : '#FFFFFF';
+            ctx.strokeStyle = isSelected ? ACCENT_COLOR : isSnapTarget ? ACCENT_COLOR : '#FFFFFF';
             ctx.lineWidth = 2;
             ctx.stroke();
         }
@@ -935,8 +908,9 @@ class FlatnessTool {
         for (let i = 0; i < screenPoints.length - 1; i++) {
             drawEdgeLabel(ctx, points[i], points[i + 1], screenPoints[i], screenPoints[i + 1]);
         }
-        if (closed && screenPoints.length === 4) {
-            drawEdgeLabel(ctx, points[3], points[0], screenPoints[3], screenPoints[0]);
+        if (closed && screenPoints.length >= 3) {
+            const last = screenPoints.length - 1;
+            drawEdgeLabel(ctx, points[last], points[0], screenPoints[last], screenPoints[0]);
         }
     }
 }
