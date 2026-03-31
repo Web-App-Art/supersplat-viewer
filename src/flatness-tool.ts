@@ -10,9 +10,10 @@ type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
 // Grid cell data for heatmap
 interface GridData {
     grid: (number | null)[][];  // signed deviation values per cell (null = no data)
-    resolution: number;
-    min: number;               // min signed deviation
-    max: number;               // max signed deviation
+    resX: number;
+    resY: number;
+    min: number;
+    max: number;
 }
 
 class FlatnessTool {
@@ -27,7 +28,8 @@ class FlatnessTool {
     private planeU: Vec3 | null = null;
     private planeV: Vec3 | null = null;
     private gridData: GridData | null = null;
-    private gridResolution = 250;
+    private gridResX = 50;
+    private gridResY = 50;
 
     // Raw data for post-processing
     private rawGrid: (number | null)[][] | null = null;
@@ -264,20 +266,24 @@ class FlatnessTool {
         this.planeOrigin = O;
         this.planeNormal = N;
 
-        // Build local 2D basis on the plane
-        const toP0 = new Vec3().sub2(pts[0], O);
-        const dotN = toP0.dot(N);
-        const U = new Vec3(toP0.x - dotN * N.x, toP0.y - dotN * N.y, toP0.z - dotN * N.z);
+        // Build local 2D basis aligned with camera orientation:
+        // U = camera right projected onto plane (→ heatmap horizontal ≈ screen horizontal)
+        // V = N × U (→ heatmap vertical ≈ screen vertical, but pointing down)
+        const camRight = this.global.camera.right.clone();
+        // Project camera right onto the plane: remove the normal component
+        const dotNR = camRight.dot(N);
+        const U = new Vec3(camRight.x - dotNR * N.x, camRight.y - dotNR * N.y, camRight.z - dotNR * N.z);
         const uLen = U.length();
         if (uLen < 1e-10) {
-            const absX = Math.abs(N.x), absY = Math.abs(N.y), absZ = Math.abs(N.z);
-            const up = absX <= absY && absX <= absZ ? new Vec3(1, 0, 0) :
-                       absY <= absZ ? new Vec3(0, 1, 0) : new Vec3(0, 0, 1);
-            U.cross(up, N).normalize();
+            // Camera looking straight at the plane normal — fallback
+            const camUp = this.global.camera.up.clone();
+            const dotNU = camUp.dot(N);
+            U.set(camUp.x - dotNU * N.x, camUp.y - dotNU * N.y, camUp.z - dotNU * N.z).normalize();
         } else {
             U.mulScalar(1 / uLen);
         }
-        const V = new Vec3().cross(N, U).normalize();
+        // V points "down" on screen (camera up projected, but inverted so grid row 0 = top)
+        const V = new Vec3().cross(U, N).normalize();
 
         this.planeU = U;
         this.planeV = V;
@@ -376,28 +382,32 @@ class FlatnessTool {
 
         if (fineSplats.length === 0) return;
 
-        // Adaptive resolution: target ~3 splats per cell, clamped to [40, 200]
+        // Adaptive resolution with aspect ratio: target ~3 splats per cell
         const TARGET_SPLATS_PER_CELL = 3;
-        const res = Math.max(40, Math.min(200, Math.round(Math.sqrt(fineSplats.length / TARGET_SPLATS_PER_CELL))));
-        this.gridResolution = res;
-
+        const totalCells = fineSplats.length / TARGET_SPLATS_PER_CELL;
+        const aspect = uRange / vRange;
+        // resX * resY ≈ totalCells, resX/resY ≈ aspect
+        const resY = Math.max(20, Math.min(200, Math.round(Math.sqrt(totalCells / aspect))));
+        const resX = Math.max(20, Math.min(200, Math.round(resY * aspect)));
+        this.gridResX = resX;
+        this.gridResY = resY;
 
         // Bucket into grid
-        const gridValues: number[][] = new Array(res * res);
-        for (let k = 0; k < res * res; k++) gridValues[k] = [];
+        const gridValues: number[][] = new Array(resX * resY);
+        for (let k = 0; k < resX * resY; k++) gridValues[k] = [];
 
         for (const s of fineSplats) {
-            const gi = Math.min(Math.floor((s.pu - uMin) / uRange * res), res - 1);
-            const gj = Math.min(Math.floor((s.pv - vMin) / vRange * res), res - 1);
-            gridValues[gj * res + gi].push(s.dist);
+            const gi = Math.min(Math.floor((s.pu - uMin) / uRange * resX), resX - 1);
+            const gj = Math.min(Math.floor((s.pv - vMin) / vRange * resY), resY - 1);
+            gridValues[gj * resX + gi].push(s.dist);
         }
 
         // Build raw grid with MEDIAN signed deviation per cell
         const rawGrid: (number | null)[][] = [];
-        for (let j = 0; j < res; j++) {
+        for (let j = 0; j < resY; j++) {
             const row: (number | null)[] = [];
-            for (let i = 0; i < res; i++) {
-                const vals = gridValues[j * res + i];
+            for (let i = 0; i < resX; i++) {
+                const vals = gridValues[j * resX + i];
                 if (vals.length >= 1) {
                     vals.sort((a, b) => a - b);
                     const mid = Math.floor(vals.length / 2);
@@ -411,16 +421,14 @@ class FlatnessTool {
 
         // Compute stats from valid cells
         const cellValues: number[] = [];
-        for (let j = 0; j < res; j++) {
-            for (let i = 0; i < res; i++) {
+        for (let j = 0; j < resY; j++) {
+            for (let i = 0; i < resX; i++) {
                 if (rawGrid[j][i] !== null) cellValues.push(rawGrid[j][i]);
             }
         }
 
-
         if (cellValues.length > 0) {
             cellValues.sort((a, b) => a - b);
-            // Use P5/P95 for displayed stats
             const p5 = cellValues[Math.floor(0.05 * cellValues.length)];
             const p95 = cellValues[Math.min(Math.floor(0.95 * cellValues.length), cellValues.length - 1)];
             this.rawSplatStats = { min: p5, max: p95 };
@@ -430,11 +438,11 @@ class FlatnessTool {
 
         // Build inside mask
         const insideMask: boolean[][] = [];
-        for (let j = 0; j < res; j++) {
+        for (let j = 0; j < resY; j++) {
             const row: boolean[] = [];
-            for (let i = 0; i < res; i++) {
-                const cellU = uMin + (i + 0.5) / res * uRange;
-                const cellV = vMin + (j + 0.5) / res * vRange;
+            for (let i = 0; i < resX; i++) {
+                const cellU = uMin + (i + 0.5) / resX * uRange;
+                const cellV = vMin + (j + 0.5) / resY * vRange;
                 row.push(this.pointInPolygon(cellU, cellV, polyUV));
             }
             insideMask.push(row);
@@ -452,9 +460,9 @@ class FlatnessTool {
     private postProcessGrid() {
         if (!this.rawGrid || !this.insideMask) return;
 
-        const res = this.gridResolution;
+        const resX = this.gridResX;
+        const resY = this.gridResY;
 
-        // Deep copy raw grid
         const grid: (number | null)[][] = this.rawGrid.map(row => [...row]);
         const mask = this.insideMask;
 
@@ -462,8 +470,8 @@ class FlatnessTool {
         if (this.interpolationEnabled) {
             for (let pass = 0; pass < 20; pass++) {
                 let filled = false;
-                for (let j = 0; j < res; j++) {
-                    for (let i = 0; i < res; i++) {
+                for (let j = 0; j < resY; j++) {
+                    for (let i = 0; i < resX; i++) {
                         if (grid[j][i] !== null || !mask[j][i]) continue;
                         let sum = 0;
                         let count = 0;
@@ -471,7 +479,7 @@ class FlatnessTool {
                             for (let di = -1; di <= 1; di++) {
                                 if (di === 0 && dj === 0) continue;
                                 const ni = i + di, nj = j + dj;
-                                if (ni >= 0 && ni < res && nj >= 0 && nj < res && grid[nj][ni] !== null) {
+                                if (ni >= 0 && ni < resX && nj >= 0 && nj < resY && grid[nj][ni] !== null) {
                                     sum += grid[nj][ni];
                                     count++;
                                 }
@@ -487,34 +495,28 @@ class FlatnessTool {
             }
         }
 
-        // Local plane smoothing: box blur to remove tile noise
+        // Local plane smoothing: box blur
         if (this.localPlaneEnabled) {
-            const radius = Math.max(3, Math.round(res * 0.08));
+            const radius = Math.max(3, Math.round(Math.min(resX, resY) * 0.08));
             const hBlur: (number | null)[][] = grid.map(row => [...row]);
-            for (let j = 0; j < res; j++) {
-                for (let i = 0; i < res; i++) {
+            for (let j = 0; j < resY; j++) {
+                for (let i = 0; i < resX; i++) {
                     if (!mask[j][i]) continue;
                     let sum = 0, count = 0;
                     for (let di = -radius; di <= radius; di++) {
                         const ni = i + di;
-                        if (ni >= 0 && ni < res && grid[j][ni] !== null) {
-                            sum += grid[j][ni];
-                            count++;
-                        }
+                        if (ni >= 0 && ni < resX && grid[j][ni] !== null) { sum += grid[j][ni]; count++; }
                     }
                     hBlur[j][i] = count > 0 ? sum / count : null;
                 }
             }
-            for (let j = 0; j < res; j++) {
-                for (let i = 0; i < res; i++) {
+            for (let j = 0; j < resY; j++) {
+                for (let i = 0; i < resX; i++) {
                     if (!mask[j][i]) continue;
                     let sum = 0, count = 0;
                     for (let dj = -radius; dj <= radius; dj++) {
                         const nj = j + dj;
-                        if (nj >= 0 && nj < res && hBlur[nj][i] !== null) {
-                            sum += hBlur[nj][i];
-                            count++;
-                        }
+                        if (nj >= 0 && nj < resY && hBlur[nj][i] !== null) { sum += hBlur[nj][i]; count++; }
                     }
                     grid[j][i] = count > 0 ? sum / count : null;
                 }
@@ -522,8 +524,8 @@ class FlatnessTool {
         }
 
         // Nullify cells outside the polygon
-        for (let j = 0; j < res; j++) {
-            for (let i = 0; i < res; i++) {
+        for (let j = 0; j < resY; j++) {
+            for (let i = 0; i < resX; i++) {
                 if (!mask[j][i]) grid[j][i] = null;
             }
         }
@@ -531,7 +533,7 @@ class FlatnessTool {
         if (!this.rawSplatStats) return;
         const { min, max } = this.rawSplatStats;
 
-        this.gridData = { grid, resolution: res, min, max };
+        this.gridData = { grid, resX, resY, min, max };
     }
 
     // ── Heatmap color mapping (diverging: blue → green → red) ──
@@ -613,16 +615,18 @@ class FlatnessTool {
         // Color scale slider
         this.panel.appendChild(this.createColorScaleControl());
 
-        // Heatmap canvas — render at display size with nearest-neighbor upscale
-        const DISPLAY_SIZE = 268;
+        // Heatmap canvas — match polygon aspect ratio
+        const MAX_DISPLAY = 268;
+        const aspect = data.resX / data.resY;
+        const dispW = aspect >= 1 ? MAX_DISPLAY : Math.round(MAX_DISPLAY * aspect);
+        const dispH = aspect >= 1 ? Math.round(MAX_DISPLAY / aspect) : MAX_DISPLAY;
         this.heatmapCanvas = document.createElement('canvas');
-        this.heatmapCanvas.width = DISPLAY_SIZE;
-        this.heatmapCanvas.height = DISPLAY_SIZE;
+        this.heatmapCanvas.width = dispW;
+        this.heatmapCanvas.height = dispH;
         this.heatmapCanvas.style.cssText = `
             position: relative;
             width: 100%;
             height: auto;
-            aspect-ratio: 1;
             border-radius: 6px;
             display: block;
             margin-top: 25px;
@@ -646,18 +650,20 @@ class FlatnessTool {
         if (!this.heatmapCanvas || !this.gridData) return;
 
         const data = this.gridData;
-        const res = data.resolution;
-        const displaySize = this.heatmapCanvas.width;
+        const { resX, resY } = data;
+        const dispW = this.heatmapCanvas.width;
+        const dispH = this.heatmapCanvas.height;
         const ctx = this.heatmapCanvas.getContext('2d');
-        const imageData = ctx.createImageData(displaySize, displaySize);
+        const imageData = ctx.createImageData(dispW, dispH);
         const pixels = imageData.data;
-        const scale = displaySize / res;
+        const scaleX = dispW / resX;
+        const scaleY = dispH / resY;
 
-        for (let dj = 0; dj < displaySize; dj++) {
-            const gj = Math.min(Math.floor(dj / scale), res - 1);
-            for (let di = 0; di < displaySize; di++) {
-                const gi = Math.min(Math.floor(di / scale), res - 1);
-                const k = (dj * displaySize + di) * 4;
+        for (let dj = 0; dj < dispH; dj++) {
+            const gj = Math.min(Math.floor(dj / scaleY), resY - 1);
+            for (let di = 0; di < dispW; di++) {
+                const gi = Math.min(Math.floor(di / scaleX), resX - 1);
+                const k = (dj * dispW + di) * 4;
                 const val = data.grid[gj][gi];
                 if (val === null) {
                     pixels[k] = 63;
