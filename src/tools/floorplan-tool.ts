@@ -178,34 +178,63 @@ class FloorplanTool {
 
     private getSplatInfo() {
         const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
-        if (!entity) {
-            console.warn('[FloorplanTool] No gsplat entity found');
-            return null;
-        }
+        if (!entity) return null;
 
         const comp = (entity as any).gsplat as GSplatComponent;
         const resource = comp.resource ?? (comp.instance as any)?.resource;
-        if (!resource) {
-            console.warn('[FloorplanTool] No gsplat resource');
-            return null;
+        if (!resource) return null;
+
+        const worldMatrix = entity.getWorldTransform().data as Float32Array;
+
+        // Standard (non-LOD) path: resource has centers directly
+        const directCenters = (resource as any).centers as Float32Array;
+        if (directCenters && directCenters.length > 0) {
+            return {
+                centers: directCenters,
+                numSplats: directCenters.length / 3,
+                worldMatrix
+            };
         }
 
-        // Use resource.centers (Float32Array used for CPU sorting)
-        // This works for all formats (PLY, compressed, SOG)
-        const centers = (resource as any).centers as Float32Array;
-        if (!centers || centers.length === 0) {
-            console.warn('[FloorplanTool] No centers on resource');
-            return null;
+        // LOD streaming path: collect centers from active placements via gsplatDirector
+        const director = (this.global.app as any).renderer?.gsplatDirector;
+        if (director) {
+            const allCenters: Float32Array[] = [];
+            let totalSplats = 0;
+
+            for (const cameraData of director.camerasMap.values()) {
+                for (const layerData of cameraData.layersMap.values()) {
+                    const manager = layerData.gsplatManager;
+                    if (!manager?.octreeInstances) continue;
+
+                    for (const octreeInstance of manager.octreeInstances.values()) {
+                        for (const placement of octreeInstance.activePlacements) {
+                            const placementCenters = placement.resource?.centers as Float32Array;
+                            if (placementCenters && placementCenters.length > 0) {
+                                allCenters.push(placementCenters);
+                                totalSplats += placementCenters.length / 3;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (totalSplats > 0) {
+                const merged = new Float32Array(totalSplats * 3);
+                let offset = 0;
+                for (const c of allCenters) {
+                    merged.set(c, offset);
+                    offset += c.length;
+                }
+                return {
+                    centers: merged,
+                    numSplats: totalSplats,
+                    worldMatrix
+                };
+            }
         }
 
-        const numSplats = centers.length / 3;
-        console.log(`[FloorplanTool] Found ${numSplats} splats via resource.centers`);
-
-        return {
-            centers,
-            numSplats,
-            worldMatrix: entity.getWorldTransform().data as Float32Array
-        };
+        return null;
     }
 
     // ── Generation ────────────────────────────────────────

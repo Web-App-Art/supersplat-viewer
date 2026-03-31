@@ -772,6 +772,18 @@ button {
     visibility: hidden;
 }
 
+/* Flatness measure tool */
+
+#flatnessMeasureOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+}
+
 /* Floorplan tool */
 
 #floorplanOverlay {

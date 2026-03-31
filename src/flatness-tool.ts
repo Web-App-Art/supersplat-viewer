@@ -35,7 +35,7 @@ class FlatnessTool {
     private planeU: Vec3 | null = null;
     private planeV: Vec3 | null = null;
     private gridData: GridData | null = null;
-    private gridResolution = 100;
+    private gridResolution = 250;
 
     // Raw data for post-processing
     private rawGrid: (number | null)[][] | null = null;
@@ -122,9 +122,13 @@ class FlatnessTool {
             if (this.currentPoints.length >= 3) {
                 this.currentPoints.push(pos);
                 this.state = 'closed';
+                console.log('[Flatness] 4 points placed, computing...');
                 this.computePlane();
+                console.log('[Flatness] plane:', !!this.planeOrigin, !!this.planeNormal);
                 this.computeDeviations();
+                console.log('[Flatness] gridData:', !!this.gridData, 'rawSplatStats:', !!this.rawSplatStats, 'rawSplatCount:', this.rawSplatCount);
                 this.showPanel();
+                console.log('[Flatness] panel:', !!this.panel, 'overlay:', !!this.overlay);
                 return;
             }
             this.currentPoints.push(pos);
@@ -158,14 +162,58 @@ class FlatnessTool {
         const resource = comp.resource ?? (comp.instance as any)?.resource;
         if (!resource) return null;
 
-        const centers = (resource as any).centers as Float32Array;
-        if (!centers || centers.length === 0) return null;
+        const worldMatrix = entity.getWorldTransform().data as Float32Array;
 
-        return {
-            centers,
-            numSplats: centers.length / 3,
-            worldMatrix: entity.getWorldTransform().data as Float32Array
-        };
+        // Standard (non-LOD) path: resource has centers directly
+        const directCenters = (resource as any).centers as Float32Array;
+        if (directCenters && directCenters.length > 0) {
+            return {
+                centers: directCenters,
+                numSplats: directCenters.length / 3,
+                worldMatrix
+            };
+        }
+
+        // LOD streaming path: collect centers from active placements via gsplatDirector
+        const director = (this.global.app as any).renderer?.gsplatDirector;
+        if (director) {
+            const allCenters: Float32Array[] = [];
+            let totalSplats = 0;
+
+            // Iterate all camera→layer GSplatManagers
+            for (const cameraData of director.camerasMap.values()) {
+                for (const layerData of cameraData.layersMap.values()) {
+                    const manager = layerData.gsplatManager;
+                    if (!manager?.octreeInstances) continue;
+
+                    for (const octreeInstance of manager.octreeInstances.values()) {
+                        for (const placement of octreeInstance.activePlacements) {
+                            const placementCenters = placement.resource?.centers as Float32Array;
+                            if (placementCenters && placementCenters.length > 0) {
+                                allCenters.push(placementCenters);
+                                totalSplats += placementCenters.length / 3;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (totalSplats > 0) {
+                const merged = new Float32Array(totalSplats * 3);
+                let offset = 0;
+                for (const c of allCenters) {
+                    merged.set(c, offset);
+                    offset += c.length;
+                }
+                return {
+                    centers: merged,
+                    numSplats: totalSplats,
+                    worldMatrix
+                };
+            }
+        }
+
+        return null;
     }
 
     // ── Best-fit plane from 4 points (least squares) ──
@@ -267,6 +315,7 @@ class FlatnessTool {
         if (!this.planeOrigin || !this.planeNormal || !this.planeU || !this.planeV) return;
 
         const info = this.getSplatInfo();
+        console.log('[Flatness] getSplatInfo result:', info ? `${info.numSplats} splats` : 'null');
         if (!info) return;
 
         const { centers, numSplats, worldMatrix: m } = info;
@@ -548,16 +597,7 @@ class FlatnessTool {
         // Stats
         this.panel.appendChild(this.createStats(data));
 
-        // Resolution slider
-        this.panel.appendChild(this.createResolutionControl());
-
         // Toggles
-        this.panel.appendChild(this.createToggle('Interpolation', this.interpolationEnabled, (enabled) => {
-            this.interpolationEnabled = enabled;
-            this.postProcessGrid();
-            this.showPanel();
-        }));
-
         this.panel.appendChild(this.createToggle('Lissage local', this.localPlaneEnabled, (enabled) => {
             this.localPlaneEnabled = enabled;
             this.postProcessGrid();
@@ -584,9 +624,8 @@ class FlatnessTool {
         this.panel.appendChild(this.heatmapCanvas);
         this.drawHeatmap();
 
-        // Insert into UI layer (above the overlay canvas)
-        const ui = document.querySelector('#ui');
-        ui.appendChild(this.panel);
+        // Insert into overlay (above the overlay canvas)
+        this.overlay.appendChild(this.panel);
     }
 
     private removePanel() {
@@ -665,10 +704,7 @@ class FlatnessTool {
 
         const rows = [
             ['Écart min', `${(data.min * 100).toFixed(2)} cm`],
-            ['Écart max', `${(data.max * 100).toFixed(2)} cm`],
-            ['Moyenne', `${(data.mean * 100).toFixed(2)} cm`],
-            ['Écart-type', `${(data.stdDev * 100).toFixed(2)} cm`],
-            ['Splats', data.splatCount.toLocaleString()]
+            ['Écart max', `${(data.max * 100).toFixed(2)} cm`]
         ];
 
         for (const [label, value] of rows) {

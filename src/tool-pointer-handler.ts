@@ -195,8 +195,11 @@ class ToolPointerHandler {
             const y = (event.clientY - rect.top) / rect.height;
 
             this.picker.pick(x, y).then((pos) => {
+                console.log('[ToolPointer] pick result:', pos);
                 if (!pos) return;
                 this.callbacks.onCanvasClick(pos, event.clientX, event.clientY);
+            }).catch((err) => {
+                console.error('[ToolPointer] pick error:', err);
             });
         };
         document.addEventListener('pointerup', this._onDocumentPointerUp);

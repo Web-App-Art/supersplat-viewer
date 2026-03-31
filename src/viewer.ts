@@ -405,11 +405,11 @@ class Viewer {
 
                 const { gsplat } = app.scene;
 
-                // quality ranges
+                // quality ranges (in millions of splats)
                 const ranges = {
                     mobile: {
-                        low: 1,
-                        high: 2
+                        low: 0.5,
+                        high: 1
                     },
                     desktop: {
                         low: 2,
@@ -454,7 +454,7 @@ class Viewer {
                         // debug colorize lods
                         gsplat.colorizeLod = config.colorize;
 
-                        gsplat.gpuSorting = config.gpusort;
+                        gsplat.gpuSorting = config.gpusort || platform.mobile;
 
                         // wait for the first valid frame to complete rendering
                         app.once('frameend', () => {
