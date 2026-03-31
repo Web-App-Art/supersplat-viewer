@@ -246,7 +246,7 @@ const initUI = (global: Global) => {
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
         'supersplatBranding'
     ].reduce((acc: Record<string, HTMLElement>, id) => {
-        acc[id] = document.getElementById(id);
+        acc[id] = document.getElementById(id) ?? document.createElement('div');
         return acc;
     }, {});
 
