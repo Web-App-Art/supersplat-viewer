@@ -226,7 +226,7 @@ const initUI = (global: Global) => {
         'ui',
         'controlsWrap',
         'arMode', 'vrMode',
-        'enterFullscreen', 'exitFullscreen',
+        // 'enterFullscreen', 'exitFullscreen',
         'info', 'infoPanel', 'desktopTab', 'touchTab', 'desktopInfoPanel', 'touchInfoPanel',
         'timelineContainer', 'handle', 'time',
         'buttonContainer',
@@ -282,53 +282,53 @@ const initUI = (global: Global) => {
         document.getElementById('loadingWrap').classList.add('hidden');
     });
 
-    // Fullscreen support
-    const hasFullscreenAPI = docRoot.requestFullscreen && document.exitFullscreen;
-
-    const requestFullscreen = () => {
-        if (hasFullscreenAPI) {
-            docRoot.requestFullscreen();
-        } else {
-            window.parent.postMessage('requestFullscreen', '*');
-            state.isFullscreen = true;
-        }
-    };
-
-    const exitFullscreen = () => {
-        if (hasFullscreenAPI) {
-            if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {});
-            }
-        } else {
-            window.parent.postMessage('exitFullscreen', '*');
-            state.isFullscreen = false;
-        }
-    };
-
-    if (hasFullscreenAPI) {
-        document.addEventListener('fullscreenchange', () => {
-            state.isFullscreen = !!document.fullscreenElement;
-        });
-    }
-
-    dom.enterFullscreen.addEventListener('click', requestFullscreen);
-    dom.exitFullscreen.addEventListener('click', exitFullscreen);
-
-    // toggle fullscreen when user switches between landscape portrait
-    // orientation
-    screen?.orientation?.addEventListener('change', (event) => {
-        if (['landscape-primary', 'landscape-secondary'].includes(screen.orientation.type)) {
-            requestFullscreen();
-        } else {
-            exitFullscreen();
-        }
-    });
-
-    // update UI when fullscreen state changes
-    events.on('isFullscreen:changed', (value) => {
-        dom.enterFullscreen.classList[value ? 'add' : 'remove']('hidden');
-        dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
-    });
+    // // Fullscreen support
+    // const hasFullscreenAPI = docRoot.requestFullscreen && document.exitFullscreen;
+    //
+    // const requestFullscreen = () => {
+    //     if (hasFullscreenAPI) {
+    //         docRoot.requestFullscreen();
+    //     } else {
+    //         window.parent.postMessage('requestFullscreen', '*');
+    //         state.isFullscreen = true;
+    //     }
+    // };
+    //
+    // const exitFullscreen = () => {
+    //     if (hasFullscreenAPI) {
+    //         if (document.fullscreenElement) {
+    //             document.exitFullscreen().catch(() => {});
+    //         }
+    //     } else {
+    //         window.parent.postMessage('exitFullscreen', '*');
+    //         state.isFullscreen = false;
+    //     }
+    // };
+    //
+    // if (hasFullscreenAPI) {
+    //     document.addEventListener('fullscreenchange', () => {
+    //         state.isFullscreen = !!document.fullscreenElement;
+    //     });
+    // }
+    //
+    // dom.enterFullscreen.addEventListener('click', requestFullscreen);
+    // dom.exitFullscreen.addEventListener('click', exitFullscreen);
+    //
+    // // toggle fullscreen when user switches between landscape portrait
+    // // orientation
+    // screen?.orientation?.addEventListener('change', (event) => {
+    //     if (['landscape-primary', 'landscape-secondary'].includes(screen.orientation.type)) {
+    //         requestFullscreen();
+    //     } else {
+    //         exitFullscreen();
+    //     }
+    // });
+    //
+    // // update UI when fullscreen state changes
+    // events.on('isFullscreen:changed', (value) => {
+    //     dom.enterFullscreen.classList[value ? 'add' : 'remove']('hidden');
+    //     dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
+    // });
 
     // HQ mode
     dom.hqOption.addEventListener('click', () => {
@@ -398,10 +398,10 @@ const initUI = (global: Global) => {
             dom.infoPanel.classList.add('hidden');
             dom.settingsPanel.classList.add('hidden');
 
-            // close fullscreen on cancel
-            if (state.isFullscreen) {
-                exitFullscreen();
-            }
+            // // close fullscreen on cancel
+            // if (state.isFullscreen) {
+            //     exitFullscreen();
+            // }
         } else if (event === 'interrupt') {
             dom.settingsPanel.classList.add('hidden');
         }
@@ -668,8 +668,8 @@ const initUI = (global: Global) => {
     tooltip.register(dom.info, 'Aide', 'top');
     tooltip.register(dom.arMode, 'Mode AR', 'top');
     tooltip.register(dom.vrMode, 'Mode VR', 'top');
-    tooltip.register(dom.enterFullscreen, 'Plein écran', 'top');
-    tooltip.register(dom.exitFullscreen, 'Plein écran', 'top');
+    // tooltip.register(dom.enterFullscreen, 'Plein écran', 'top');
+    // tooltip.register(dom.exitFullscreen, 'Plein écran', 'top');
 
     const isThirdPartyEmbedded = () => {
         try {
