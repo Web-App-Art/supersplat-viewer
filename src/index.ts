@@ -159,6 +159,7 @@ const initCanvas = (global: Global) => {
     let motionScale = 1.0;
     let idleFrameCount = IDLE_FRAMES;
     let isMoving = false;
+    const prevWorldData = new Float32Array(16);
 
     const apply = () => {
         if (app.xr?.active) return;
@@ -185,19 +186,30 @@ const initCanvas = (global: Global) => {
         app.renderNextFrame = true;
     });
 
-    // Resize canvas before render() so the swap chain texture is acquired at the correct size.
-    app.on('framerender', apply);
-
-    // Track camera movement to adapt resolution
+    // Track camera movement to adapt resolution by comparing world matrices directly.
+    // This must be registered BEFORE apply so that motionScale is updated before the canvas is resized.
     app.on('framerender', () => {
         if (!state.readyToRender) return;
 
-        if (app.renderNextFrame && isMoving === false) {
+        const world = global.camera.getWorldTransform();
+        const worldData = world.data as Float32Array;
+
+        // Check if camera has actually moved by comparing matrices
+        let cameraMoved = false;
+        for (let i = 0; i < 16; i++) {
+            if (Math.abs(worldData[i] - prevWorldData[i]) > 1e-6) {
+                cameraMoved = true;
+                break;
+            }
+        }
+        prevWorldData.set(worldData);
+
+        if (cameraMoved && !isMoving) {
             // Camera just started moving
             isMoving = true;
             motionScale = MOVE_SCALE;
             idleFrameCount = 0;
-        } else if (app.renderNextFrame) {
+        } else if (cameraMoved) {
             // Still moving
             idleFrameCount = 0;
         } else if (isMoving) {
@@ -210,6 +222,10 @@ const initCanvas = (global: Global) => {
             }
         }
     });
+
+    // Resize canvas before render() so the swap chain texture is acquired at the correct size.
+    // Registered AFTER motion tracking so motionScale is already up-to-date.
+    app.on('framerender', apply);
 
     // Disable the engine's built-in canvas resize — we handle it via ResizeObserver
     // @ts-ignore
