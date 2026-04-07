@@ -127,14 +127,39 @@ pm2 start npm --name "splatviewer" -- run serve
 # pour créer les lod depuis un lcc source
 splat-transform -w -O 0,1,2 -H 1 -i 16 -C 256 Maison_Nico.lcc -r 90,0,0 ../lod-output/lod-meta.json
 
+ou
+
+splat-transform -w -O 0,1,2,3,4 -H 1 -i 16 -C 128 lcc-result/VillaCavalaire.lcc -r 90,0,0 lod-output/lod-meta.json
+
+# 1. Export LCC → PLY (LOD 0 = pleine résolution)
+splat-transform -w -O 0 Maison_Nico.lcc -r 90,0,0 full.ply
+
+# 2. Pipeline PLY avec tes propres niveaux
+splat-transform -w -F 70% full.ply lod1.ply
+splat-transform -w -F 45% full.ply lod2.ply
+splat-transform -w -F 25% full.ply lod3.ply
+splat-transform -w -F 10% full.ply lod4.ply
+
+# 3. Combinaison finale
+splat-transform -w -H 1 -i 16 -C 128 full.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 lod-output/lod-meta.json
+
 # pour créer les lod depuis un ply source
+
+## passer de 3sh à 1sh
+splat-transform -H 1 input.ply output.ply
+
 ## Étape 1 : Créer les LODs décimés (PLY intermédiaires)
 splat-transform -w -F 50% ton-modele.ply lod1.ply
 splat-transform -w -F 25% ton-modele.ply lod2.ply
 
 ## Étape 2 : Combiner en LOD streaming avec filtrage SH
-splat-transform -w -H 1 -i 16 -C 256 \
-ton-modele.ply -l 0 \
-lod1.ply -l 1 \
-lod2.ply -l 2 \
-output/lod-meta.json
+splat-transform -w -H 1 -i 16 -C 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 output/lod-meta.json
+
+# LODs intermédiaires plus granulaires
+splat-transform -w -F 70% ton-modele.ply lod1.ply
+splat-transform -w -F 45% ton-modele.ply lod2.ply
+splat-transform -w -F 25% ton-modele.ply lod3.ply
+splat-transform -w -F 10% ton-modele.ply lod4.ply
+
+# Combinaison finale (SH filtrage uniquement ici, pas aux étapes intermédiaires)
+splat-transform -w -H 1 -i 16 -C 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 output/lod-meta.json
