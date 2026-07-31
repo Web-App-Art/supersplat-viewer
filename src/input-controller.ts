@@ -1,359 +1,119 @@
-import {
-    math,
-    GamepadSource,
-    InputFrame,
-    KeyboardMouseSource,
-    MultiTouchSource,
-    PROJECTION_PERSPECTIVE,
-    Vec3
-} from 'playcanvas';
-import type { CameraComponent } from 'playcanvas';
+import { InputFrame } from 'playcanvas';
 
-import { Picker } from './picker';
+import type { Collision } from './collision';
+import { InputModeTracker } from './input/app/input-mode-tracker';
+import { ModeShortcuts } from './input/app/mode-shortcuts';
+import { NavInteraction } from './input/app/nav-interaction';
+import { PointerLockManager } from './input/app/pointer-lock';
+import { GamepadDevice } from './input/devices/gamepad';
+import { KeyboardMouseDevice } from './input/devices/keyboard-mouse';
+import { TouchDevice } from './input/devices/touch';
+import { TrackpadDevice } from './input/devices/trackpad';
+import type { UpdateContext } from './input/shared';
+import type { Picker } from './picker';
 import type { Global } from './types';
 
-/* Vec initialisation to avoid recurrent memory allocation */
-const tmpV1 = new Vec3();
-const tmpV2 = new Vec3();
-const mouseRotate = new Vec3();
-const flyMove = new Vec3();
-const pinchMove = new Vec3();
-const orbitRotate = new Vec3();
-const flyRotate = new Vec3();
-const stickMove = new Vec3();
-const stickRotate = new Vec3();
-
 /**
- * Converts screen space mouse deltas to world space pan vector.
- *
- * @param camera - The camera component.
- * @param dx - The mouse delta x value.
- * @param dy - The mouse delta y value.
- * @param dz - The world space zoom delta value.
- * @param out - The output vector to store the pan result.
- * @returns - The pan vector in world space.
- * @private
+ * Coordinator that wires together input devices (keyboard-mouse, touch,
+ * trackpad, gamepad) and app-level UX helpers (mode shortcuts, nav
+ * interaction, pointer lock, input-mode tracker), and exposes the
+ * resulting per-frame `InputFrame` for the camera manager to consume.
  */
-const screenToWorld = (camera: CameraComponent, dx: number, dy: number, dz: number, out: Vec3 = new Vec3()) => {
-    const { system, fov, aspectRatio, horizontalFov, projection, orthoHeight } = camera;
-    const { width, height } = system.app.graphicsDevice.clientRect;
-
-    // normalize deltas to device coord space
-    out.set(
-        -(dx / width) * 2,
-        (dy / height) * 2,
-        0
-    );
-
-    // calculate half size of the view frustum at the current distance
-    const halfSize = tmpV2.set(0, 0, 0);
-    if (projection === PROJECTION_PERSPECTIVE) {
-        const halfSlice = dz * Math.tan(0.5 * fov * math.DEG_TO_RAD);
-        if (horizontalFov) {
-            halfSize.set(
-                halfSlice,
-                halfSlice / aspectRatio,
-                0
-            );
-        } else {
-            halfSize.set(
-                halfSlice * aspectRatio,
-                halfSlice,
-                0
-            );
-        }
-    } else {
-        halfSize.set(
-            orthoHeight * aspectRatio,
-            orthoHeight,
-            0
-        );
-    }
-
-    // scale by device coord space
-    out.mul(halfSize);
-
-    return out;
-};
-
-// patch keydown and keyup to ignore events with meta key otherwise
-// keys can get stuck on macOS.
-const patchKeyboardMeta = (desktopInput: any) => {
-    const origOnKeyDown = desktopInput._onKeyDown;
-    desktopInput._onKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Meta') {
-            desktopInput._keyNow.fill(0);
-        } else if (!event.metaKey) {
-            origOnKeyDown(event);
-        }
-    };
-
-    const origOnKeyUp = desktopInput._onKeyUp;
-    desktopInput._onKeyUp = (event: KeyboardEvent) => {
-        if (event.key === 'Meta') {
-            desktopInput._keyNow.fill(0);
-        } else if (!event.metaKey) {
-            origOnKeyUp(event);
-        }
-    };
-};
-
 class InputController {
-    private _state = {
-        axis: new Vec3(),
-        mouse: [0, 0, 0],
-        shift: 0,
-        ctrl: 0,
-        jump: 0,
-        touches: 0
-    };
-
-    private _desktopInput: KeyboardMouseSource = new KeyboardMouseSource();
-
-    private _orbitInput = new MultiTouchSource();
-
-    private _gamepadInput = new GamepadSource();
-
-    global: Global;
-
     frame = new InputFrame({
         move: [0, 0, 0],
         rotate: [0, 0, 0]
     });
 
-    // Touch joystick input values (-1 to 1)
-    private _touchJoystickX: number = 0; // negative = left, positive = right
+    private _global: Global;
 
-    private _touchJoystickY: number = 0; // negative = forward, positive = backward
+    private _trackpad = new TrackpadDevice();
 
-    // this gets overridden by the viewer based on scene size
-    moveSpeed: number = 4;
+    private _keyboardMouse = new KeyboardMouseDevice();
 
-    orbitSpeed: number = 18;
+    private _touch = new TouchDevice();
 
-    pinchSpeed: number = 0.4;
+    private _gamepad = new GamepadDevice();
 
-    wheelSpeed: number = 0.06;
+    private _navInteraction: NavInteraction;
 
-    constructor(global: Global) {
-        const { app, camera, events, state } = global;
+    private _pointerLock = new PointerLockManager();
+
+    private _modeShortcuts = new ModeShortcuts();
+
+    private _inputModeTracker = new InputModeTracker();
+
+    set collision(value: Collision | null) {
+        this._navInteraction.collision = value;
+    }
+
+    get collision(): Collision | null {
+        return this._navInteraction.collision;
+    }
+
+    constructor(global: Global, picker: Picker) {
+        this._global = global;
+        this._navInteraction = new NavInteraction(picker);
+
+        const { app, events } = global;
         const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
 
-        patchKeyboardMeta(this._desktopInput);
+        // Trackpad MUST attach before KeyboardMouseDevice so its wheel
+        // handler runs first; otherwise stopImmediatePropagation can't
+        // block KeyboardMouseSource from also accumulating the wheel delta.
+        this._trackpad.attach(canvas, global);
+        this._keyboardMouse.attach(canvas, global);
+        this._touch.attach(canvas, global);
+        this._gamepad.attach(canvas, global);
 
-        this._desktopInput.attach(canvas);
-        this._orbitInput.attach(canvas);
+        this._navInteraction.attach(canvas, global);
+        this._pointerLock.attach(canvas, global, this._keyboardMouse);
+        this._modeShortcuts.attach(global, this._pointerLock);
+        this._inputModeTracker.attach(global);
 
-        // Listen for joystick input from the UI (touch joystick element)
-        events.on('joystickInput', (value: { x: number; y: number }) => {
-            this._touchJoystickX = value.x;
-            this._touchJoystickY = value.y;
-        });
-
-        this.global = global;
-
-        // Generate input events
+        // canvas-level signals: anything that interrupts an animation /
+        // closes the settings panel / dismisses the walk hint
         ['wheel', 'pointerdown', 'contextmenu', 'keydown'].forEach((eventName) => {
             canvas.addEventListener(eventName, (event) => {
                 events.fire('inputEvent', 'interrupt', event);
             });
         });
-
         canvas.addEventListener('pointermove', (event) => {
             events.fire('inputEvent', 'interact', event);
         });
-
-        // Detect double taps manually because iOS doesn't send dblclick events
-        const lastTap = { time: 0, x: 0, y: 0 };
-        canvas.addEventListener('pointerdown', (event) => {
-            const now = Date.now();
-            const delay = Math.max(0, now - lastTap.time);
-            if (delay < 300 &&
-                Math.abs(event.clientX - lastTap.x) < 8 &&
-                Math.abs(event.clientY - lastTap.y) < 8) {
-                events.fire('inputEvent', 'dblclick', event);
-                lastTap.time = 0;
-            } else {
-                lastTap.time = now;
-                lastTap.x = event.clientX;
-                lastTap.y = event.clientY;
-            }
-        });
-
-        // Calculate pick location on double click
-        let picker: Picker | null = null;
-        events.on('inputEvent', async (eventName, event) => {
-            switch (eventName) {
-                case 'dblclick': {
-                    if (!picker) {
-                        picker = new Picker(app, camera);
-                    }
-                    const result = await picker.pick(event.offsetX / canvas.clientWidth, event.offsetY / canvas.clientHeight);
-                    if (result) {
-                        events.fire('pick', result);
-                    }
-                    break;
-                }
-            }
-        });
-
-        // update input mode based on pointer event
-        ['pointerdown', 'pointermove'].forEach((eventName) => {
-            window.addEventListener(eventName, (event: PointerEvent) => {
-                state.inputMode = event.pointerType === 'touch' ? 'touch' : 'desktop';
-            });
-        });
-
-        // handle keyboard events
-        window.addEventListener('keydown', (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                events.fire('inputEvent', 'cancel', event);
-            } else if (state.cameraMode !== 'fps' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-                switch (event.key) {
-                    case 'f':
-                        events.fire('inputEvent', 'frame', event);
-                        break;
-                    case 'r':
-                        events.fire('inputEvent', 'reset', event);
-                        break;
-                    case ' ':
-                        events.fire('inputEvent', 'playPause', event);
-                        break;
-                }
-            }
-        });
-
-        // Pointer lock management for FPS mode on desktop
-        events.on('cameraMode:changed', (value: string, prev: string) => {
-            if (value === 'fps' && state.inputMode === 'desktop') {
-                (this._desktopInput as any)._pointerLock = true;
-                canvas.requestPointerLock();
-            } else if (prev === 'fps') {
-                (this._desktopInput as any)._pointerLock = false;
-                if (document.pointerLockElement === canvas) {
-                    document.exitPointerLock();
-                }
-            }
-        });
-
-        document.addEventListener('pointerlockchange', () => {
-            if (!document.pointerLockElement && state.cameraMode === 'fps') {
-                events.fire('inputEvent', 'cancel');
-            }
-        });
-
-        // Pointer lock request rejected (e.g., no user gesture, document hidden).
-        // Revert to avoid being stuck in FPS mode without mouse capture.
-        document.addEventListener('pointerlockerror', () => {
-            (this._desktopInput as any)._pointerLock = false;
-            events.fire('inputEvent', 'cancel');
-        });
     }
 
-    /**
-     * @param dt - delta time in seconds
-     * @param state - the current state of the app
-     * @param state.cameraMode - the current camera mode
-     * @param distance - the distance to the camera target
-     */
     update(dt: number, distance: number) {
-        const { keyCode } = KeyboardMouseSource;
+        const { state } = this._global;
+        const cameraComponent = this._global.camera.camera!;
 
-        const { key, button, mouse, wheel } = this._desktopInput.read();
-        const { touch, pinch, count } = this._orbitInput.read();
-        const { leftStick, rightStick } = this._gamepadInput.read();
+        const isOrbit = state.cameraMode === 'orbit';
+        const isFly = state.cameraMode === 'fly';
+        const isWalk = state.cameraMode === 'walk';
+        const isFirstPerson = isFly || isWalk;
 
-        const { state, events } = this.global;
-        const { camera } = this.global.camera;
+        const ctx: UpdateContext = {
+            dt,
+            distance,
+            cameraComponent,
+            mode: state.cameraMode,
+            isOrbit,
+            isFly,
+            isWalk,
+            isFirstPerson,
+            gamingControls: state.gamingControls,
+            // Touch must update first so the count is current; the running
+            // count is also used by the keyboard-mouse pan flag.
+            touchCount: this._touch.touchCount
+        };
 
-        // update state
-        this._state.axis.add(tmpV1.set(
-            (key[keyCode.D] - key[keyCode.A]) + (key[keyCode.RIGHT] - key[keyCode.LEFT]),
-            (key[keyCode.E] - key[keyCode.Q]),
-            (key[keyCode.W] - key[keyCode.S]) + (key[keyCode.UP] - key[keyCode.DOWN])
-        ));
-        this._state.jump += key[keyCode.SPACE];
-        this._state.touches += count[0];
-        for (let i = 0; i < button.length; i++) {
-            this._state.mouse[i] += button[i];
-        }
-        this._state.shift += key[keyCode.SHIFT];
-        this._state.ctrl += key[keyCode.CTRL];
-
-        const isFps = state.cameraMode === 'fps';
-        const isFirstPerson = state.cameraMode === 'fly' || isFps;
-        if (!isFirstPerson && this._state.axis.length() > 0) {
-            events.fire('inputEvent', 'requestFirstPerson');
-        }
-
-        const orbit = +(state.cameraMode === 'orbit');
-        const fly = +isFirstPerson;
-        const double = +(this._state.touches > 1);
-        const pan = this._state.mouse[2] || +(button[2] === -1) || double;
-
-        const orbitFactor = fly ? camera.fov / 120 : 1;
-
-        const { deltas } = this.frame;
-
-        // desktop move
-        const v = tmpV1.set(0, 0, 0);
-        const keyMove = this._state.axis.clone();
-        if (isFps) {
-            // In FPS mode, normalize only horizontal axes so jump doesn't reduce speed
-            keyMove.y = 0;
-        }
-        keyMove.normalize();
-        v.add(keyMove.mulScalar(fly * this.moveSpeed * (this._state.shift ? 4 : this._state.ctrl ? 0.25 : 1) * dt));
-        if (isFps) {
-            // Pass jump signal as raw Y; FPS controller uses move[1] > 0 as boolean trigger
-            v.y = this._state.jump > 0 ? 1 : 0;
-        }
-        const panMove = screenToWorld(camera, mouse[0], mouse[1], distance);
-        v.add(panMove.mulScalar(pan));
-        const wheelMove = new Vec3(0, 0, -wheel[0]);
-        v.add(wheelMove.mulScalar(this.wheelSpeed * dt));
-        // FIXME: need to flip z axis for orbit camera
-        deltas.move.append([v.x, v.y, orbit ? -v.z : v.z]);
-
-        // desktop rotate
-        v.set(0, 0, 0);
-        mouseRotate.set(mouse[0], mouse[1], 0);
-        v.add(mouseRotate.mulScalar((1 - pan) * this.orbitSpeed * orbitFactor * dt));
-        deltas.rotate.append([v.x, v.y, v.z]);
-
-        // mobile move
-        v.set(0, 0, 0);
-        const orbitMove = screenToWorld(camera, touch[0], touch[1], distance);
-        v.add(orbitMove.mulScalar(orbit * pan));
-        // Use touch joystick values for fly movement (X = strafe, Y = forward/backward)
-        flyMove.set(this._touchJoystickX, 0, -this._touchJoystickY);
-        v.add(flyMove.mulScalar(fly * this.moveSpeed * dt));
-        pinchMove.set(0, 0, pinch[0]);
-        v.add(pinchMove.mulScalar(orbit * double * this.pinchSpeed * dt));
-        deltas.move.append([v.x, v.y, v.z]);
-
-        // mobile rotate
-        v.set(0, 0, 0);
-        orbitRotate.set(touch[0], touch[1], 0);
-        v.add(orbitRotate.mulScalar(orbit * (1 - pan) * this.orbitSpeed * dt));
-        // In fly mode, use any touch for look-around (joystick captures its own touches)
-        // Exclude multi-touch (double) to avoid interference with pinch gestures
-        // 1.25x sensitivity for touch look-around
-        flyRotate.set(touch[0], touch[1], 0);
-        v.add(flyRotate.mulScalar(fly * (1 - double) * this.orbitSpeed * orbitFactor * 1.25 * dt));
-        deltas.rotate.append([v.x, v.y, v.z]);
-
-        // gamepad move
-        v.set(0, 0, 0);
-        stickMove.set(leftStick[0], 0, -leftStick[1]);
-        v.add(stickMove.mulScalar(this.moveSpeed * dt));
-        deltas.move.append([v.x, v.y, v.z]);
-
-        // gamepad rotate
-        v.set(0, 0, 0);
-        stickRotate.set(rightStick[0], rightStick[1], 0);
-        v.add(stickRotate.mulScalar(this.orbitSpeed * orbitFactor * dt));
-        deltas.rotate.append([v.x, v.y, v.z]);
+        // order: touch first (so touchCount in ctx reflects this frame's
+        // count delta), then everyone else.
+        this._touch.update(ctx, this.frame);
+        ctx.touchCount = this._touch.touchCount;
+        this._keyboardMouse.update(ctx, this.frame);
+        this._trackpad.update(ctx, this.frame);
+        this._gamepad.update(ctx, this.frame);
     }
 }
 

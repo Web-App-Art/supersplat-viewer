@@ -1,6 +1,6 @@
 {
   "name": "@playcanvas/supersplat-viewer",
-  "version": "1.15.0",
+  "version": "1.28.0",
   "author": "PlayCanvas <support@playcanvas.com>",
   "homepage": "https://github.com/playcanvas/supersplat-viewer#readme",
   "description": "Viewer for https://superspl.at",
@@ -20,6 +20,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./settings": {
+      "types": "./dist/settings.d.ts",
+      "import": "./dist/settings.js"
     }
   },
   "repository": {
@@ -41,21 +45,21 @@
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
     "@rollup/plugin-typescript": "12.3.0",
-    "@typescript-eslint/eslint-plugin": "8.54.0",
-    "@typescript-eslint/parser": "8.54.0",
-    "autoprefixer": "10.4.24",
-    "concurrently": "9.2.1",
-    "eslint": "9.39.2",
-    "globals": "17.3.0",
-    "playcanvas": "2.16.1",
-    "postcss": "8.5.6",
-    "publint": "0.3.17",
-    "rollup": "4.57.1",
+    "@typescript-eslint/eslint-plugin": "8.63.0",
+    "@typescript-eslint/parser": "8.63.0",
+    "autoprefixer": "10.5.2",
+    "concurrently": "9.2.3",
+    "eslint": "9.39.4",
+    "globals": "17.7.0",
+    "playcanvas": "2.20.6",
+    "postcss": "8.5.16",
+    "publint": "0.3.21",
+    "rollup": "4.62.2",
     "rollup-plugin-copy": "3.5.0",
     "rollup-plugin-scss": "4.0.1",
     "rollup-plugin-string": "3.0.0",
-    "sass": "1.97.3",
-    "serve": "14.2.5",
+    "sass": "1.101.0",
+    "serve": "14.2.6",
     "typescript": "5.9.3"
   },
   "scripts": {

@@ -1,83 +1,111 @@
-import {
-    FlyController as FlyControllerPC,
-    Pose,
-    Vec2
-} from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
-import type { PushOut, VoxelCollider } from '../voxel-collider';
+import type { Collision } from '../collision';
 import type { CameraFrame, Camera, CameraController } from './camera';
+import { DEFAULT_CONTROLLER_DAMPING, applyFrameRotation, dampAngles, setBasisOffset, setCameraBasis } from './camera-utils';
+import { SpawnState } from './spawn-state';
+import { SphereMover } from './sphere-mover';
+import { findSphereSpawn } from '../collision/find-spawn';
 
 /** Radius of the camera collision sphere (meters) */
 const CAMERA_RADIUS = 0.2;
 
-const p = new Pose();
-
-/** Pre-allocated push-out vector for sphere collision */
-const pushOut: PushOut = { x: 0, y: 0, z: 0 };
+const forward = new Vec3();
+const right = new Vec3();
+const up = new Vec3();
+const offset = new Vec3();
+const spawnProbe = new Vec3();
 
 class FlyController implements CameraController {
-    controller: FlyControllerPC;
+    fov = 90;
 
-    /** Optional voxel collider for sphere collision with sliding */
-    collider: VoxelCollider | null = null;
+    rotateDamping = DEFAULT_CONTROLLER_DAMPING;
 
-    constructor() {
-        this.controller = new FlyControllerPC();
-        this.controller.pitchRange = new Vec2(-90, 90);
-        this.controller.rotateDamping = 0.97;
-        this.controller.moveDamping = 0.97;
+    private _position = new Vec3();
+
+    private _angles = new Vec3();
+
+    private _targetAngles = new Vec3();
+
+    private _distance = 1;
+
+    private _spawn = new SpawnState();
+
+    private _mover = new SphereMover(CAMERA_RADIUS);
+
+    /** Optional collision for sphere collision with sliding */
+    set collision(value: Collision | null) {
+        this._mover.collision = value;
+        this._mover.reset(this._position);
+    }
+
+    get collision(): Collision | null {
+        return this._mover.collision;
     }
 
     onEnter(camera: Camera): void {
-        p.position.copy(camera.position);
-        p.angles.copy(camera.angles);
-        p.distance = camera.distance;
-        this.controller.attach(p, false);
+        this.goto(camera);
+        if (this.collision &&
+            findSphereSpawn(this.collision, this._position.x, this._position.y, this._position.z,
+                CAMERA_RADIUS, spawnProbe)) {
+            this._position.copy(spawnProbe);
+            this._mover.reset(this._position);
+        }
+        this._storeSpawn();
     }
 
     update(deltaTime: number, inputFrame: CameraFrame, camera: Camera) {
-        const pose = this.controller.update(inputFrame, deltaTime);
+        const { move, rotate } = inputFrame.read();
 
-        camera.angles.copy(pose.angles);
-        camera.distance = pose.distance;
+        applyFrameRotation(this._targetAngles, rotate);
+        dampAngles(this._angles, this._targetAngles, this.rotateDamping, deltaTime);
 
-        if (this.collider) {
-            // Resolve collision on _targetPose first. The engine's update() already
-            // applied input to _targetPose and lerped _pose toward it. By correcting
-            // _targetPose now, we ensure next frame's lerp interpolates toward a safe
-            // position, preventing the camera from overshooting into the wall.
-            const target = (this.controller as any)._targetPose;
-            const tvx = -target.position.x;
-            const tvy = -target.position.y;
-            const tvz = target.position.z;
+        this._step(move);
 
-            if (this.collider.querySphere(tvx, tvy, tvz, CAMERA_RADIUS, pushOut)) {
-                target.position.x += -pushOut.x;
-                target.position.y += -pushOut.y;
-                target.position.z += pushOut.z;
-            }
+        camera.position.copy(this._position);
+        camera.angles.set(this._angles.x, this._angles.y, 0);
+        camera.distance = this._distance;
+        camera.fov = this.fov;
+    }
 
-            // Now resolve collision on the interpolated pose (_pose).
-            const vx = -pose.position.x;
-            const vy = -pose.position.y;
-            const vz = pose.position.z;
+    onExit(_camera: Camera): void {
 
-            if (this.collider.querySphere(vx, vy, vz, CAMERA_RADIUS, pushOut)) {
-                pose.position.x += -pushOut.x;
-                pose.position.y += -pushOut.y;
-                pose.position.z += pushOut.z;
-            }
+    }
+
+    goto(camera: Camera) {
+        this._position.copy(camera.position);
+        this._angles.set(camera.angles.x, camera.angles.y, 0);
+        this._targetAngles.copy(this._angles);
+        this._distance = camera.distance;
+        this._mover.reset(this._position);
+    }
+
+    resetToSpawn(camera: Camera): boolean {
+        if (!this._spawn.has) {
+            return false;
         }
 
-        camera.position.copy(pose.position);
+        this._distance = this._spawn.restore(this._position, this._angles);
+        this._targetAngles.copy(this._angles);
+        this._mover.reset(this._position);
+
+        camera.position.copy(this._position);
+        camera.angles.copy(this._angles);
+        camera.distance = this._distance;
+        camera.fov = this.fov;
+
+        return true;
     }
 
-    onExit(camera: Camera): void {
-
+    private _storeSpawn() {
+        this._spawn.store(this._position, this._angles, this._distance);
     }
 
-    goto(pose: Pose) {
-        this.controller.attach(pose, true);
+    private _step(move: number[]) {
+        setCameraBasis(this._angles, forward, right, up);
+
+        setBasisOffset(offset, move[0], move[1], move[2], forward, right, up);
+        this._mover.move(this._position, offset);
     }
 }
 

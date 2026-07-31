@@ -58,6 +58,8 @@ const buildCss = {
     ]
 };
 
+const debugEngine = process.env.ENGINE === 'debug';
+
 const buildPublic = {
     input: 'src/index.ts',
     output: {
@@ -66,7 +68,7 @@ const buildPublic = {
         sourcemap: true
     },
     plugins: [
-        resolve(),
+        resolve(debugEngine ? { exportConditions: ['development'] } : {}),
         typescript(),
         json(),
         htmlPlugin()
@@ -88,14 +90,28 @@ const buildDist = {
         json(),
         copy({
             targets: [
-                { src: 'src/module/index.d.ts', dest: 'dist' }
+                { src: 'src/module/index.d.ts', dest: 'dist' },
+                { src: 'src/module/settings.d.ts', dest: 'dist' }
             ]
         })
+    ]
+};
+
+const buildSettings = {
+    input: 'src/settings.ts',
+    output: {
+        file: 'dist/settings.js',
+        format: 'esm',
+        sourcemap: true
+    },
+    plugins: [
+        typescript({ noEmit: true })
     ]
 };
 
 export default [
     buildCss,
     buildPublic,
-    buildDist
+    buildDist,
+    buildSettings
 ];

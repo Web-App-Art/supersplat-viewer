@@ -26,7 +26,7 @@ import {
     UNIFORMTYPE_UINT
 } from 'playcanvas';
 
-import type { VoxelCollider } from './voxel-collider';
+import type { VoxelCollision } from './collision';
 
 // ---------------------------------------------------------------------------
 // WGSL compute shader: ray-march through the sparse voxel octree per pixel
@@ -43,11 +43,12 @@ const MAX_STEPS: u32 = 512u;
 // Target wireframe edge width in pixels
 const EDGE_PIXELS: f32 = 1.5;
 
-// Wireframe edge alpha
-const EDGE_ALPHA: f32 = 0.85;
+// Wireframe edge alpha (1.0 = pure black opaque edges, matching the mesh
+// overlay's wireframe pass).
+const EDGE_ALPHA: f32 = 0.8;
 
-// Interior fill alpha (subtle orientation tint)
-const FILL_ALPHA: f32 = 0.12;
+// Interior fill alpha (matching the mesh overlay's surface alpha).
+const FILL_ALPHA: f32 = 0.30;
 
 struct Uniforms {
     invVP: mat4x4<f32>,
@@ -64,7 +65,7 @@ struct Uniforms {
     treeDepth: u32,
     projScaleY: f32,
     displayMode: u32,
-    pad2: u32
+    inverted: u32
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -74,9 +75,9 @@ struct Uniforms {
 
 // ---- helpers ----
 
-// Traverse the octree for block (bx, by, bz). Returns vec2u(result, emptyLevel):
+// Traverse the octree for block (bx, by, bz). Returns vec2u(result, skipLevel):
 //   result: 0 = empty, 1 = solid, 2+ = mixed leaf (2 + leafDataIndex)
-//   emptyLevel: octree level at which emptiness was detected (only meaningful when result == 0)
+//   skipLevel: octree level for multi-block skipping (meaningful when result == 0 or 1)
 fn queryBlock(bx: i32, by: i32, bz: i32) -> vec2u {
     let depth = uniforms.treeDepth;
     var nodeIndex: u32 = 0u;
@@ -84,9 +85,9 @@ fn queryBlock(bx: i32, by: i32, bz: i32) -> vec2u {
     for (var level: u32 = depth - 1u; ; ) {
         let node = nodes[nodeIndex];
 
-        // Solid leaf sentinel
+        // Solid leaf sentinel -- return level + 1 so the caller can skip 2^(level+1) blocks
         if (node == SOLID_LEAF_MARKER) {
-            return vec2u(1u, 0u);
+            return vec2u(1u, level + 1u);
         }
 
         let childMask = (node >> 24u) & 0xFFu;
@@ -156,14 +157,16 @@ fn edgeFactor(hitPos: vec3f, voxMin: vec3f, voxSize: f32, edgeWidth: f32) -> f32
     return 1.0 - smoothstep(0.0, edgeWidth, edgeDist);
 }
 
-// Shade a voxel hit, returning premultiplied RGBA
-fn shadeVoxelHit(hitPos: vec3f, voxMin: vec3f, voxelRes: f32, ro: vec3f, isSolid: bool) -> vec4f {
+// Shade a voxel hit, returning premultiplied RGBA. Uses the same face-axis
+// grayscale palette as the mesh collision overlay (0.85 / 0.55 / 0.30 by
+// dominant axis), with pure black at face edges to mimic that overlay's
+// wireframe pass.
+fn shadeVoxelHit(hitPos: vec3f, voxMin: vec3f, voxelRes: f32, ro: vec3f) -> vec4f {
     let dist = length(hitPos - ro);
     let pixelWorld = 2.0 * dist / (f32(uniforms.screenHeight) * uniforms.projScaleY);
     let ew = clamp(EDGE_PIXELS * pixelWorld / voxelRes, 0.01, 0.5);
 
     let ef = edgeFactor(hitPos, voxMin, voxelRes, ew);
-    let distFade = clamp(1.0 - dist * 0.01, 0.2, 1.0);
 
     let local = (hitPos - voxMin) / voxelRes;
     let fx = min(local.x, 1.0 - local.x);
@@ -178,19 +181,17 @@ fn shadeVoxelHit(hitPos: vec3f, voxMin: vec3f, voxelRes: f32, ro: vec3f, isSolid
     }
 
     var baseColor: vec3f;
-    if (isSolid) {
-        if (faceAxis == 0u) { baseColor = vec3f(1.0, 0.25, 0.2); }
-        else if (faceAxis == 1u) { baseColor = vec3f(0.8, 0.15, 0.1); }
-        else { baseColor = vec3f(0.55, 0.08, 0.05); }
-    } else {
-        if (faceAxis == 0u) { baseColor = vec3f(0.7, 0.7, 0.72); }
-        else if (faceAxis == 1u) { baseColor = vec3f(0.5, 0.5, 0.52); }
-        else { baseColor = vec3f(0.33, 0.33, 0.35); }
-    }
+    if (faceAxis == 0u) { baseColor = vec3f(0.85); }
+    else if (faceAxis == 1u) { baseColor = vec3f(0.55); }
+    else { baseColor = vec3f(0.30); }
 
-    let alpha = mix(FILL_ALPHA, EDGE_ALPHA, ef) * distFade;
+    // Mix the surface base color toward black as the edge factor approaches 1
+    // and ramp alpha from FILL_ALPHA up to EDGE_ALPHA so face edges read as
+    // opaque black lines while the interior stays at the surface tint.
+    let color = mix(baseColor, vec3f(0.0), ef);
+    let alpha = mix(FILL_ALPHA, EDGE_ALPHA, ef);
 
-    return vec4f(mix(baseColor, vec3f(0.0), alpha) * alpha, alpha);
+    return vec4f(color * alpha, alpha);
 }
 
 // Blue (0) -> Cyan (0.25) -> Green (0.5) -> Yellow (0.75) -> Red (1.0)
@@ -227,9 +228,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var worldFar = uniforms.invVP * clipFar;
     worldFar = worldFar / worldFar.w;
 
-    // Convert from PlayCanvas world space to voxel space (negate X and Y)
-    let ro = vec3f(-worldNear.x, -worldNear.y, worldNear.z);
-    let rd = normalize(vec3f(-(worldFar.x - worldNear.x), -(worldFar.y - worldNear.y), worldFar.z - worldNear.z));
+    let ro = worldNear.xyz;
+    let rd = normalize(worldFar.xyz - worldNear.xyz);
 
     // Grid AABB
     let gridMin = vec3f(uniforms.gridMinX, uniforms.gridMinY, uniforms.gridMinZ);
@@ -284,6 +284,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var tMaxY = (nextBoundY - ro.y) / rd.y;
     var tMaxZ = (nextBoundZ - ro.z) / rd.z;
 
+    let inv = uniforms.inverted != 0u;
     var totalWork: u32 = 0u;
 
     for (var step: u32 = 0u; step < MAX_STEPS; step++) {
@@ -291,11 +292,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
         let qResult = queryBlock(bx, by, bz);
         let blockResult = qResult.x;
-        let emptyLevel = qResult.y;
+        let skipLevel = qResult.y;
 
-        if (blockResult == 0u && emptyLevel >= 1u) {
-            // Large empty region: advance the block DDA past the empty cell
-            let cellBlocks = i32(1u << emptyLevel);
+        // Normal: skip large empty regions.  Inverted: skip large solid regions.
+        let shouldSkip = select(
+            blockResult == 0u && skipLevel >= 1u,
+            blockResult == 1u && skipLevel >= 1u,
+            inv
+        );
+
+        if (shouldSkip) {
+            let cellBlocks = i32(1u << skipLevel);
             let cellMask = ~(cellBlocks - 1);
             let cellXMin = bx & cellMask;
             let cellYMin = by & cellMask;
@@ -319,7 +326,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                 }
             }
         } else {
-            if (blockResult != 0u) {
+            // Normal: enter voxel DDA for non-empty blocks.
+            // Inverted: enter voxel DDA for non-solid blocks (empty or mixed).
+            let enterDDA = select(blockResult != 0u, blockResult != 1u, inv);
+
+            if (enterDDA) {
                 let blockOrigin = gridMin + vec3f(f32(bx), f32(by), f32(bz)) * blockRes;
 
                 let blockMax = blockOrigin + vec3f(blockRes);
@@ -370,12 +381,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                         );
                     }
 
-                    if (isSolid) {
+                    let isHit = select(isSolid, !isSolid, inv);
+
+                    if (isHit) {
                         if (uniforms.displayMode == 0u) {
                             let voxMin = blockOrigin + vec3f(f32(vx), f32(vy), f32(vz)) * voxelRes;
                             let vHit = intersectAABB(ro, invDir, voxMin, voxMin + vec3f(voxelRes));
                             let hitPos = ro + rd * max(vHit.x, 0.0);
-                            let result = shadeVoxelHit(hitPos, voxMin, voxelRes, ro, blockResult == 1u);
+                            let result = shadeVoxelHit(hitPos, voxMin, voxelRes, ro);
                             textureStore(outputTexture, vec2i(px, py), result);
                         } else {
                             let effort = f32(totalWork) / 256.0;
@@ -421,13 +434,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         }
     }
 
-    if (uniforms.displayMode == 0u) {
-        textureStore(outputTexture, vec2i(px, py), vec4f(0.0));
-    } else {
-        let effort = f32(totalWork) / 256.0;
-        let color = heatmap(effort);
-        textureStore(outputTexture, vec2i(px, py), vec4f(color, 1.0));
-    }
+    textureStore(outputTexture, vec2i(px, py), vec4f(0.0));
 }
 `;
 
@@ -450,7 +457,7 @@ class VoxelDebugOverlay {
 
     private leafDataBuffer: StorageBuffer;
 
-    private collider: VoxelCollider;
+    private collision: VoxelCollision;
 
     private currentWidth = 0;
 
@@ -466,27 +473,27 @@ class VoxelDebugOverlay {
     /** Display mode: 'overlay' for wireframe debug, 'heatmap' for effort visualization. */
     mode: 'overlay' | 'heatmap' = 'overlay';
 
-    constructor(app: AppBase, collider: VoxelCollider, camera: Entity) {
+    constructor(app: AppBase, collision: VoxelCollision, camera: Entity) {
         this.app = app;
         this.camera = camera;
-        this.collider = collider;
+        this.collision = collision;
 
         const device = app.graphicsDevice;
 
         // Upload SVO node array as a read-only storage buffer
-        const nodesData = collider.nodes;
+        const nodesData = collision.nodes;
         const nodesByteSize = Math.max(nodesData.byteLength, 4);
         this.nodesBuffer = new StorageBuffer(device, nodesByteSize, BUFFERUSAGE_COPY_DST);
         if (nodesData.byteLength > 0) {
-            this.nodesBuffer.write(0, nodesData.buffer, nodesData.byteOffset, nodesData.byteLength);
+            this.nodesBuffer.write(0, nodesData, 0, nodesData.length);
         }
 
         // Upload leaf data as a read-only storage buffer
-        const leafDataArr = collider.leafData;
+        const leafDataArr = collision.leafData;
         const leafByteSize = Math.max(leafDataArr.byteLength, 4);
         this.leafDataBuffer = new StorageBuffer(device, leafByteSize, BUFFERUSAGE_COPY_DST);
         if (leafDataArr.byteLength > 0) {
-            this.leafDataBuffer.write(0, leafDataArr.buffer, leafDataArr.byteOffset, leafDataArr.byteLength);
+            this.leafDataBuffer.write(0, leafDataArr, 0, leafDataArr.length);
         }
 
         // Create the initial storage texture (will be resized on first update)
@@ -495,7 +502,7 @@ class VoxelDebugOverlay {
         this.storageTexture = this.createStorageTexture(this.currentWidth, this.currentHeight);
 
         // Create compute shader
-        const shader = new Shader(device, {
+        const shaderDefinition = {
             name: 'VoxelDebugOverlay',
             shaderLanguage: SHADERLANGUAGE_WGSL,
             cshader: voxelOverlayWGSL,
@@ -515,7 +522,7 @@ class VoxelDebugOverlay {
                     new UniformFormat('treeDepth', UNIFORMTYPE_UINT),
                     new UniformFormat('projScaleY', UNIFORMTYPE_FLOAT),
                     new UniformFormat('displayMode', UNIFORMTYPE_UINT),
-                    new UniformFormat('pad2', UNIFORMTYPE_UINT)
+                    new UniformFormat('inverted', UNIFORMTYPE_UINT)
                 ])
             },
             computeBindGroupFormat: new BindGroupFormat(device, [
@@ -524,7 +531,8 @@ class VoxelDebugOverlay {
                 new BindStorageBufferFormat('leafData', SHADERSTAGE_COMPUTE, true),
                 new BindStorageTextureFormat('outputTexture', PIXELFORMAT_RGBA8, TEXTUREDIMENSION_2D)
             ])
-        });
+        };
+        const shader = new Shader(device, shaderDefinition);
 
         // Create compute instance
         this.compute = new Compute(device, shader, 'VoxelDebugOverlay');
@@ -598,7 +606,7 @@ class VoxelDebugOverlay {
     update(): void {
         if (!this.enabled) return;
 
-        const { app, camera, compute, collider } = this;
+        const { app, camera, compute, collision } = this;
         const device = app.graphicsDevice;
         const width = device.width;
         const height = device.height;
@@ -622,22 +630,43 @@ class VoxelDebugOverlay {
         this.vpTemp.mul2(cam.projectionMatrix, cam.viewMatrix);
         this.invVP.copy(this.vpTemp).invert();
 
+        // For legacy v1.0 data, pre-multiply invVP by R_z180 (negate X/Y rows)
+        // to transform rays from PlayCanvas world space into the raw voxel space
+        if (collision.flipXY) {
+            const d = this.invVP.data;
+            d[0] = -d[0]; d[1] = -d[1];
+            d[4] = -d[4]; d[5] = -d[5];
+            d[8] = -d[8]; d[9] = -d[9];
+            d[12] = -d[12]; d[13] = -d[13];
+        }
+
         // Set compute uniforms
         compute.setParameter('invVP', this.invVP.data);
         compute.setParameter('screenWidth', width);
         compute.setParameter('screenHeight', height);
-        compute.setParameter('gridMinX', collider.gridMinX);
-        compute.setParameter('gridMinY', collider.gridMinY);
-        compute.setParameter('gridMinZ', collider.gridMinZ);
-        compute.setParameter('voxelRes', collider.voxelResolution);
-        compute.setParameter('numVoxelsX', collider.numVoxelsX);
-        compute.setParameter('numVoxelsY', collider.numVoxelsY);
-        compute.setParameter('numVoxelsZ', collider.numVoxelsZ);
-        compute.setParameter('leafSize', collider.leafSize);
-        compute.setParameter('treeDepth', collider.treeDepth);
+        compute.setParameter('gridMinX', collision.gridMinX);
+        compute.setParameter('gridMinY', collision.gridMinY);
+        compute.setParameter('gridMinZ', collision.gridMinZ);
+        compute.setParameter('voxelRes', collision.voxelResolution);
+        compute.setParameter('numVoxelsX', collision.numVoxelsX);
+        compute.setParameter('numVoxelsY', collision.numVoxelsY);
+        compute.setParameter('numVoxelsZ', collision.numVoxelsZ);
+        compute.setParameter('leafSize', collision.leafSize);
+        compute.setParameter('treeDepth', collision.treeDepth);
         compute.setParameter('projScaleY', cam.projectionMatrix.data[5]);
         compute.setParameter('displayMode', this.mode === 'heatmap' ? 1 : 0);
-        compute.setParameter('pad2', 0);
+
+        const camPos = camera.getPosition();
+        let wx = camPos.x, wy = camPos.y;
+        const wz = camPos.z;
+        if (collision.flipXY) {
+            wx = -wx;
+            wy = -wy;
+        }
+        const ix = Math.floor((wx - collision.gridMinX) / collision.voxelResolution);
+        const iy = Math.floor((wy - collision.gridMinY) / collision.voxelResolution);
+        const iz = Math.floor((wz - collision.gridMinZ) / collision.voxelResolution);
+        compute.setParameter('inverted', collision.isVoxelSolid(ix, iy, iz) ? 1 : 0);
 
         // Set storage buffers and output texture
         compute.setParameter('nodes', this.nodesBuffer);

@@ -570,7 +570,6 @@ class FlatnessTool {
         this.removePanel();
 
         const data = this.gridData;
-        const res = data.resolution;
 
         // Create panel container
         this.panel = document.createElement('div');

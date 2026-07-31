@@ -9,6 +9,28 @@ interface Window {
     }
 
     firstFrame?: () => void;
+
+    scrubTo?: (time: number) => Promise<void>;
+
+    captureFrame?: (options?: { time?: number; width?: number; height?: number; supersample?: number }) => Promise<{ width: number; height: number; data: string }>;
+
+    animationDuration?: number;
+
+    getCameraState?: () => {
+        position: [number, number, number];
+        angles: [number, number, number];
+        distance: number;
+        fov: number;
+        mode: 'orbit' | 'anim' | 'fly' | 'walk';
+    };
+
+    setCameraState?: (snapshot: {
+        position: [number, number, number];
+        angles: [number, number, number];
+        distance: number;
+        fov: number;
+        mode: 'orbit' | 'anim' | 'fly' | 'walk';
+    }) => void;
 }
 
 declare module 'playcanvas/scripts/esm/xr-controllers.mjs' {

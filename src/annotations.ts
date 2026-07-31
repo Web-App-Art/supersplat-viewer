@@ -16,16 +16,33 @@ class Annotations {
         Annotation.parentDom = parentDom;
         document.querySelector('#ui').appendChild(parentDom);
 
-        global.events.on('controlsHidden:changed', (value) => {
-            parentDom.style.display = value ? 'none' : 'block';
-            Annotation.opacity = value ? 0.0 : 1.0;
+        this.annotations = global.settings.annotations;
+        this.parentDom = parentDom;
+
+        const { state } = global;
+
+        const updateVisibility = () => {
+            const firstPersonGamingControls = (
+                (state.cameraMode === 'walk' || state.cameraMode === 'fly') &&
+                state.gamingControls
+            );
+            const hidden = !state.showAnnotations || state.controlsHidden || firstPersonGamingControls;
+            parentDom.style.display = hidden ? 'none' : 'block';
+            Annotation.opacity = hidden ? 0.0 : 1.0;
+
+            if (hidden && Annotation.activeAnnotation) {
+                Annotation.activeAnnotation.hideTooltip();
+            }
             if (this.annotations.length > 0) {
                 global.app.renderNextFrame = true;
             }
-        });
+        };
 
-        this.annotations = global.settings.annotations;
-        this.parentDom = parentDom;
+        global.events.on('controlsHidden:changed', updateVisibility);
+        global.events.on('showAnnotations:changed', updateVisibility);
+        global.events.on('cameraMode:changed', updateVisibility);
+        global.events.on('gamingControls:changed', updateVisibility);
+        updateVisibility();
 
         if (hasCameraFrame) {
             Annotation.hotspotColor.gamma();

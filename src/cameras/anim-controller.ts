@@ -1,5 +1,6 @@
 import type { Camera, CameraFrame } from './camera';
 import { CameraController } from './camera';
+import { drainInputFrame } from './camera-utils';
 import { AnimState } from '../animation/anim-state';
 import { AnimTrack } from '../settings';
 
@@ -12,18 +13,17 @@ class AnimController implements CameraController {
     }
 
     onEnter(camera: Camera): void {
-        // snap camera to start position
         camera.look(this.animState.position, this.animState.target);
+        camera.fov = this.animState.fov;
     }
 
     update(deltaTime: number, inputFrame: CameraFrame, camera: Camera) {
         this.animState.update(deltaTime);
 
-        // update camera pose
         camera.look(this.animState.position, this.animState.target);
+        camera.fov = this.animState.fov;
 
-        // ignore input
-        inputFrame.read();
+        drainInputFrame(inputFrame);
     }
 
     onExit(camera: Camera): void {
