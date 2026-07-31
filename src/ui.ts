@@ -842,8 +842,11 @@ const initUI = (global: Global) => {
     tooltip.register(dom.info, localize('tooltip.help'), 'top');
     tooltip.register(dom.arMode, localize('tooltip.enter-ar'), 'top');
     tooltip.register(dom.vrMode, localize('tooltip.enter-vr'), 'top');
-    tooltip.register(dom.enterFullscreen, localize('tooltip.fullscreen'), 'top');
-    tooltip.register(dom.exitFullscreen, localize('tooltip.fullscreen'), 'top');
+    // ARTLIGHT: le bouton plein écran est retiré (index.html + liste d'ids
+    // ci-dessus), `dom.enterFullscreen` est donc undefined. Réintroduire ces
+    // deux lignes fait planter initUI au démarrage, écran gris.
+    // tooltip.register(dom.enterFullscreen, localize('tooltip.fullscreen'), 'top');
+    // tooltip.register(dom.exitFullscreen, localize('tooltip.fullscreen'), 'top');
 
     const isThirdPartyEmbedded = () => {
         try {
