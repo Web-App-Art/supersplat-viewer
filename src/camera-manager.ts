@@ -63,7 +63,7 @@ class CameraManager {
     camera = new Camera();
 
     constructor(global: Global, bbox: BoundingBox, collision: Collision | null = null) {
-        const { events, settings, state } = global;
+        const { config, events, settings, state } = global;
 
         const walkAllowed = isWalkAllowed(bbox, collision);
 
@@ -76,6 +76,15 @@ class CameraManager {
 
         const getAnimTrack = (initial: Camera, isObjectExperience: boolean) => {
             const { animTracks } = settings;
+
+            // ARTLIGHT: sans animTrack déclaré, le viewer en synthétise un
+            // (rotation ou figure-8) et démarre en mode 'anim', ce qui impose
+            // une intro non voulue et affiche le lecteur. `nointro` coupe court :
+            // sans piste, hasAnimation reste faux et la navigation démarre
+            // directement en walk/fly/orbit.
+            if (config.nointro) {
+                return null;
+            }
 
             // extract the camera animation track from settings
             if (animTracks?.length > 0 && settings.startMode === 'animTrack') {

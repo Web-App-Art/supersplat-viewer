@@ -26,14 +26,20 @@
             const budgetParam = url.searchParams.get('budget');
             const budget = budgetParam !== null ? Number(budgetParam) : undefined;
 
+            // ARTLIGHT: un projet multi-scènes (?project=...&scene=...) résout
+            // contenu/réglages/collision depuis son project.json. Sans ce
+            // paramètre, le comportement mono-scène d'origine est inchangé.
+            const projectParam = url.searchParams.get('project');
+
             const sseConfig = {
                 poster: posterUrl && createImage(posterUrl),
                 skyboxUrl,
                 collisionUrl,
                 contentUrl,
-                contents: fetch(contentUrl),
+                contents: projectParam ? null : fetch(contentUrl),
                 noui: url.searchParams.has('noui'),
                 noanim: url.searchParams.has('noanim'),
+                nointro: url.searchParams.has('nointro'),
                 nofx: url.searchParams.has('nofx'),
                 hpr: url.searchParams.has('hpr') ? ['', '1', 'true', 'enable'].includes(url.searchParams.get('hpr')) : undefined,
                 ministats: url.searchParams.has('ministats'),
@@ -49,8 +55,45 @@
 
             window.sse = {
                 config: sseConfig,
-                settings: fetch(settingsUrl).then(response => response.json())
+                settings: null,
+                project: null
             };
+
+            // ARTLIGHT: résolution du projet. Les URL déclarées dans le
+            // project.json sont relatives à ce fichier, pas à la page.
+            const resolveProject = async () => {
+                const base = new URL(projectParam, location.href);
+                const project = await (await fetch(base)).json();
+
+                const scenes = project.scenes || [];
+                const sceneParam = url.searchParams.get('scene');
+                const scene =
+                    scenes.find(s => s.id === sceneParam) ||
+                    scenes.find(s => s.id === project.defaultScene) ||
+                    scenes[0];
+
+                if (!scene) {
+                    throw new Error('project.scenes est vide');
+                }
+
+                const rel = p => (p ? new URL(p, base).href : null);
+
+                sseConfig.contentUrl = rel(scene.content);
+                sseConfig.contents = fetch(sseConfig.contentUrl);
+                sseConfig.collisionUrl = rel(scene.collision) || collisionUrl;
+                if (scene.intro === false) {
+                    sseConfig.nointro = true;
+                }
+                sseConfig.skyboxUrl = rel(scene.skybox) || skyboxUrl;
+
+                window.sse.project = { project, projectParam, sceneId: scene.id };
+
+                return (await fetch(rel(scene.settings) || './settings.json')).json();
+            };
+
+            window.sse.settings = projectParam ?
+                resolveProject() :
+                fetch(settingsUrl).then(response => response.json());
         </script>
     </head>
     <body>

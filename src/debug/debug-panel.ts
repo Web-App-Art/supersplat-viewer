@@ -1,6 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import type { CameraManager } from '../camera-manager';
+import type { Picker } from '../picker';
 import type { Global } from '../types';
 import { captureCameraState, restoreCameraState, type CameraStateSnapshot } from './camera-state';
 
@@ -99,6 +100,9 @@ class DebugPanel {
 
     private readonly _cameraManager: CameraManager;
 
+    // ARTLIGHT: relevé de coordonnées pour placer les hotspots de portails.
+    private readonly _picker: Picker | null;
+
     private readonly _focusTmp = new Vec3();
 
     private _root: HTMLDivElement | null = null;
@@ -113,6 +117,8 @@ class DebugPanel {
 
     private _screenshotButton: HTMLButtonElement | null = null;
 
+    private _pointValue: HTMLSpanElement | null = null;
+
     private _editing: HTMLSpanElement | null = null;
 
     private _editCanceled = false;
@@ -120,6 +126,38 @@ class DebugPanel {
     private _visible = false;
 
     private _onPrerender = () => this._render();
+
+    /**
+     * ARTLIGHT: alt+clic relève le point de la scène sous le curseur et le copie
+     * au presse-papiers, au format attendu par `position` dans un project.json.
+     * Alt évite d'entrer en conflit avec l'orbite et les outils de mesure.
+     *
+     * @param {MouseEvent} event - L'événement de clic sur le canvas.
+     */
+    private _onPickClick = (event: MouseEvent) => {
+        if (!event.altKey || !this._picker || !this._pointValue) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+
+        const canvas = this._global.app.graphicsDevice.canvas;
+        const rect = canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width;
+        const y = (event.clientY - rect.top) / rect.height;
+
+        this._picker.pick(x, y).then((point) => {
+            if (!point) {
+                this._pointValue.textContent = 'aucune surface';
+                return;
+            }
+            const text = `[${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)}]`;
+            this._pointValue.textContent = text;
+            navigator.clipboard?.writeText(text).catch(() => {});
+        }).catch(() => {
+            this._pointValue.textContent = 'échec du relevé';
+        });
+    };
 
     private _onKeyDown = (event: KeyboardEvent) => {
         // Ctrl+Shift+D — also accept Meta+Shift+D on macOS for parity
@@ -129,9 +167,10 @@ class DebugPanel {
         }
     };
 
-    constructor(global: Global, cameraManager: CameraManager) {
+    constructor(global: Global, cameraManager: CameraManager, picker: Picker | null = null) {
         this._global = global;
         this._cameraManager = cameraManager;
+        this._picker = picker;
         window.addEventListener('keydown', this._onKeyDown);
         if (global.config.debug) {
             this.show();
@@ -146,6 +185,7 @@ class DebugPanel {
         }
         this._root!.style.display = '';
         this._global.app.on('prerender', this._onPrerender);
+        this._global.app.graphicsDevice.canvas.addEventListener('click', this._onPickClick);
         window.getCameraState = () => captureCameraState(this._cameraManager, this._global.state);
         window.setCameraState = snapshot => restoreCameraState(this._cameraManager, this._global.state, snapshot);
         this._render();
@@ -158,6 +198,7 @@ class DebugPanel {
             this._root.style.display = 'none';
         }
         this._global.app.off('prerender', this._onPrerender);
+        this._global.app.graphicsDevice.canvas.removeEventListener('click', this._onPickClick);
         delete window.getCameraState;
         delete window.setCameraState;
     }
@@ -190,6 +231,7 @@ class DebugPanel {
         root.innerHTML = `
             <div class="row"><span class="label">camera</span><span class="value" data-id="position" contenteditable="plaintext-only" spellcheck="false" title="Edit to set camera position">—</span></div>
             <div class="row"><span class="label">focus</span><span class="value" data-id="focus" contenteditable="plaintext-only" spellcheck="false" title="Edit to look at this point">—</span></div>
+            <div class="row"><span class="label">point</span><span class="value" data-id="point" title="Alt+clic dans la scène : relève le point sous le curseur et le copie">alt+clic</span></div>
             <div class="buttons">
                 <button data-id="copy">Copy</button>
                 <button data-id="paste">Paste</button>
@@ -206,6 +248,7 @@ class DebugPanel {
         this._copyButton = root.querySelector('[data-id="copy"]')!;
         this._pasteButton = root.querySelector('[data-id="paste"]')!;
         this._screenshotButton = root.querySelector('[data-id="screenshot"]')!;
+        this._pointValue = root.querySelector('[data-id="point"]')!;
 
         this._copyButton.addEventListener('click', () => this._copy());
         this._pasteButton.addEventListener('click', () => this._paste());

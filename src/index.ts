@@ -20,6 +20,7 @@ import { MeshCollision, loadVoxelCollision } from './collision';
 import type { Collision } from './collision';
 import { observe } from './core/observe';
 import { initLocalization } from './localization';
+import { applyArrivalPose } from './portals';
 import { importSettings } from './settings';
 import type { Config, Global } from './types';
 import { initPoster, initUI } from './ui';
@@ -295,9 +296,18 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         gamingControls: localStorage.getItem('gamingControls') === 'true'
     });
 
+    // ARTLIGHT: quand on arrive par un portail, sa pose d'arrivée remplace la
+    // caméra initiale de la scène. Appliqué ici, sur les réglages déjà migrés,
+    // pour que le CameraManager la lise sans savoir que les portails existent.
+    const projectContext = (window as any).sse?.project;
+    const settings = importSettings(settingsJson);
+    if (projectContext) {
+        applyArrivalPose(settings, projectContext, new URL(location.href).searchParams.get('arrive'));
+    }
+
     const global: Global = {
         app,
-        settings: importSettings(settingsJson),
+        settings,
         config,
         state,
         events,

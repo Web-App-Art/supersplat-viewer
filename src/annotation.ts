@@ -99,6 +99,18 @@ export class Annotation extends Script {
     text: string;
 
     /**
+     * ARTLIGHT: quand défini, un clic sur le hotspot appelle ce callback au lieu
+     * d'ouvrir le panneau de texte. Utilisé par les portails pour naviguer.
+     */
+    onActivate: (() => void) | null = null;
+
+    /**
+     * ARTLIGHT: affiche/masque le panneau au survol plutôt qu'au clic. Les
+     * portails s'en servent pour montrer leur libellé sans consommer le clic.
+     */
+    showOnHover = false;
+
+    /**
      * @private
      */
     hotspotDom: HTMLDivElement | null = null;
@@ -412,13 +424,20 @@ export class Annotation extends Script {
         // Add click handlers
         this.hotspotDom.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.showTooltip();
+            if (this.onActivate) {
+                this.onActivate();
+            } else {
+                this.showTooltip();
+            }
         });
 
         const leave = () => {
             if (Annotation.hoverAnnotation === this) {
                 Annotation.hoverAnnotation = null;
                 this.setHover(false);
+                if (this.showOnHover) {
+                    this.hideTooltip();
+                }
             }
         };
 
@@ -428,6 +447,9 @@ export class Annotation extends Script {
             }
             Annotation.hoverAnnotation = this;
             this.setHover(true);
+            if (this.showOnHover) {
+                this.showTooltip();
+            }
         };
 
         this.hotspotDom.addEventListener('pointerenter', enter);

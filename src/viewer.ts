@@ -42,6 +42,7 @@ import { MeasureTool } from './measure-tool'; // ARTLIGHT
 import { MeshDebugOverlay } from './mesh-debug-overlay';
 import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
+import { Portals } from './portals'; // ARTLIGHT
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
 import type { Config, Global } from './types';
@@ -159,6 +160,8 @@ class Viewer {
     picker: Picker;
 
     annotations: Annotations;
+
+    portals: Portals | null = null; // ARTLIGHT
 
     voxelOverlay: VoxelDebugOverlay | null = null;
 
@@ -389,6 +392,10 @@ class Viewer {
 
             if (!config.noui) {
                 this.annotations = new Annotations(global, this.cameraFrame != null);
+
+                // ARTLIGHT: après Annotations, qui crée le parent DOM partagé
+                // par tous les hotspots.
+                this.portals = new Portals(global);
             }
 
             this.picker = new Picker(app, camera);
@@ -471,7 +478,7 @@ class Viewer {
                 this.navCursor = new NavCursor(app, camera, collision ?? null, events, state);
             }
 
-            this.debugPanel = new DebugPanel(global, this.cameraManager);
+            this.debugPanel = new DebugPanel(global, this.cameraManager, this.picker); // ARTLIGHT: picker pour le relevé alt+clic
 
             const { gsplat } = app.scene;
 
