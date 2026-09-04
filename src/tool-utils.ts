@@ -1,6 +1,20 @@
 import { Vec3 } from 'playcanvas';
 import type { Entity } from 'playcanvas';
 
+import type { State } from './types';
+
+// ARTLIGHT: vrai dès qu'un de nos outils (mesure, surface, planéité, plan de
+// sol) est actif. Ces outils s'approprient le clic canvas pour poser et
+// déplacer leurs points ; la navigation au clic ajoutée en amont (clic pour se
+// déplacer / recentrer, double-clic pour changer de mode) doit donc se taire
+// tant qu'un outil est ouvert.
+export function isToolActive(state: State): boolean {
+    return state.measureMode ||
+        state.areaMeasureMode ||
+        state.flatnessMeasureMode ||
+        state.floorplanMode;
+}
+
 // Accent color — must match $clr-accent in index.scss
 export const ACCENT_COLOR = '#84cc16';
 export const ACCENT_R = 132;

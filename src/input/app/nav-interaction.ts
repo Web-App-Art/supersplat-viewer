@@ -2,10 +2,19 @@ import { Vec3 } from 'playcanvas';
 
 import type { Collision } from '../../collision';
 import type { Picker } from '../../picker';
+import { isToolActive } from '../../tool-utils';
 import type { Global } from '../../types';
 import { TAP_EPSILON } from '../shared';
 
 const tmpV = new Vec3();
+
+// ARTLIGHT: modes des outils maison qui neutralisent la navigation au clic
+const TOOL_MODE_EVENTS = [
+    'measureMode:changed',
+    'areaMeasureMode:changed',
+    'flatnessMeasureMode:changed',
+    'floorplanMode:changed'
+];
 
 const canTargetFly = (global: Global) => (
     global.state.cameraMode === 'fly' &&
@@ -63,10 +72,18 @@ class NavInteraction {
         this._picker = picker;
     }
 
+    // ARTLIGHT: un outil de mesure ouvert capte le clic canvas pour ses propres
+    // points — toute la navigation au clic/tap ci-dessous se met en retrait.
+    private get _toolActive(): boolean {
+        return !!this._global && isToolActive(this._global.state);
+    }
+
     private _updateCursor = () => {
         const global = this._global;
         const canvas = this._canvas;
         if (!global || !canvas) return;
+        // ARTLIGHT: l'outil actif pose son propre curseur (crosshair/grab)
+        if (this._toolActive) return;
         const { state } = global;
         const canClickTarget = state.inputMode === 'desktop' && (
             (state.cameraMode === 'walk' && !state.gamingControls) ||
@@ -82,6 +99,17 @@ class NavInteraction {
 
     private _onCameraModeChanged = () => {
         this._targetPickRequest++;
+        this._updateCursor();
+    };
+
+    // ARTLIGHT: ouverture d'un outil → on coupe un déplacement automatique en
+    // cours et on invalide le pick asynchrone en vol ; fermeture → le curseur
+    // « pointer » de la navigation au clic reprend la main.
+    private _onToolModeChanged = (value: boolean) => {
+        this._targetPickRequest++;
+        if (value) {
+            this._global?.events.fire('navigateCancel');
+        }
         this._updateCursor();
     };
 
@@ -216,7 +244,7 @@ class NavInteraction {
                 this._suppressClick = false;
                 return;
             }
-            if (this._mouseClickDelta < TAP_EPSILON) {
+            if (this._mouseClickDelta < TAP_EPSILON && !this._toolActive) {
                 if (state.cameraMode === 'walk' && !state.gamingControls) {
                     const result = this._pickCollision(this._lastPointerOffsetX, this._lastPointerOffsetY);
                     if (result) {
@@ -238,6 +266,7 @@ class NavInteraction {
         if (!global || !canvas) return;
         if (eventName !== 'dblclick') return;
         if (!(event instanceof MouseEvent)) return;
+        if (this._toolActive) return;
         const { events, state } = global;
         // dblclick swaps the active mode and uses the picked target:
         //   fly          → orbit, focus orbit at point
@@ -268,6 +297,7 @@ class NavInteraction {
             this._suppressClick = false;
             return;
         }
+        if (this._toolActive) return;
 
         if (state.cameraMode === 'walk' && !state.gamingControls) {
             const result = this._pickCollision(this._lastPointerOffsetX, this._lastPointerOffsetY);
@@ -300,6 +330,9 @@ class NavInteraction {
         events.on('cameraMode:changed', this._onCameraModeChanged);
         events.on('inputMode:changed', this._updateCursor);
         events.on('gamingControls:changed', this._updateCursor);
+
+        // ARTLIGHT: rendre le curseur de navigation quand l'outil se referme
+        TOOL_MODE_EVENTS.forEach(name => events.on(name, this._onToolModeChanged));
     }
 
     detach(): void {
@@ -315,6 +348,7 @@ class NavInteraction {
             events.off('cameraMode:changed', this._onCameraModeChanged);
             events.off('inputMode:changed', this._updateCursor);
             events.off('gamingControls:changed', this._updateCursor);
+            TOOL_MODE_EVENTS.forEach(name => events.off(name, this._onToolModeChanged));
         }
         this._canvas = null;
         this._global = null;
