@@ -262,7 +262,7 @@ const initUI = (global: Global) => {
         'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
-        'viewerBranding', 'viewerTitle', 'appVersionLabel',
+        'viewerTitle', 'appVersionLabel',
         'xrModal', 'xrModalOk', 'xrModalCancel'
     ].reduce((acc: Record<string, HTMLElement>, id) => {
         acc[id] = document.getElementById(id) ?? document.createElement('div');
@@ -863,8 +863,6 @@ const initUI = (global: Global) => {
             viewUrl.pathname = '/view';
         }
 
-        (dom.viewerBranding as HTMLAnchorElement).href = viewUrl.toString();
-        dom.viewerBranding.classList.remove('hidden');
         (dom.viewerTitle as HTMLAnchorElement).href = viewUrl.toString();
     }
 };

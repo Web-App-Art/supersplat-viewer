@@ -63,6 +63,12 @@ export class Annotation extends Script {
 
     static parentDom: HTMLElement | null = null;
 
+    /**
+     * ARTLIGHT: conteneur du panneau partagé. Les portails l'aiguillent vers
+     * leur propre conteneur, que l'auto-masquage de l'UI ne touche pas.
+     */
+    static tooltipParentDom: HTMLElement | null = null;
+
     static styleSheet: HTMLStyleElement | null = null;
 
     static camera: Entity | null = null;
@@ -109,6 +115,19 @@ export class Annotation extends Script {
      * portails s'en servent pour montrer leur libellé sans consommer le clic.
      */
     showOnHover = false;
+
+    /**
+     * ARTLIGHT: conteneur DOM de la cible de clic. À défaut, celui des
+     * annotations — dont la visibilité suit l'auto-masquage de l'UI.
+     */
+    ownParentDom: HTMLElement | null = null;
+
+    /**
+     * ARTLIGHT: ignore l'opacité partagée que l'auto-masquage met à zéro. Un
+     * portail est un moyen de navigation, pas du mobilier d'interface : l'éteindre
+     * après quatre secondes d'inactivité enferme le visiteur dans la scène.
+     */
+    alwaysVisible = false;
 
     /**
      * @private
@@ -252,7 +271,7 @@ export class Annotation extends Script {
         Annotation.textDom.className = 'pc-annotation-text';
         Annotation.tooltipDom.appendChild(Annotation.textDom);
 
-        Annotation.parentDom.appendChild(Annotation.tooltipDom);
+        (Annotation.tooltipParentDom ?? Annotation.parentDom).appendChild(Annotation.tooltipDom);
     }
 
     /**
@@ -461,7 +480,7 @@ export class Annotation extends Script {
             }
         });
 
-        Annotation.parentDom.appendChild(this.hotspotDom);
+        (this.ownParentDom ?? Annotation.parentDom).appendChild(this.hotspotDom);
 
         // Clean up on entity destruction
         this.on('destroy', () => {
@@ -506,10 +525,11 @@ export class Annotation extends Script {
 
         // update material opacity and also directly on the uniform so we
         // can avoid a full material update
-        this.materials[0].opacity = Annotation.opacity;
-        this.materials[1].opacity = 0.25 * Annotation.opacity;
-        this.materials[0].setParameter('material_opacity', Annotation.opacity);
-        this.materials[1].setParameter('material_opacity', 0.25 * Annotation.opacity);
+        const opacity = this.alwaysVisible ? 1.0 : Annotation.opacity;
+        this.materials[0].opacity = opacity;
+        this.materials[1].opacity = 0.25 * opacity;
+        this.materials[0].setParameter('material_opacity', opacity);
+        this.materials[1].setParameter('material_opacity', 0.25 * opacity);
     }
 
     /**

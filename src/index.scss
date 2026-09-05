@@ -96,46 +96,6 @@ button {
     white-space: nowrap;
 }
 
-/* branding link for third-party embeds */
-
-#viewerBranding {
-    position: absolute;
-    top: max(16px, env(safe-area-inset-top));
-    left: max(16px, env(safe-area-inset-left));
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    text-decoration: none;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: color 150ms ease;
-
-    color: $clr-text;
-
-    &:hover {
-        color: $clr-text-light;
-    }
-
-    > svg {
-        height: 16px;
-        width: auto;
-        flex-shrink: 0;
-        padding: 8px;
-        border-radius: 6px;
-        background-color: rgba(black, 0.3);
-    }
-
-    > span {
-        font-size: 14px;
-        font-weight: bold;
-        text-shadow:
-            -1px -1px 0 rgba(black, 0.4),
-             1px -1px 0 rgba(black, 0.4),
-            -1px  1px 0 rgba(black, 0.4),
-             1px  1px 0 rgba(black, 0.4);
-    }
-}
-
 /* poster */
 
 #poster {
@@ -752,7 +712,8 @@ button {
     background-color: $clr-bkg-dark;
 }
 
-#annotations {
+#annotations,
+#portals {
     position: fixed;
     top: 0;
     left: 0;
@@ -762,7 +723,8 @@ button {
     z-index: -1;
 }
 
-#annotations * {
+#annotations *,
+#portals * {
     pointer-events: auto;
 }
 

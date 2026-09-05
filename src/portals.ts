@@ -49,6 +49,9 @@ class Portals {
 
     fader: HTMLDivElement | null = null;
 
+    /** Conteneur DOM propre aux portails, hors de celui des annotations. */
+    dom: HTMLDivElement | null = null;
+
     /** Empêche deux traversées concurrentes si l'on clique deux portails de suite. */
     travelling = false;
 
@@ -109,10 +112,29 @@ class Portals {
             return;
         }
 
-        // Annotations crée ce parent ; sans lui (option `noui`) il n'y a pas
-        // d'overlay où accrocher les hotspots.
-        if (!Annotation.parentDom) {
+        // Sans overlay d'UI (option `noui`) il n'y a nulle part où accrocher
+        // les cibles de clic.
+        const uiDom = document.getElementById('ui');
+        if (!uiDom) {
             return;
+        }
+
+        // Conteneur propre plutôt que celui des annotations : ce dernier reçoit
+        // `display: none` dès que l'UI s'efface — quatre secondes d'inactivité,
+        // ou le mode gaming en vue subjective — et emporterait les portails avec
+        // lui. Un visiteur qui s'arrête pour regarder perdrait sa seule sortie.
+        this.dom = document.createElement('div');
+        this.dom.id = 'portals';
+        uiDom.appendChild(this.dom);
+
+        // Le panneau est un singleton partagé avec les annotations : on
+        // l'aiguille vers notre conteneur, et on le déplace s'il existe déjà —
+        // l'ordre d'initialisation dépend de la présence d'annotations dans la
+        // scène. Les annotations n'y perdent rien : `updateVisibility` referme
+        // explicitement le panneau actif quand l'UI s'efface.
+        Annotation.tooltipParentDom = this.dom;
+        if (Annotation.tooltipDom) {
+            this.dom.appendChild(Annotation.tooltipDom);
         }
 
         for (const portal of this.portals) {
@@ -126,6 +148,8 @@ class Portals {
             script.text = '';
             script.showOnHover = true;
             script.onActivate = () => this.travel(portal);
+            script.ownParentDom = this.dom;
+            script.alwaysVisible = true;
 
             entity.setPosition(portal.position[0], portal.position[1], portal.position[2]);
             global.app.root.addChild(entity);
