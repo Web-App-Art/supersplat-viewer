@@ -1,4 +1,5 @@
 {
+    "directoryListing": false,
     "headers": [
         {
             "source": "**/*",
