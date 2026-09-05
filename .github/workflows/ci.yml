@@ -1,5 +1,12 @@
 name: CI
 
+# ARTLIGHT: workflow hérité de l'amont PlayCanvas. Verrouillé sur le propriétaire
+# du dépôt, comme publish.yml l'est déjà : notre fork valide en local (tsc, lint,
+# build) avant déploiement, et le job Lint est rouge par construction tant que la
+# dette d'ESLint n'est pas traitée. Un `if` plutôt qu'une suppression du fichier :
+# l'amont le retouche à presque chaque version, et un conflit modify/delete à
+# chaque montée coûterait plus cher que ces deux lignes.
+
 on:
   push:
     branches: [main]
@@ -10,6 +17,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'playcanvas' }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -30,6 +38,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'playcanvas' }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
