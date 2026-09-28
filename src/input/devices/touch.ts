@@ -74,7 +74,9 @@ class TouchDevice implements InputDevice {
         // running touch count
         this._touchCount += count[0];
 
-        if (isFly && gamingControls && (this._joystick[0] !== 0 || this._joystick[1] !== 0)) {
+        // ARTLIGHT: le joystick est affiché aussi hors « contrôles de jeu » (voir
+        // ui.ts) ; son usage interrompt donc toujours un déplacement au tap.
+        if (isFly && (this._joystick[0] !== 0 || this._joystick[1] !== 0)) {
             this._global!.events.fire('navigateCancel');
         }
 
@@ -148,11 +150,10 @@ class TouchDevice implements InputDevice {
             orbitMove.y = 0;
         }
         v.add(orbitMove.mulScalar((orbit + directFirstPerson) * double));
-        if (gamingControls) {
-            // joystick UI drives strafe + forward/back in fly/walk
-            flyMoveTmp.set(this._joystick[0], 0, -this._joystick[1]);
-            v.add(flyMoveTmp.mulScalar(fly * this.moveSpeed * dt));
-        }
+        // joystick UI drives strafe + forward/back in fly/walk. ARTLIGHT: also
+        // outside gaming controls, alongside the gestures (value is 0 at rest).
+        flyMoveTmp.set(this._joystick[0], 0, -this._joystick[1]);
+        v.add(flyMoveTmp.mulScalar(fly * this.moveSpeed * dt));
         // Two-finger pinch z: orbit interprets +z as "farther from target"
         // (close-pinch = +pinch[0] = zoom out). First-person modes interpret
         // +z as "forward", so spreading (pinch[0] < 0) should move forward —

@@ -35,8 +35,10 @@ const initJoystick = (
     let lastTapTime = 0;
 
     // Update joystick visibility based on camera mode and input mode
+    // ARTLIGHT: comme avant la fusion 1.28, le joystick s'affiche dès qu'on
+    // est en drone sur tactile, sans exiger l'option « contrôles de jeu ».
     const updateJoystickVisibility = () => {
-        if ((state.cameraMode === 'fly' || state.cameraMode === 'walk') && state.inputMode === 'touch' && state.gamingControls) {
+        if ((state.cameraMode === 'fly' || state.cameraMode === 'walk') && state.inputMode === 'touch') {
             dom.joystickBase.classList.remove('hidden');
             dom.joystickBase.classList.toggle('mode-2d', joystickMode === '2d');
             dom.joystickBase.style.left = `${joystickFixedX}px`;
