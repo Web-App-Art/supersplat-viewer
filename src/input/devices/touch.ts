@@ -15,6 +15,11 @@ const pinchMoveTmp = new Vec3();
 const orbitRotate = new Vec3();
 const flyRotate = new Vec3();
 
+// ARTLIGHT: vitesse max du joystick (m/s). 4 m/s (la valeur clavier) traverse
+// une pièce en deux secondes : trop rapide en intérieur au pouce. La réponse
+// est quadratique (mi-course = quart de la vitesse) pour doser finement.
+const JOYSTICK_MAX_SPEED = 2;
+
 class TouchDevice implements InputDevice {
     orbitSpeed: number = 18;
 
@@ -131,7 +136,11 @@ class TouchDevice implements InputDevice {
         const fly = isFirstPerson ? 1 : 0;
         const double = this._touchCount > 1 ? 1 : 0;
         const orbitFactor = isFirstPerson ? cameraComponent.fov / 120 : 1;
-        const dragInvert = (isFirstPerson && !gamingControls) ? -1 : 1;
+        // ARTLIGHT: le regard suit le doigt (glisser à droite = regarder à
+        // droite), comme avec les contrôles de jeu. L'amont inversait hors
+        // contrôles de jeu (« on attrape la scène »), ce qui déroute quand on
+        // tient le joystick de l'autre main.
+        const dragInvert = 1;
         // First-person modes (fly and walk) opt into the direct two-finger
         // model only outside gaming controls (gaming uses the joystick).
         const directFirstPerson = fly * (gamingControls ? 0 : 1);
@@ -152,8 +161,9 @@ class TouchDevice implements InputDevice {
         v.add(orbitMove.mulScalar((orbit + directFirstPerson) * double));
         // joystick UI drives strafe + forward/back in fly/walk. ARTLIGHT: also
         // outside gaming controls, alongside the gestures (value is 0 at rest).
+        const stick = Math.min(1, Math.hypot(this._joystick[0], this._joystick[1]));
         flyMoveTmp.set(this._joystick[0], 0, -this._joystick[1]);
-        v.add(flyMoveTmp.mulScalar(fly * this.moveSpeed * dt));
+        v.add(flyMoveTmp.mulScalar(fly * stick * JOYSTICK_MAX_SPEED * dt));
         // Two-finger pinch z: orbit interprets +z as "farther from target"
         // (close-pinch = +pinch[0] = zoom out). First-person modes interpret
         // +z as "forward", so spreading (pinch[0] < 0) should move forward —
