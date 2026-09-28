@@ -74,5 +74,6 @@
     "tooltip.artlight-area-measure": "Area Measure",
     "tooltip.artlight-flatness": "Flatness",
     "tooltip.artlight-volume": "Volume",
-    "tooltip.artlight-floorplan": "Floor Plan"
+    "tooltip.artlight-floorplan": "Floor Plan",
+    "artlight.low-precision-picking": "This device lacks high-precision picking: measurements use a slower fallback, accurate to a few millimetres."
 }

@@ -2,6 +2,7 @@ import { Vec3 } from 'playcanvas';
 import type { Entity } from 'playcanvas';
 
 import { TAP_EPSILON } from './input/shared';
+import { localize } from './localization';
 import { Picker } from './picker';
 import { findPointNear } from './tool-utils';
 import { TranslateGizmo } from './translate-gizmo';
@@ -16,6 +17,44 @@ export interface ToolPointerCallbacks {
 
 // Fenêtre pendant laquelle un Échap est attribué à la sortie de capture souris.
 const ESCAPE_AFTER_LOCK_EXIT_MS = 300;
+
+// ARTLIGHT (TKT-224) : sans float32 blendable, le picking passe en 16F avec
+// une passe d'affinage. On le signale une fois par chargement de page, à la
+// première activation d'un outil de mesure.
+const LOW_PRECISION_NOTICE_MS = 6000;
+let lowPrecisionNoticeShown = false;
+
+const showLowPrecisionNotice = () => {
+    if (lowPrecisionNoticeShown) return;
+    lowPrecisionNoticeShown = true;
+
+    const notice = document.createElement('div');
+    notice.id = 'lowPrecisionNotice';
+    notice.textContent = localize('artlight.low-precision-picking');
+    notice.style.cssText = `
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100vw - 32px);
+        box-sizing: border-box;
+        background: rgba(24, 24, 27, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: 8px 14px;
+        color: #e4e4e7;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px;
+        z-index: 1000;
+        pointer-events: none;
+        transition: opacity 0.4s;
+    `;
+    document.body.appendChild(notice);
+    setTimeout(() => {
+        notice.style.opacity = '0';
+        setTimeout(() => notice.remove(), 400);
+    }, LOW_PRECISION_NOTICE_MS);
+};
 
 class ToolPointerHandler {
     selectedIndex = -1;
@@ -74,6 +113,10 @@ class ToolPointerHandler {
     activate() {
         const { app, events } = this.global;
         const appCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+
+        if (!this.picker.highPrecision) {
+            showLowPrecisionNotice();
+        }
 
         this._savedCursor = appCanvas.style.cursor;
         appCanvas.style.cursor = 'crosshair';

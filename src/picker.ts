@@ -201,6 +201,7 @@ type PickerShaderPatchState = {
 const pickerShaderPatchState = new WeakMap<object, PickerShaderPatchState>();
 
 const vec4 = new Vec4();
+const refineViewPos = new Vec3();
 const viewProjMat = new Mat4();
 const clearColor = new Color(0, 0, 0, 1);
 const NORMAL_EPSILON = 1e-12;
@@ -212,6 +213,13 @@ const NORMAL_DEGENERATE_EPSILON = 1e-20;
 // radius is clamped so distant picks still get enough samples and very-close
 // picks don't blow the block read.
 const NORMAL_SAMPLE_WORLD_RADIUS = 0.2;
+// ARTLIGHT (TKT-224) : en RGBA16F, un clic d'outil relance une passe dont
+// near/far encadrent la 1re estimation (± 5 % de la distance, 25 cm minimum).
+// La profondeur est alors quantifiée sur quelques dizaines de cm au lieu de
+// toute la scène. Mesuré sur Callian : 3,6 cm d'écart avec le 32F en une
+// passe 16F, ~1,4 mm avec l'affinage.
+const REFINE_RELATIVE_MARGIN = 0.05;
+const REFINE_MIN_MARGIN = 0.25;
 const NORMAL_SAMPLE_MIN_PX = 6;
 const NORMAL_SAMPLE_MAX_PX = 48;
 const NORMAL_RING_FRACTIONS = [0.3, 0.55, 0.8, 1.0];
@@ -532,6 +540,9 @@ const fitPlaneNormal = (points: Vec3[], toCamera: Vec3, outNormal: Vec3): boolea
 class Picker {
     pick: (x: number, y: number) => Promise<Vec3 | null>;
 
+    /** Vrai si la profondeur est accumulée en float32 (sinon 16F + passe d'affinage). */
+    highPrecision: boolean;
+
     pickSurface: (x: number, y: number) => Promise<PickSurface | null>;
 
     release: () => void;
@@ -548,6 +559,8 @@ class Picker {
         let accumBuffer: Texture;
         let accumTarget: RenderTarget;
         let accumPass: RenderPassPicker;
+        // Cible séparée pour la passe d'affinage : le cache principal reste valide.
+        let refine: { buffer: Texture; target: RenderTarget; pass: RenderPassPicker } | null = null;
         let chunksPatched = false;
         let pickQueue = Promise.resolve();
         let cacheValid = false;
@@ -555,8 +568,8 @@ class Picker {
         let cacheHeight = 0;
         const cacheCamera: PickCameraSnapshot = createPickCameraSnapshot();
 
-        const initRasterAccum = (width: number, height: number) => {
-            accumBuffer = new Texture(graphicsDevice, {
+        const createAccum = (width: number, height: number, name: string) => {
+            const buffer = new Texture(graphicsDevice, {
                 format: useFloat32 ? PIXELFORMAT_RGBA32F : PIXELFORMAT_RGBA16F,
                 width,
                 height,
@@ -565,21 +578,54 @@ class Picker {
                 magFilter: FILTER_NEAREST,
                 addressU: ADDRESS_CLAMP_TO_EDGE,
                 addressV: ADDRESS_CLAMP_TO_EDGE,
-                name: 'picker-accum'
+                name
             });
 
-            accumTarget = new RenderTarget({
-                colorBuffer: accumBuffer,
+            const target = new RenderTarget({
+                colorBuffer: buffer,
                 depth: false // not needed — gaussians are rendered back to front
             });
 
-            accumPass = new RenderPassPicker(graphicsDevice, app.renderer);
+            const pass = new RenderPassPicker(graphicsDevice, app.renderer);
             // RGB: additive depth accumulation. Alpha: multiplicative transmittance.
-            accumPass.blendState = new BlendState(
+            pass.blendState = new BlendState(
                 true,
                 BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE_MINUS_SRC_ALPHA,
                 BLENDEQUATION_ADD, BLENDMODE_ZERO, BLENDMODE_ONE_MINUS_SRC_ALPHA
             );
+
+            return { buffer, target, pass };
+        };
+
+        const initRasterAccum = (width: number, height: number) => {
+            ({ buffer: accumBuffer, target: accumTarget, pass: accumPass } = createAccum(width, height, 'picker-accum'));
+        };
+
+        // Rend la couche World dans `pass` avec la caméra telle qu'elle est.
+        const renderAccum = (pass: RenderPassPicker, target: RenderTarget, worldLayer: Layer) => {
+            // Enable gsplat IDs only while rendering the pick target so we
+            // don't pay the memory/perf cost between pick passes.
+            const prevEnableIds = app.scene.gsplat.enableIds;
+            app.scene.gsplat.enableIds = true;
+            try {
+                if (!chunksPatched) {
+                    registerPickerShaderPatches(app);
+                    chunksPatched = true;
+                }
+
+                pass.init(target);
+                pass.setClearColor(clearColor);
+                pass.update(
+                    camera.camera,
+                    app.scene,
+                    [worldLayer],
+                    new Map<number, MeshInstance | GSplatComponent>(),
+                    false
+                );
+                pass.render();
+            } finally {
+                app.scene.gsplat.enableIds = prevEnableIds;
+            }
         };
 
         const readTexture = <T extends Uint8Array | Uint16Array | Float32Array>(
@@ -672,39 +718,63 @@ class Picker {
                 return;
             }
 
-            // Enable gsplat IDs only while rendering the pick target so we
-            // don't pay the memory/perf cost between pick passes.
-            const prevEnableIds = app.scene.gsplat.enableIds;
-            app.scene.gsplat.enableIds = true;
-            try {
-                if (!chunksPatched) {
-                    registerPickerShaderPatches(app);
-                    chunksPatched = true;
-                }
-
-                if (!accumPass) {
-                    initRasterAccum(width, height);
-                } else if (cacheWidth !== width || cacheHeight !== height) {
-                    cacheValid = false;
-                    accumTarget.resize(width, height);
-                }
-
-                accumPass.init(accumTarget);
-                accumPass.setClearColor(clearColor);
-                accumPass.update(
-                    camera.camera,
-                    app.scene,
-                    [worldLayer],
-                    new Map<number, MeshInstance | GSplatComponent>(),
-                    false
-                );
-                accumPass.render();
-
-                updateCache(width, height);
-                cacheValid = true;
-            } finally {
-                app.scene.gsplat.enableIds = prevEnableIds;
+            if (!accumPass) {
+                initRasterAccum(width, height);
+            } else if (cacheWidth !== width || cacheHeight !== height) {
+                cacheValid = false;
+                accumTarget.resize(width, height);
             }
+
+            renderAccum(accumPass, accumTarget, worldLayer);
+
+            updateCache(width, height);
+            cacheValid = true;
+        };
+
+        // Relance une passe dont near/far encadrent `coarse`, puis relit le
+        // pixel. Retourne null si la passe ne donne rien d'exploitable.
+        const refinePosition = async (coarse: PickPosition): Promise<Vec3 | null> => {
+            const { screenX, screenY, width, height } = coarse;
+            const cam = camera.camera;
+            const worldLayer = app.scene.layers.getLayerByName('World');
+            if (!worldLayer || coarse.camera.projection === PROJECTION_ORTHOGRAPHIC) {
+                return null;
+            }
+
+            // Distance le long de l'axe de visée (celle que le shader normalise).
+            coarse.camera.viewMatrix.transformPoint(coarse.position, refineViewPos);
+            const depth = -refineViewPos.z;
+            if (!(depth > 0)) {
+                return null;
+            }
+            const margin = Math.max(REFINE_MIN_MARGIN, depth * REFINE_RELATIVE_MARGIN);
+
+            if (!refine) {
+                refine = createAccum(width, height, 'picker-refine');
+            } else if (refine.target.width !== width || refine.target.height !== height) {
+                refine.target.resize(width, height);
+            }
+
+            const prevNear = cam.nearClip;
+            const prevFar = cam.farClip;
+            const refineCamera = createPickCameraSnapshot();
+            try {
+                cam.nearClip = Math.max(prevNear, depth - margin);
+                cam.farClip = depth + margin;
+                renderAccum(refine.pass, refine.target, worldLayer);
+                captureCameraSnapshot(camera, refineCamera);
+            } finally {
+                cam.nearClip = prevNear;
+                cam.farClip = prevFar;
+            }
+
+            const pixels = await readTexture<Float32Array | Uint16Array>(refine.buffer, screenX, screenY, refine.target);
+            const r = decode(pixels, 0);
+            const alpha = 1 - decode(pixels, 3);
+            if (!Number.isFinite(r) || !Number.isFinite(alpha) || alpha < 1e-6) {
+                return null;
+            }
+            return getWorldPoint(refineCamera, screenX, screenY, width, height, r / alpha);
         };
 
         const prepareSample = (x: number, y: number) => {
@@ -761,7 +831,13 @@ class Picker {
 
         const pick = async (x: number, y: number) => {
             const result = await pickPosition(x, y);
-            return result?.position ?? null;
+            if (!result) {
+                return null;
+            }
+            if (useFloat32) {
+                return result.position;
+            }
+            return (await refinePosition(result)) ?? result.position;
         };
 
         const pickSurface = async (x: number, y: number) => {
@@ -837,6 +913,8 @@ class Picker {
             };
         };
 
+        this.highPrecision = useFloat32;
+
         this.pick = (x: number, y: number) => serializePick(() => pick(x, y));
 
         this.pickSurface = (x: number, y: number) => serializePick(() => pickSurface(x, y));
@@ -847,6 +925,10 @@ class Picker {
                 chunksPatched = false;
             }
             accumPass?.destroy();
+            refine?.pass.destroy();
+            refine?.target.destroy();
+            refine?.buffer.destroy();
+            refine = null;
             accumTarget?.destroy();
             accumBuffer?.destroy();
             cacheValid = false;

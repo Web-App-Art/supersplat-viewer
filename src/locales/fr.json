@@ -74,5 +74,6 @@
     "tooltip.artlight-area-measure": "Mesure de surface",
     "tooltip.artlight-flatness": "Planéité",
     "tooltip.artlight-volume": "Cubature",
-    "tooltip.artlight-floorplan": "Plan au sol"
+    "tooltip.artlight-floorplan": "Plan au sol",
+    "artlight.low-precision-picking": "Cet appareil ne gère pas le mode haute précision : les mesures utilisent un calcul de secours, plus lent, précis à quelques millimètres."
 }
