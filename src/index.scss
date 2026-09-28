@@ -1033,6 +1033,18 @@ button {
     }
 }
 
+.volume-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+
+    input {
+        margin: 0;
+        accent-color: $clr-accent;
+    }
+}
+
 .volume-warning {
     padding: 6px 8px;
     border-radius: 4px;

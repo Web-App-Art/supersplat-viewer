@@ -1,5 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
+import { SplatBoxHighlight } from './splat-highlight';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, drawEdgeLabel, formatDistance, getSplatCenters, ACCENT_COLOR, accentRgba } from './tool-utils';
 import type { Global } from './types';
@@ -84,10 +85,16 @@ class VolumeTool {
 
     private lowDensityHint: HTMLDivElement | null = null;
 
+    // Splats de la boîte teintés en vert, pour voir ce qui est évalué.
+    private highlight: SplatBoxHighlight;
+
+    private highlightEnabled = true;
+
     private updateHandler: ((dt: number) => void) | null = null;
 
     constructor(global: Global) {
         this.global = global;
+        this.highlight = new SplatBoxHighlight(global);
         for (let i = 0; i <= CENTER_HANDLE; i++) {
             this.handles.push(new Vec3());
             this.lastHandles.push(new Vec3());
@@ -131,6 +138,7 @@ class VolumeTool {
         this.pointerHandler.deactivate();
         this.cancelRecompute();
         this.removePanel();
+        this.highlight.clear();
 
         if (this.overlay) {
             this.overlay.remove();
@@ -173,6 +181,7 @@ class VolumeTool {
         this.result = null;
         this.cancelRecompute();
         this.removePanel();
+        this.highlight.clear();
         this.pointerHandler.reset();
     }
 
@@ -196,6 +205,8 @@ class VolumeTool {
         else this.halfExtents.z = value;
     }
 
+    // Appelée à chaque changement de la boîte : replace les poignées et fait
+    // suivre la surbrillance.
     private writeHandles() {
         FACE_HANDLES.forEach(({ axis, sign }, i) => {
             this.handles[i].copy(this.axes[axis]).mulScalar(sign * this.halfExtent(axis)).add(this.center);
@@ -203,6 +214,15 @@ class VolumeTool {
         this.handles[CENTER_HANDLE].copy(this.center);
         for (let i = 0; i < this.handles.length; i++) {
             this.lastHandles[i].copy(this.handles[i]);
+        }
+        this.updateHighlight();
+    }
+
+    private updateHighlight() {
+        if (this.state === 'placed' && this.highlightEnabled) {
+            this.highlight.set(this.center, this.axes[0], this.axes[2], this.halfExtents);
+        } else {
+            this.highlight.clear();
         }
     }
 
@@ -557,6 +577,20 @@ class VolumeTool {
         });
         yawRow.append(yawLabel, this.yawInput);
         this.panel.appendChild(yawRow);
+
+        const highlightRow = document.createElement('label');
+        highlightRow.className = 'volume-toggle';
+        const highlightInput = document.createElement('input');
+        highlightInput.type = 'checkbox';
+        highlightInput.checked = this.highlightEnabled;
+        highlightInput.addEventListener('change', () => {
+            this.highlightEnabled = highlightInput.checked;
+            this.updateHighlight();
+        });
+        const highlightLabel = document.createElement('span');
+        highlightLabel.textContent = 'Surligner les splats mesurés';
+        highlightRow.append(highlightInput, highlightLabel);
+        this.panel.appendChild(highlightRow);
 
         // En LOD, le détail chargé dépend de la position de la caméra : après
         // s'être rapproché, on relance le calcul sans toucher à la boîte.
