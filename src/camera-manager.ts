@@ -28,9 +28,19 @@ const tmpv = new Vec3();
 // back to fly as the default first-person mode.
 const WALK_MIN_HORIZONTAL_RANGE = 5;
 
+// ARTLIGHT: navigation limitée au mode drone (par défaut) et à l'orbite.
+// Le mode marche n'est plus proposé (bouton, touche 3) ; la collision reste
+// utilisée par le mode drone.
+const WALK_ENABLED = false;
+
+// ARTLIGHT: pas d'animation de caméra (piste du settings.json ni intro
+// synthétisée) : sans piste, hasAnimation reste faux et le lecteur
+// (play / timeline) n'apparaît jamais.
+const CAMERA_ANIMATION_ENABLED = false;
+
 const isWalkAllowed = (bbox: BoundingBox, collision: Collision | null): boolean => {
     const { x, z } = bbox.halfExtents;
-    return !!collision && x * 2 >= WALK_MIN_HORIZONTAL_RANGE && z * 2 >= WALK_MIN_HORIZONTAL_RANGE;
+    return WALK_ENABLED && !!collision && x * 2 >= WALK_MIN_HORIZONTAL_RANGE && z * 2 >= WALK_MIN_HORIZONTAL_RANGE;
 };
 
 const createCamera = (position: Vec3, target: Vec3, fov: number) => {
@@ -82,7 +92,7 @@ class CameraManager {
             // une intro non voulue et affiche le lecteur. `nointro` coupe court :
             // sans piste, hasAnimation reste faux et la navigation démarre
             // directement en walk/fly/orbit.
-            if (config.nointro) {
+            if (!CAMERA_ANIMATION_ENABLED || config.nointro) {
                 return null;
             }
 
@@ -136,12 +146,14 @@ class CameraManager {
         state.animationDuration = controllers.anim ? controllers.anim.animState.cursor.duration : 0;
 
         // initialize camera mode and initial camera position
-        state.cameraMode = state.hasAnimation ? 'anim' : (isObjectExperience ? 'orbit' : (walkAllowed ? 'walk' : 'fly'));
+        // ARTLIGHT: démarrage en drone, y compris depuis l'extérieur de la
+        // scène (l'amont y démarrait en orbite).
+        state.cameraMode = state.hasAnimation ? 'anim' : (walkAllowed ? 'walk' : 'fly');
         this.camera.copy(resetCamera);
 
         const target = new Camera(this.camera);             // the active controller updates this
         const from = new Camera(this.camera);               // stores the previous camera state during transition
-        const defaultMode: CameraMode = isObjectExperience ? 'orbit' : (walkAllowed ? 'walk' : 'fly');
+        const defaultMode: CameraMode = walkAllowed ? 'walk' : 'fly';
         let fromMode: CameraMode = defaultMode;
 
         // tracks the mode to restore when exiting walk
