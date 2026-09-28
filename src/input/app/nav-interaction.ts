@@ -8,6 +8,11 @@ import { TAP_EPSILON } from '../shared';
 
 const tmpV = new Vec3();
 
+// ARTLIGHT: pas de navigation au clic / tap (se déplacer vers le point en
+// drone, recentrer l'orbite, double-clic qui change de mode) : un clic sur un
+// mur ne doit pas déplacer la caméra. Les outils de mesure gardent le clic.
+const CLICK_NAVIGATION_ENABLED = false;
+
 // ARTLIGHT: modes des outils maison qui neutralisent la navigation au clic
 const TOOL_MODE_EVENTS = [
     'measureMode:changed',
@@ -78,12 +83,21 @@ class NavInteraction {
         return !!this._global && isToolActive(this._global.state);
     }
 
+    // Navigation au clic coupée : globalement, ou le temps qu'un outil est ouvert.
+    private get _clickNavOff(): boolean {
+        return !CLICK_NAVIGATION_ENABLED || this._toolActive;
+    }
+
     private _updateCursor = () => {
         const global = this._global;
         const canvas = this._canvas;
         if (!global || !canvas) return;
         // ARTLIGHT: l'outil actif pose son propre curseur (crosshair/grab)
         if (this._toolActive) return;
+        if (!CLICK_NAVIGATION_ENABLED) {
+            canvas.style.cursor = '';
+            return;
+        }
         const { state } = global;
         const canClickTarget = state.inputMode === 'desktop' && (
             (state.cameraMode === 'walk' && !state.gamingControls) ||
@@ -244,7 +258,7 @@ class NavInteraction {
                 this._suppressClick = false;
                 return;
             }
-            if (this._mouseClickDelta < TAP_EPSILON && !this._toolActive) {
+            if (this._mouseClickDelta < TAP_EPSILON && !this._clickNavOff) {
                 if (state.cameraMode === 'walk' && !state.gamingControls) {
                     const result = this._pickCollision(this._lastPointerOffsetX, this._lastPointerOffsetY);
                     if (result) {
@@ -266,7 +280,7 @@ class NavInteraction {
         if (!global || !canvas) return;
         if (eventName !== 'dblclick') return;
         if (!(event instanceof MouseEvent)) return;
-        if (this._toolActive) return;
+        if (this._clickNavOff) return;
         const { events, state } = global;
         // dblclick swaps the active mode and uses the picked target:
         //   fly          → orbit, focus orbit at point
@@ -297,7 +311,7 @@ class NavInteraction {
             this._suppressClick = false;
             return;
         }
-        if (this._toolActive) return;
+        if (this._clickNavOff) return;
 
         if (state.cameraMode === 'walk' && !state.gamingControls) {
             const result = this._pickCollision(this._lastPointerOffsetX, this._lastPointerOffsetY);
