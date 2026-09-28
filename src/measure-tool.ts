@@ -1,12 +1,13 @@
 import { Vec3 } from 'playcanvas';
 
+import { CoordinateSystem, formatCoords } from './coordinates';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, drawEdgeLabel, formatDistance, ACCENT_COLOR } from './tool-utils';
 import type { Global } from './types';
 
 type MeasureState = 'idle' | 'first_placed' | 'complete';
 
-// Format a single coordinate component (signed, in meters or cm depending on magnitude)
+// Format a delta component (signed, in meters or cm depending on magnitude)
 function formatComponent(v: number): string {
     const abs = Math.abs(v);
     if (abs >= 1) return `${v >= 0 ? ' ' : ''}${v.toFixed(3)} m`;
@@ -15,6 +16,7 @@ function formatComponent(v: number): string {
 
 class MeasureTool {
     private global: Global;
+    private coords: CoordinateSystem;
     private pointerHandler: ToolPointerHandler;
     private points: Vec3[] = [];
     private measureState: MeasureState = 'idle';
@@ -32,6 +34,7 @@ class MeasureTool {
 
     constructor(global: Global) {
         this.global = global;
+        this.coords = new CoordinateSystem(global.settings.coordinates);
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
             getDraggablePoints: () => this.measureState === 'complete' ? this.points : [],
@@ -199,13 +202,10 @@ class MeasureTool {
         p: Vec3,
         index: number
     ) {
-        // Display convention: surveying axes (Z = vertical).
-        // PlayCanvas world Y is up, so we map display Y ← world Z and display Z ← world Y.
+        // Coordonnées dans le repère source (X = Est, Y = Nord, Z = Haut), cf. coordinates.ts
         const lines = [
             `P${index}`,
-            `X ${formatComponent(p.x)}`,
-            `Y ${formatComponent(p.z)}`,
-            `Z ${formatComponent(p.y)}`
+            ...formatCoords(this.coords.toSource(p))
         ];
 
         ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -324,16 +324,13 @@ class MeasureTool {
         if (!this.panel || this.points.length !== 2) return;
         const p1 = this.points[0];
         const p2 = this.points[1];
-        // World deltas (PlayCanvas: Y = up)
-        const wdx = p2.x - p1.x;
-        const wdy = p2.y - p1.y;
-        const wdz = p2.z - p1.z;
-        const dist = Math.sqrt(wdx * wdx + wdy * wdy + wdz * wdz);
-        // Display deltas (surveying convention: Z = vertical)
+        const dist = p1.distance(p2);
+        // Écarts dans le repère source (X = Est, Y = Nord, Z = Haut), cf. coordinates.ts
+        const [dx, dy, dz] = this.coords.deltaToSource(p1, p2);
         if (this.panelDistEl) this.panelDistEl.textContent = formatDistance(dist);
-        if (this.panelDxEl) this.panelDxEl.textContent = formatComponent(wdx);
-        if (this.panelDyEl) this.panelDyEl.textContent = formatComponent(wdz);
-        if (this.panelDzEl) this.panelDzEl.textContent = formatComponent(wdy);
+        if (this.panelDxEl) this.panelDxEl.textContent = formatComponent(dx);
+        if (this.panelDyEl) this.panelDyEl.textContent = formatComponent(dy);
+        if (this.panelDzEl) this.panelDzEl.textContent = formatComponent(dz);
     }
 
     private removePanel() {

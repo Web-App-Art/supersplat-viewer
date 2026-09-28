@@ -134,6 +134,6 @@ const validateSettings = (settings: unknown): void => {
     }
 };
 
-export type { AnimTrack, Camera, Annotation, PostEffectSettings, ExperienceSettings } from './schemas/v2';
+export type { AnimTrack, Camera, Annotation, PostEffectSettings, ExperienceSettings, Coordinates, Mat3Rows } from './schemas/v2';
 
 export { importSettings, validateSettings };

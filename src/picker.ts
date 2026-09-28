@@ -1,12 +1,19 @@
 /**
  * World picking for splat scenes.
  *
- * Uses a custom `pickPS` / `gsplatPS` patch plus `RGBA16F` alpha-weighted depth accumulation,
+ * Uses a custom `pickPS` / `gsplatPS` patch plus alpha-weighted depth accumulation,
  * because the stock pick pass encodes splat IDs / last-fragment depth rather than expected depth.
+ *
+ * ARTLIGHT (TKT-224) : l'accumulation se fait en RGBA32F quand le GPU sait
+ * mélanger des cibles float32, sinon en RGBA16F. En 16F la mantisse de 10 bits
+ * limite la profondeur à ~0,05 % de la distance (≈ 1 cm à 20 m, davantage
+ * après le cumul de nombreux splats) ; en 32F l'erreur de quantification
+ * devient négligeable devant celle du modèle.
  */
 
 import {
     type AppBase,
+    type GraphicsDevice,
     type Entity,
     type GSplatComponent,
     type Layer,
@@ -18,6 +25,7 @@ import {
     BLENDMODE_ONE_MINUS_SRC_ALPHA,
     FILTER_NEAREST,
     PIXELFORMAT_RGBA16F,
+    PIXELFORMAT_RGBA32F,
     PROJECTION_ORTHOGRAPHIC,
     Color,
     Mat4,
@@ -273,6 +281,15 @@ const half2Float = (h: number): number => {
     return float32[0];
 };
 
+// Float32 render targets can be picked into only when the device can also blend them:
+// EXT_float_blend on WebGL2, the float32-blendable feature on WebGPU.
+const supportsFloat32Blend = (device: GraphicsDevice) => {
+    const caps = device as GraphicsDevice & { extFloatBlend?: unknown; textureFloatBlendable?: boolean };
+    return device.isWebGPU ?
+        !!caps.textureFloatBlendable :
+        !!(device.textureFloatRenderable && caps.extFloatBlend);
+};
+
 const registerPickerShaderPatches = (app: AppBase) => {
     const device = app.graphicsDevice;
     const existing = pickerShaderPatchState.get(device);
@@ -522,6 +539,12 @@ class Picker {
     constructor(app: AppBase, camera: Entity) {
         const { graphicsDevice } = app;
 
+        const useFloat32 = supportsFloat32Blend(graphicsDevice);
+        // Pixel values come back as raw halfs (Uint16Array) or floats (Float32Array).
+        const decode = (pixels: Float32Array | Uint16Array, i: number) => {
+            return useFloat32 ? pixels[i] : half2Float(pixels[i]);
+        };
+
         let accumBuffer: Texture;
         let accumTarget: RenderTarget;
         let accumPass: RenderPassPicker;
@@ -534,7 +557,7 @@ class Picker {
 
         const initRasterAccum = (width: number, height: number) => {
             accumBuffer = new Texture(graphicsDevice, {
-                format: PIXELFORMAT_RGBA16F,
+                format: useFloat32 ? PIXELFORMAT_RGBA32F : PIXELFORMAT_RGBA16F,
                 width,
                 height,
                 mipmaps: false,
@@ -559,7 +582,7 @@ class Picker {
             );
         };
 
-        const readTexture = <T extends Uint8Array | Uint16Array>(
+        const readTexture = <T extends Uint8Array | Uint16Array | Float32Array>(
             texture: Texture,
             x: number,
             y: number,
@@ -616,7 +639,7 @@ class Picker {
             const pixels = await accumBuffer.read(blockX, texY, blockWidth, blockHeight, {
                 renderTarget: accumTarget,
                 immediate: true
-            }) as Uint16Array;
+            }) as Float32Array | Uint16Array;
 
             return (x: number, y: number) => {
                 const localX = x - blockX;
@@ -627,8 +650,8 @@ class Picker {
 
                 const row = graphicsDevice.isWebGL2 ? blockHeight - localY - 1 : localY;
                 const index = (row * blockWidth + localX) * 4;
-                const r = half2Float(pixels[index]);
-                const transmittance = half2Float(pixels[index + 3]);
+                const r = decode(pixels, index);
+                const transmittance = decode(pixels, index + 3);
                 const alpha = 1 - transmittance;
 
                 if (!Number.isFinite(r) || !Number.isFinite(alpha) || alpha < 1e-6) {
@@ -714,10 +737,10 @@ class Picker {
             }
             const { width, height, screenX, screenY, pickCamera } = sample;
 
-            const pixels = await readTexture<Uint16Array>(accumBuffer, screenX, screenY, accumTarget);
+            const pixels = await readTexture<Float32Array | Uint16Array>(accumBuffer, screenX, screenY, accumTarget);
 
-            const r = half2Float(pixels[0]);
-            const transmittance = half2Float(pixels[3]);
+            const r = decode(pixels, 0);
+            const transmittance = decode(pixels, 3);
             const alpha = 1 - transmittance;
 
             if (!Number.isFinite(r) || !Number.isFinite(alpha) || alpha < 1e-6) {

@@ -74,6 +74,24 @@ type PostEffectSettings = {
     }
 };
 
+// ARTLIGHT (TKT-224) : repère d'affichage des coordonnées, voir src/coordinates.ts.
+type Mat3Rows = [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number]
+];
+
+type Coordinates = {
+    /** Matrice 3×3 (par lignes) : source = M · monde. */
+    sourceFromWorld?: Mat3Rows,
+    /** Code EPSG du repère géoréférencé ; 0 ou absent = repère local. */
+    epsg?: number,
+    /** Origine du modèle dans l'EPSG, recopiée du .lcc (en double). */
+    offset?: [number, number, number],
+    /** Ce que représente la 3e composante de `offset`. */
+    heightRef?: 'ellipsoid' | 'ngf'
+};
+
 type ExperienceSettings = {
     version: 2,
     tonemapping: 'none' | 'linear' | 'filmic' | 'hejl' | 'aces' | 'aces2' | 'neutral',
@@ -89,13 +107,16 @@ type ExperienceSettings = {
     cameras: Camera[],
     annotations: Annotation[],
 
-    startMode: 'default' | 'animTrack' | 'annotation'
+    startMode: 'default' | 'animTrack' | 'annotation',
+
+    coordinates?: Coordinates
 };
 
 const TONEMAPPING = ['none', 'linear', 'filmic', 'hejl', 'aces', 'aces2', 'neutral'] as const;
 const LOOP_MODES = ['none', 'repeat', 'pingpong'] as const;
 const INTERPOLATIONS = ['step', 'spline'] as const;
 const START_MODES = ['default', 'animTrack', 'annotation'] as const;
+const HEIGHT_REFS = ['ellipsoid', 'ngf'] as const;
 
 const validateAnimTrack = (data: unknown, path: string): AnimTrack => {
     const obj = assertObject(data, path);
@@ -167,6 +188,21 @@ const validatePostEffects = (data: unknown, path: string): PostEffectSettings =>
     return data as PostEffectSettings;
 };
 
+const validateCoordinates = (data: unknown, path: string): Coordinates => {
+    const obj = assertObject(data, path);
+    if (obj.sourceFromWorld !== undefined) {
+        const rows = assertArray(obj.sourceFromWorld, `${path}.sourceFromWorld`);
+        if (rows.length !== 3) {
+            throw new Error(`${path}.sourceFromWorld must have exactly 3 rows`);
+        }
+        rows.forEach((r: unknown, i: number) => assertTuple3(r, `${path}.sourceFromWorld[${i}]`));
+    }
+    if (obj.epsg !== undefined) assertNumber(obj.epsg, `${path}.epsg`);
+    if (obj.offset !== undefined) assertTuple3(obj.offset, `${path}.offset`);
+    if (obj.heightRef !== undefined) assertEnum(obj.heightRef, HEIGHT_REFS, `${path}.heightRef`);
+    return data as Coordinates;
+};
+
 const validateV2 = (data: unknown): ExperienceSettings => {
     const obj = assertObject(data, 'settings');
 
@@ -195,8 +231,10 @@ const validateV2 = (data: unknown): ExperienceSettings => {
 
     assertEnum(obj.startMode, START_MODES, 'settings.startMode');
 
+    if (obj.coordinates !== undefined) validateCoordinates(obj.coordinates, 'settings.coordinates');
+
     return data as ExperienceSettings;
 };
 
 export { validateV2 };
-export type { AnimTrack, Camera, Annotation, PostEffectSettings, ExperienceSettings };
+export type { AnimTrack, Camera, Annotation, PostEffectSettings, ExperienceSettings, Coordinates, Mat3Rows };
