@@ -1,6 +1,7 @@
 import { Vec3 } from 'playcanvas';
 import type { Entity } from 'playcanvas';
 
+import { TAP_EPSILON } from './input/shared';
 import { Picker } from './picker';
 import { findPointNear } from './tool-utils';
 import { TranslateGizmo } from './translate-gizmo';
@@ -195,10 +196,12 @@ class ToolPointerHandler {
 
             if (!this.downOnCanvas) return;
 
-            // Ignore camera-orbit drags (> 5px movement)
+            // Ignore camera-orbit drags. ARTLIGHT: same tolerance as the
+            // upstream click navigation (TAP_EPSILON) — the former 5 px made
+            // a slightly shaky click (trackpad) silently drop the pick.
             const dx = event.clientX - this.downX;
             const dy = event.clientY - this.downY;
-            if (dx * dx + dy * dy > 25) return;
+            if (Math.abs(dx) + Math.abs(dy) >= TAP_EPSILON) return;
 
             events.fire('inputEvent', 'interact');
 
