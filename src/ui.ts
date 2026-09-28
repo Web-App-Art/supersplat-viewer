@@ -259,6 +259,7 @@ const initUI = (global: Global) => {
         'measure',
         'areaMeasure',
         'flatnessMeasure',
+        'volumeMeasure',
         'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
@@ -555,7 +556,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.flatnessMeasureMode && !state.floorplanMode) {
+            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.flatnessMeasureMode && !state.volumeMeasureMode && !state.floorplanMode) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -736,6 +737,7 @@ const initUI = (global: Global) => {
         if (state.measureMode) {
             state.areaMeasureMode = false;
             state.flatnessMeasureMode = false;
+            state.volumeMeasureMode = false;
             state.floorplanMode = false;
         }
     });
@@ -750,6 +752,7 @@ const initUI = (global: Global) => {
         if (state.areaMeasureMode) {
             state.measureMode = false;
             state.flatnessMeasureMode = false;
+            state.volumeMeasureMode = false;
             state.floorplanMode = false;
         }
     });
@@ -764,12 +767,28 @@ const initUI = (global: Global) => {
         if (state.flatnessMeasureMode) {
             state.measureMode = false;
             state.areaMeasureMode = false;
+            state.volumeMeasureMode = false;
             state.floorplanMode = false;
         }
     });
 
     events.on('flatnessMeasureMode:changed', (value: boolean) => {
         dom.flatnessMeasure.classList.toggle('active', value);
+    });
+
+    // Volume (cubature) tool toggle
+    dom.volumeMeasure.addEventListener('click', () => {
+        state.volumeMeasureMode = !state.volumeMeasureMode;
+        if (state.volumeMeasureMode) {
+            state.measureMode = false;
+            state.areaMeasureMode = false;
+            state.flatnessMeasureMode = false;
+            state.floorplanMode = false;
+        }
+    });
+
+    events.on('volumeMeasureMode:changed', (value: boolean) => {
+        dom.volumeMeasure.classList.toggle('active', value);
     });
 
     // Floorplan tool toggle
@@ -779,6 +798,7 @@ const initUI = (global: Global) => {
             state.measureMode = false;
             state.areaMeasureMode = false;
             state.flatnessMeasureMode = false;
+            state.volumeMeasureMode = false;
         }
     });
 
@@ -837,6 +857,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.measure, localize('tooltip.artlight-measure'), 'top');
     tooltip.register(dom.areaMeasure, localize('tooltip.artlight-area-measure'), 'top');
     tooltip.register(dom.flatnessMeasure, localize('tooltip.artlight-flatness'), 'top');
+    tooltip.register(dom.volumeMeasure, localize('tooltip.artlight-volume'), 'top');
     tooltip.register(dom.floorplan, localize('tooltip.artlight-floorplan'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');

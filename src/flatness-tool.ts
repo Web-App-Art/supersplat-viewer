@@ -1,8 +1,7 @@
-import { Vec3, GSplatComponent } from 'playcanvas';
-import type { Entity } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, drawEdgeLabel, ACCENT_COLOR, accentRgba } from './tool-utils';
+import { worldToScreen, drawEdgeLabel, getSplatCenters, ACCENT_COLOR, accentRgba } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -152,69 +151,6 @@ class FlatnessTool {
         this.pointerHandler.reset();
     }
 
-    // ── Splat data access ──
-
-    private getSplatInfo() {
-        const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
-        if (!entity) return null;
-
-        const comp = (entity as any).gsplat as GSplatComponent;
-        const resource = comp.resource ?? (comp.instance as any)?.resource;
-        if (!resource) return null;
-
-        const worldMatrix = entity.getWorldTransform().data as Float32Array;
-
-        // Standard (non-LOD) path: resource has centers directly
-        const directCenters = (resource as any).centers as Float32Array;
-        if (directCenters && directCenters.length > 0) {
-            return {
-                centers: directCenters,
-                numSplats: directCenters.length / 3,
-                worldMatrix
-            };
-        }
-
-        // LOD streaming path: collect centers from active placements via gsplatDirector
-        const director = (this.global.app as any).renderer?.gsplatDirector;
-        if (director) {
-            const allCenters: Float32Array[] = [];
-            let totalSplats = 0;
-
-            for (const cameraData of director.camerasMap.values()) {
-                for (const layerData of cameraData.layersMap.values()) {
-                    const manager = layerData.gsplatManager;
-                    if (!manager?.octreeInstances) continue;
-
-                    for (const octreeInstance of manager.octreeInstances.values()) {
-                        for (const placement of octreeInstance.activePlacements) {
-                            const placementCenters = placement.resource?.centers as Float32Array;
-                            if (placementCenters && placementCenters.length > 0) {
-                                allCenters.push(placementCenters);
-                                totalSplats += placementCenters.length / 3;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (totalSplats > 0) {
-                const merged = new Float32Array(totalSplats * 3);
-                let offset = 0;
-                for (const c of allCenters) {
-                    merged.set(c, offset);
-                    offset += c.length;
-                }
-                return {
-                    centers: merged,
-                    numSplats: totalSplats,
-                    worldMatrix
-                };
-            }
-        }
-
-        return null;
-    }
-
     // ── Best-fit plane from N points (least squares) ──
 
     private computePlane() {
@@ -317,7 +253,7 @@ class FlatnessTool {
     private computeDeviations() {
         if (!this.planeOrigin || !this.planeNormal || !this.planeU || !this.planeV) return;
 
-        const info = this.getSplatInfo();
+        const info = getSplatCenters(this.global);
         if (!info) return;
 
         const { centers, numSplats, worldMatrix: m } = info;

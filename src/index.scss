@@ -961,6 +961,113 @@ button {
     z-index: 10;
 }
 
+/* Volume (cubature) tool */
+
+#volumeMeasureOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+}
+
+#volumePanel {
+    position: absolute;
+    top: 80px;
+    right: 16px;
+    width: 260px;
+    background: rgba(#141414, 0.92);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: auto;
+    color: $clr-text;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    backdrop-filter: blur(8px);
+}
+
+.volume-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: $clr-text-light;
+    margin-bottom: 4px;
+}
+
+.volume-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.volume-main {
+    font-size: 15px;
+    font-weight: bold;
+    color: $clr-accent;
+    margin-bottom: 4px;
+}
+
+.volume-value {
+    color: $clr-text-light;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.volume-main .volume-value {
+    color: $clr-accent;
+}
+
+.volume-yaw {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+
+    input {
+        flex: 1;
+        accent-color: $clr-accent;
+    }
+}
+
+.volume-warning {
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(#f59e0b, 0.15);
+    color: #fbbf24;
+    font-size: 11px;
+    line-height: 1.4;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.volume-recompute {
+    margin-top: 4px;
+    padding: 6px 8px;
+    border: 1px solid rgba($clr-accent, 0.6);
+    border-radius: 4px;
+    background: transparent;
+    color: $clr-accent;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba($clr-accent, 0.15);
+    }
+}
+
+.volume-note {
+    margin-top: 4px;
+    color: $clr-text-dark;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
 /* Floorplan tool */
 
 #floorplanOverlay {

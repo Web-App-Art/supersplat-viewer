@@ -13,6 +13,9 @@ export interface ToolPointerCallbacks {
     onClear(): void;
 }
 
+// Fenêtre pendant laquelle un Échap est attribué à la sortie de capture souris.
+const ESCAPE_AFTER_LOCK_EXIT_MS = 300;
+
 class ToolPointerHandler {
     selectedIndex = -1;
     mouseX = 0;
@@ -51,6 +54,10 @@ class ToolPointerHandler {
     private _onDocumentPointerUp: ((e: PointerEvent) => void) | null = null;
     private _onCanvasContextMenu: ((e: Event) => void) | null = null;
     private _keyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+    private _onPointerLockChange: (() => void) | null = null;
+
+    private _pointerLockExitTime = -Infinity;
     private _savedCursor = '';
 
     constructor(global: Global, callbacks: ToolPointerCallbacks) {
@@ -89,7 +96,7 @@ class ToolPointerHandler {
             const rect = appCanvas.getBoundingClientRect();
             const overCanvas = event.clientX >= rect.left && event.clientX <= rect.right &&
                                event.clientY >= rect.top && event.clientY <= rect.bottom;
-            if (!overCanvas || (event.target !== appCanvas && (event.target as HTMLElement)?.closest?.('#ui .controlBar, #flatnessPanel, #measurePanel, #settingsPanel, #infoPanelContent'))) {
+            if (!overCanvas || (event.target !== appCanvas && (event.target as HTMLElement)?.closest?.('#ui .controlBar, #flatnessPanel, #volumePanel, #measurePanel, #settingsPanel, #infoPanelContent'))) {
                 this.downOnCanvas = false;
                 return;
             }
@@ -211,8 +218,20 @@ class ToolPointerHandler {
         };
         appCanvas.addEventListener('contextmenu', this._onCanvasContextMenu);
 
+        // ARTLIGHT: Échap sert d'abord à la navigation (sortie des contrôles
+        // clavier / de la capture souris, sortie du mode marche). Cet appui-là
+        // ne doit pas effacer la mesure en cours : seul un Échap « libre »
+        // efface. Le navigateur peut livrer le keydown juste après avoir rendu
+        // la souris ; d'où la courte fenêtre après la sortie de capture.
+        this._onPointerLockChange = () => {
+            if (!document.pointerLockElement) {
+                this._pointerLockExitTime = performance.now();
+            }
+        };
+        document.addEventListener('pointerlockchange', this._onPointerLockChange);
+
         this._keyHandler = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
+            if (event.key === 'Escape' && !this.escapeUsedByNavigation()) {
                 this.callbacks.onClear();
             }
         };
@@ -243,6 +262,10 @@ class ToolPointerHandler {
             document.removeEventListener('keydown', this._keyHandler);
             this._keyHandler = null;
         }
+        if (this._onPointerLockChange) {
+            document.removeEventListener('pointerlockchange', this._onPointerLockChange);
+            this._onPointerLockChange = null;
+        }
 
         appCanvas.style.cursor = this._savedCursor;
         document.getElementById('ui')?.style.removeProperty('cursor');
@@ -265,6 +288,15 @@ class ToolPointerHandler {
         this.dragIndex = -1;
         this.activeAxis = null;
         this.hoverAxis = null;
+    }
+
+    private escapeUsedByNavigation(): boolean {
+        const { state } = this.global;
+        const captureMode = state.cameraMode === 'walk' || state.cameraMode === 'fly';
+        return !!document.pointerLockElement ||
+            performance.now() - this._pointerLockExitTime < ESCAPE_AFTER_LOCK_EXIT_MS ||
+            state.cameraMode === 'walk' ||
+            (captureMode && state.gamingControls && state.inputMode === 'desktop');
     }
 
     private startDrag(points: Vec3[], index: number, clientX: number, clientY: number) {

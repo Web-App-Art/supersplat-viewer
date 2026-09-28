@@ -73,5 +73,6 @@
     "tooltip.artlight-measure": "Mesure",
     "tooltip.artlight-area-measure": "Mesure de surface",
     "tooltip.artlight-flatness": "Planéité",
+    "tooltip.artlight-volume": "Cubature",
     "tooltip.artlight-floorplan": "Plan au sol"
 }

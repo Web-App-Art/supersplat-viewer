@@ -46,6 +46,7 @@ import { Portals } from './portals'; // ARTLIGHT
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
 import type { Config, Global } from './types';
+import { VolumeTool } from './volume-tool'; // ARTLIGHT
 import { VoxelDebugOverlay } from './voxel-debug-overlay';
 
 // String.replace wrapper that warns when the source substring is missing, so
@@ -179,6 +180,8 @@ class Viewer {
     flatnessTool: FlatnessTool;
 
     floorplanTool: FloorplanTool;
+
+    volumeTool: VolumeTool;
 
     origChunks: {
         glsl: {
@@ -458,6 +461,16 @@ class Viewer {
                     this.flatnessTool.activate();
                 } else {
                     this.flatnessTool.deactivate();
+                }
+            });
+
+            // Volume (cubature) tool
+            this.volumeTool = new VolumeTool(global);
+            events.on('volumeMeasureMode:changed', (value: boolean) => {
+                if (value) {
+                    this.volumeTool.activate();
+                } else {
+                    this.volumeTool.deactivate();
                 }
             });
 
