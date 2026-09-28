@@ -25,6 +25,7 @@ const dictionaries: Record<string, Dictionary> = {
 };
 
 let current: Dictionary = en;
+let currentLocale = 'en';
 
 const detectLocale = (lang?: string): string => {
     const candidates = [
@@ -57,10 +58,14 @@ const localize = (key: string): string => current[key] ?? en[key] ?? key;
 const initLocalization = (lang?: string) => {
     const locale = detectLocale(lang);
     current = dictionaries[locale];
+    currentLocale = locale;
     document.documentElement.lang = locale;
     document.querySelectorAll<HTMLElement>('[data-i18n]').forEach((el) => {
         el.textContent = localize(el.dataset.i18n);
     });
 };
 
-export { initLocalization, localize };
+// ARTLIGHT (TKT-225) : langue active, pour formater les nombres copiés.
+const getLocale = (): string => currentLocale;
+
+export { initLocalization, localize, getLocale };

@@ -42,6 +42,7 @@ import { MeasureTool } from './measure-tool'; // ARTLIGHT
 import { MeshDebugOverlay } from './mesh-debug-overlay';
 import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
+import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
@@ -182,6 +183,8 @@ class Viewer {
     floorplanTool: FloorplanTool;
 
     volumeTool: VolumeTool;
+
+    pointTool: PointTool;
 
     origChunks: {
         glsl: {
@@ -471,6 +474,16 @@ class Viewer {
                     this.volumeTool.activate();
                 } else {
                     this.volumeTool.deactivate();
+                }
+            });
+
+            // Point XYZ tool (TKT-225)
+            this.pointTool = new PointTool(global);
+            events.on('pointMode:changed', (value: boolean) => {
+                if (value) {
+                    this.pointTool.activate();
+                } else {
+                    this.pointTool.deactivate();
                 }
             });
 

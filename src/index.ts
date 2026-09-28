@@ -291,6 +291,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         floorplanMode: false,
         flatnessMeasureMode: false,
         volumeMeasureMode: false,
+        pointMode: false,
         isFullscreen: false,
         controlsHidden: false,
         showAnnotations: localStorage.getItem('showAnnotations') !== 'false',

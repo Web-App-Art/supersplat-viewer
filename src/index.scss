@@ -258,7 +258,8 @@ button {
             /* measure/flatness button: white icon on colored background when active */
             &#measure.active,
             &#areaMeasure.active,
-            &#flatnessMeasure.active {
+            &#flatnessMeasure.active,
+            &#pointXYZ.active {
                 color: $clr-text;
                 background-color: $clr-accent;
                 border-radius: 4px;
@@ -1075,6 +1076,155 @@ button {
 
 .volume-note {
     margin-top: 4px;
+    color: $clr-text-dark;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+/* Point XYZ tool (TKT-225) */
+
+#pointOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+}
+
+#pointPanel {
+    position: absolute;
+    top: 80px;
+    right: 16px;
+    width: 300px;
+    max-width: calc(100vw - 32px);
+    box-sizing: border-box;
+    background: rgba(#141414, 0.92);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: auto;
+    color: $clr-text;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    backdrop-filter: blur(8px);
+}
+
+.point-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 2px;
+}
+
+.point-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: $clr-text-light;
+}
+
+.point-frame {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba($clr-accent, 0.15);
+    color: $clr-accent;
+    font-size: 11px;
+}
+
+.point-empty {
+    color: $clr-text-dark;
+    line-height: 1.4;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.point-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.point-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 4px;
+    cursor: copy;
+
+    &:hover,
+    &:focus-visible {
+        background: rgba(255, 255, 255, 0.08);
+        outline: none;
+    }
+}
+
+.point-name {
+    flex: none;
+    min-width: 24px;
+    color: $clr-accent;
+    font-weight: bold;
+}
+
+.point-coords {
+    flex: 1;
+    color: $clr-text-light;
+    font-variant-numeric: tabular-nums;
+}
+
+.point-delete {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: $clr-text-dark;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: $clr-text;
+    }
+}
+
+.point-copy-all {
+    margin-top: 4px;
+    padding: 6px 8px;
+    border: 1px solid rgba($clr-accent, 0.6);
+    border-radius: 4px;
+    background: transparent;
+    color: $clr-accent;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+        background: rgba($clr-accent, 0.15);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+}
+
+.point-status {
+    min-height: 14px;
+    color: $clr-accent;
+    font-size: 11px;
+}
+
+.point-note {
     color: $clr-text-dark;
     font-size: 11px;
     line-height: 1.4;

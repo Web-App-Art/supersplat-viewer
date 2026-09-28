@@ -75,5 +75,16 @@
     "tooltip.artlight-flatness": "Flatness",
     "tooltip.artlight-volume": "Volume",
     "tooltip.artlight-floorplan": "Floor Plan",
-    "artlight.low-precision-picking": "This device lacks high-precision picking: measurements use a slower fallback, accurate to a few millimetres."
+    "artlight.low-precision-picking": "This device lacks high-precision picking: measurements use a slower fallback, accurate to a few millimetres.",
+    "tooltip.artlight-point": "XYZ Point",
+    "artlight.coords.frame-local": "Local",
+    "artlight.point.title": "XYZ points",
+    "artlight.point.empty": "Click or tap the model to place a point.",
+    "artlight.point.copy-all": "Copy all points",
+    "artlight.point.copy-hint": "Copy X;Y;Z",
+    "artlight.point.copied-one": "{label} copied",
+    "artlight.point.copied-all": "Points copied",
+    "artlight.point.copy-failed": "Copy failed",
+    "artlight.point.delete": "Delete",
+    "artlight.point.help": "Click a row to copy X;Y;Z. Drag a point to move it, Delete removes the selected point, right-click or Esc clears all."
 }

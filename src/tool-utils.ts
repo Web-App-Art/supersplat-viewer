@@ -13,6 +13,7 @@ export function isToolActive(state: State): boolean {
         state.areaMeasureMode ||
         state.flatnessMeasureMode ||
         state.volumeMeasureMode ||
+        state.pointMode ||
         state.floorplanMode;
 }
 
@@ -203,4 +204,49 @@ export function getSplatCenters(global: Global): SplatCenters | null {
     }
 
     return null;
+}
+
+// ARTLIGHT (TKT-225) : copie un tableau de valeurs dans le presse-papier.
+// En texte brut, une ligne par entrée et « ; » entre les valeurs, comme le
+// demande la spec. Excel ne découpe pas un collage de texte sur « ; » (il ne
+// découpe que sur les tabulations) : on joint donc une version HTML, que
+// Word, Excel, Numbers et LibreOffice collent en autant de colonnes.
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+export async function copyTable(rows: string[][]): Promise<boolean> {
+    const text = rows.map(r => r.join(';')).join('\r\n');
+    const html = `<table>${rows.map(r => `<tr>${r.map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+
+    try {
+        if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+                'text/html': new Blob([html], { type: 'text/html' })
+            })]);
+            return true;
+        }
+    } catch {
+        // on retombe sur le texte seul
+    }
+
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        // contexte non sécurisé ou permission refusée
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(textarea);
+    textarea.select();
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+    } catch {
+        ok = false;
+    }
+    textarea.remove();
+    return ok;
 }

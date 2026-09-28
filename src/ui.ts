@@ -262,6 +262,7 @@ const initUI = (global: Global) => {
         'areaMeasure',
         'flatnessMeasure',
         'volumeMeasure',
+        'pointXYZ',
         'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
@@ -558,7 +559,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.flatnessMeasureMode && !state.volumeMeasureMode && !state.floorplanMode) {
+            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.flatnessMeasureMode && !state.volumeMeasureMode && !state.pointMode && !state.floorplanMode) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -740,6 +741,7 @@ const initUI = (global: Global) => {
             state.areaMeasureMode = false;
             state.flatnessMeasureMode = false;
             state.volumeMeasureMode = false;
+            state.pointMode = false;
             state.floorplanMode = false;
         }
     });
@@ -755,6 +757,7 @@ const initUI = (global: Global) => {
             state.measureMode = false;
             state.flatnessMeasureMode = false;
             state.volumeMeasureMode = false;
+            state.pointMode = false;
             state.floorplanMode = false;
         }
     });
@@ -770,6 +773,7 @@ const initUI = (global: Global) => {
             state.measureMode = false;
             state.areaMeasureMode = false;
             state.volumeMeasureMode = false;
+            state.pointMode = false;
             state.floorplanMode = false;
         }
     });
@@ -785,12 +789,29 @@ const initUI = (global: Global) => {
             state.measureMode = false;
             state.areaMeasureMode = false;
             state.flatnessMeasureMode = false;
+            state.pointMode = false;
             state.floorplanMode = false;
         }
     });
 
     events.on('volumeMeasureMode:changed', (value: boolean) => {
         dom.volumeMeasure.classList.toggle('active', value);
+    });
+
+    // ARTLIGHT (TKT-225): outil « Point XYZ »
+    dom.pointXYZ.addEventListener('click', () => {
+        state.pointMode = !state.pointMode;
+        if (state.pointMode) {
+            state.measureMode = false;
+            state.areaMeasureMode = false;
+            state.flatnessMeasureMode = false;
+            state.volumeMeasureMode = false;
+            state.floorplanMode = false;
+        }
+    });
+
+    events.on('pointMode:changed', (value: boolean) => {
+        dom.pointXYZ.classList.toggle('active', value);
     });
 
     // Floorplan tool toggle
@@ -801,6 +822,7 @@ const initUI = (global: Global) => {
             state.areaMeasureMode = false;
             state.flatnessMeasureMode = false;
             state.volumeMeasureMode = false;
+            state.pointMode = false;
         }
     });
 
@@ -860,6 +882,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.areaMeasure, localize('tooltip.artlight-area-measure'), 'top');
     tooltip.register(dom.flatnessMeasure, localize('tooltip.artlight-flatness'), 'top');
     tooltip.register(dom.volumeMeasure, localize('tooltip.artlight-volume'), 'top');
+    tooltip.register(dom.pointXYZ, localize('tooltip.artlight-point'), 'top');
     tooltip.register(dom.floorplan, localize('tooltip.artlight-floorplan'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');

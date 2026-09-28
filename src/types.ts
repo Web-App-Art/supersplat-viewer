@@ -54,6 +54,7 @@ type State = {
     floorplanMode: boolean;
     flatnessMeasureMode: boolean;
     volumeMeasureMode: boolean;
+    pointMode: boolean;                         // ARTLIGHT (TKT-225): outil « Point XYZ »
     isFullscreen: boolean;
     controlsHidden: boolean;
     showAnnotations: boolean;

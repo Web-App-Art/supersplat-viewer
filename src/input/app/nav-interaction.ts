@@ -18,6 +18,7 @@ const TOOL_MODE_EVENTS = [
     'measureMode:changed',
     'areaMeasureMode:changed',
     'flatnessMeasureMode:changed',
+    'pointMode:changed',
     'floorplanMode:changed'
 ];
 

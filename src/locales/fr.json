@@ -75,5 +75,16 @@
     "tooltip.artlight-flatness": "Planéité",
     "tooltip.artlight-volume": "Cubature",
     "tooltip.artlight-floorplan": "Plan au sol",
-    "artlight.low-precision-picking": "Cet appareil ne gère pas le mode haute précision : les mesures utilisent un calcul de secours, plus lent, précis à quelques millimètres."
+    "artlight.low-precision-picking": "Cet appareil ne gère pas le mode haute précision : les mesures utilisent un calcul de secours, plus lent, précis à quelques millimètres.",
+    "tooltip.artlight-point": "Point XYZ",
+    "artlight.coords.frame-local": "Local",
+    "artlight.point.title": "Points XYZ",
+    "artlight.point.empty": "Cliquez ou touchez le modèle pour poser un point.",
+    "artlight.point.copy-all": "Copier tous les points",
+    "artlight.point.copy-hint": "Copier X;Y;Z",
+    "artlight.point.copied-one": "{label} copié",
+    "artlight.point.copied-all": "Points copiés",
+    "artlight.point.copy-failed": "Copie impossible",
+    "artlight.point.delete": "Supprimer",
+    "artlight.point.help": "Cliquez sur une ligne pour copier X;Y;Z. Glissez un point pour le déplacer, Suppr efface le point sélectionné, clic droit ou Échap efface tout."
 }

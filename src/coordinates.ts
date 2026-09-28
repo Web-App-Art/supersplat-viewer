@@ -12,6 +12,7 @@
 
 import type { Vec3 } from 'playcanvas';
 
+import { getLocale, localize } from './localization';
 import type { Coordinates, Mat3Rows } from './settings';
 
 type Triple = [number, number, number];
@@ -27,6 +28,16 @@ class CoordinateSystem {
 
     constructor(coordinates?: Coordinates) {
         this.m = coordinates?.sourceFromWorld ?? DEFAULT_SOURCE_FROM_WORLD;
+    }
+
+    /**
+     * Nom du repère affiché à côté des coordonnées (« Local » pour le repère
+     * source). TKT-226 (zéro) et TKT-227 (géoréférencement) le feront varier.
+     *
+     * @returns {string} Nom localisé du repère.
+     */
+    get frameName(): string {
+        return localize('artlight.coords.frame-local');
     }
 
     /**
@@ -60,6 +71,12 @@ class CoordinateSystem {
     }
 }
 
+// Noms des axes du repère affiché.
+const AXES = ['X', 'Y', 'Z'];
+
+// Toujours en mètres, au millimètre.
+const DECIMALS = 3;
+
 /**
  * Composante de coordonnée : toujours en mètres, au millimètre.
  *
@@ -67,7 +84,7 @@ class CoordinateSystem {
  * @returns {string} Valeur formatée.
  */
 const formatCoordinate = (v: number): string => {
-    return `${v < 0 ? '' : ' '}${v.toFixed(3)} m`;
+    return `${v < 0 ? '' : ' '}${v.toFixed(DECIMALS)} m`;
 };
 
 /**
@@ -77,11 +94,42 @@ const formatCoordinate = (v: number): string => {
  * @returns {string[]} Une ligne par axe.
  */
 const formatCoords = (c: Triple): string[] => {
-    return [
-        `X ${formatCoordinate(c[0])}`,
-        `Y ${formatCoordinate(c[1])}`,
-        `Z ${formatCoordinate(c[2])}`
-    ];
+    return AXES.map((axis, i) => `${axis} ${formatCoordinate(c[i])}`);
 };
 
-export { CoordinateSystem, formatCoordinate, formatCoords, DEFAULT_SOURCE_FROM_WORLD };
+/**
+ * Coordonnées sur une ligne, repère en tête s'il est fourni :
+ * « Local · X 12.345 · Y -3.210 · Z 1.050 m ». Mêmes valeurs que formatCoords().
+ *
+ * @param {Triple} c - Coordonnées à afficher.
+ * @param {string} [frame] - Nom du repère (CoordinateSystem.frameName).
+ * @returns {string} Libellé d'une ligne.
+ */
+const formatCoordsInline = (c: Triple, frame?: string): string => {
+    const values = AXES.map((axis, i) => `${axis} ${c[i].toFixed(DECIMALS)}`);
+    return `${(frame ? [frame, ...values] : values).join(' · ')} m`;
+};
+
+/**
+ * Valeurs d'un point pour le presse-papier, une chaîne par axe, sans unité.
+ * Le séparateur décimal suit la langue de l'interface (virgule en français),
+ * sans quoi Excel lit « 9.138 » comme du texte ou une date.
+ *
+ * @param {Triple} c - Coordonnées à copier.
+ * @returns {string[]} Une valeur par axe.
+ */
+const coordsForClipboard = (c: Triple): string[] => {
+    const parts = new Intl.NumberFormat(getLocale()).formatToParts(1.5);
+    const decimal = parts.find(part => part.type === 'decimal')?.value ?? '.';
+    return c.map(v => v.toFixed(DECIMALS).replace('.', decimal));
+};
+
+export {
+    CoordinateSystem,
+    formatCoordinate,
+    formatCoords,
+    formatCoordsInline,
+    coordsForClipboard,
+    DEFAULT_SOURCE_FROM_WORLD
+};
+export type { Triple };
