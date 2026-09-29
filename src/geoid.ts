@@ -8,9 +8,10 @@
 // RAF20.tac. Chargé à la demande, une seule fois par page.
 //
 // Altitude NGF = h − N, N interpolé bilinéairement aux 4 nœuds qui entourent
-// le point, comme PROJ (vgridshift). Latitude et longitude en RGF93 ; on les
-// confond avec WGS84, l'écart (quelques dm en planimétrie) change N de moins
-// d'un millimètre.
+// le point, comme PROJ (vgridshift). La grille attend une hauteur RGF93 : c'est
+// le cas des relevés Artlight (Lixel K1 corrigé par le réseau RTK Orphéon, qui
+// diffuse du RGF93), même si le .lcc les dit en WGS84. Confondre les deux en
+// latitude/longitude (quelques dm) change N de moins d'un millimètre.
 
 const GRID_URL = 'geoid/fr_ign_RAF20.gtx';
 
