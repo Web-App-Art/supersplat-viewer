@@ -240,6 +240,10 @@ splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/Vill
 # H est la hauteur du .lcc : ellipsoïdale par défaut, --height-ref ngf si elle est en NGF.
 node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 
+# zones Lambert CC (TKT-232) : le panneau Point propose aussi la zone CC42 à CC50 du chantier,
+# déduite de la latitude (partie entière : Callian 43,62° N → CC43). Pour imposer une autre zone,
+# ajouter "displayEpsg": 3944 (3942 à 3950) au bloc "coordinates" du settings.json.
+
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
 # et chargée seulement si l'utilisateur choisit « Altitude NGF ». Déployer public/geoid/ avec le viewer.

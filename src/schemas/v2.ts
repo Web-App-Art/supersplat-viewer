@@ -89,7 +89,9 @@ type Coordinates = {
     /** Origine du modèle dans l'EPSG, recopiée du .lcc (en double). */
     offset?: [number, number, number],
     /** Ce que représente la 3e composante de `offset`. */
-    heightRef?: 'ellipsoid' | 'ngf'
+    heightRef?: 'ellipsoid' | 'ngf',
+    /** Zone Lambert CC proposée à l'affichage (3942 à 3950), sinon déduite de la latitude. */
+    displayEpsg?: number
 };
 
 type ExperienceSettings = {
@@ -200,6 +202,7 @@ const validateCoordinates = (data: unknown, path: string): Coordinates => {
     if (obj.epsg !== undefined) assertNumber(obj.epsg, `${path}.epsg`);
     if (obj.offset !== undefined) assertTuple3(obj.offset, `${path}.offset`);
     if (obj.heightRef !== undefined) assertEnum(obj.heightRef, HEIGHT_REFS, `${path}.heightRef`);
+    if (obj.displayEpsg !== undefined) assertNumber(obj.displayEpsg, `${path}.displayEpsg`);
     return data as Coordinates;
 };
 

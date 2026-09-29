@@ -390,16 +390,16 @@ class PointTool {
         const section = document.createElement('div');
         section.className = 'point-geo';
 
-        // Bascule UTM ↔ Lambert-93, seulement si la conversion est possible.
+        // Choix du système (UTM, Lambert-93, zone CC), seulement si une
+        // conversion est possible.
         this.projectionEl = document.createElement('div');
         this.projectionEl.className = 'point-projection';
         this.projectionEl.setAttribute('role', 'group');
         this.projectionEl.setAttribute('aria-label', localize('artlight.coords.system'));
-        const options: [Projection, string][] = [['native', coords.nativeName ?? ''], ['lambert93', 'Lambert-93']];
-        this.projectionButtons = options.map(([value, label]) => {
+        this.projectionButtons = coords.projectionChoices.map(({ value, name }) => {
             const button = document.createElement('button');
             button.className = 'point-zero-button';
-            button.textContent = label;
+            button.textContent = name;
             button.addEventListener('click', () => {
                 coords.projection = value;
             });
@@ -540,7 +540,7 @@ class PointTool {
         // Le repère relatif ne dépend pas du système : bascules et note sur H
         // masquées tant qu'un zéro est actif.
         const geo = coords.heightRef !== null && !zero;
-        this.projectionEl?.classList.toggle('hidden', !geo || !coords.canUseLambert93);
+        this.projectionEl?.classList.toggle('hidden', !geo || coords.projectionChoices.length === 0);
         this.projectionButtons.forEach(({ value, button }) => {
             const active = coords.projection === value;
             button.classList.toggle('active', active);

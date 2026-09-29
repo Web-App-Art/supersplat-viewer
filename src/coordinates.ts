@@ -26,6 +26,11 @@
 // Choix mémorisé dans le navigateur pour toutes les scènes. Tant que la grille
 // n'est pas là, ou si la scène est hors de la grille, H reste ellipsoïdale et
 // frameName le dit.
+//
+// TKT-232 : troisième choix, la zone Lambert CC (CC42 à CC50, EPSG 3942 à
+// 3950) du chantier, déduite de la latitude de l'origine de la scène, sauf si
+// `displayEpsg` l'impose dans settings.json.
+// Une scène déjà en Lambert-93 ou en CC propose les autres systèmes.
 
 import type { EventHandler, Vec3 } from 'playcanvas';
 import proj4 from 'proj4';
@@ -54,8 +59,11 @@ const AXES = ['X', 'Y', 'Z'];
 
 const GEO_AXES = ['E', 'N', 'H'];
 
-// Système affiché pour une scène géoréférencée : celui du .lcc, ou Lambert-93.
-type Projection = 'native' | 'lambert93';
+// Système affiché pour une scène géoréférencée : celui du .lcc, Lambert-93
+// ou la zone Lambert CC du chantier.
+type Projection = 'native' | 'lambert93' | 'cc';
+
+const PROJECTIONS: Projection[] = ['native', 'lambert93', 'cc'];
 
 const PROJECTION_STORAGE_KEY = 'artlight.projection';
 
@@ -71,6 +79,32 @@ const LAMBERT93 = 2154;
 
 const LAMBERT93_DEF = '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs';
 
+// Zones Lambert CC : EPSG 3942 (CC42) à 3950 (CC50), latitude centrale 42° à 50° N.
+const CC_FIRST_ZONE = 42;
+
+const CC_LAST_ZONE = 50;
+
+const CC_EPSG_BASE = 3900;
+
+const ccZone = (epsg: number): number | null => {
+    const zone = epsg - CC_EPSG_BASE;
+    return zone >= CC_FIRST_ZONE && zone <= CC_LAST_ZONE ? zone : null;
+};
+
+// Définition EPSG des zones CC : parallèles standard à ±0,75° de la latitude
+// centrale, X = 1 700 000 m, Y = (zone − 41) × 1 000 000 + 200 000 m.
+const ccDefinition = (zone: number): string => {
+    return `+proj=lcc +lat_0=${zone} +lon_0=3 +lat_1=${zone - 0.75} +lat_2=${zone + 0.75} +x_0=1700000 +y_0=${(zone - 41) * 1000000 + 200000} +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs`;
+};
+
+// Zone CC d'une latitude : partie entière, bornée à CC42–CC50. Les zones se
+// recouvrent (parallèles standard à ±0,75°) ; la partie entière colle à
+// l'usage des géomètres sur nos chantiers (Callian, 43,62° N, en CC43 et non
+// CC44 comme le donnerait l'arrondi). `displayEpsg` tranche au besoin.
+const ccZoneAt = (lat: number): number => {
+    return Math.min(CC_LAST_ZONE, Math.max(CC_FIRST_ZONE, Math.floor(lat)));
+};
+
 const LONGLAT_DEF = '+proj=longlat +datum=WGS84 +no_defs';
 
 // Zone UTM WGS84 d'un code EPSG (326zz nord, 327zz sud), null sinon.
@@ -85,13 +119,17 @@ const utmZone = (epsg: number): { zone: number, south: boolean } | null => {
 // Définition proj4 des systèmes gérés, null pour les autres.
 const projDefinition = (epsg: number): string | null => {
     if (epsg === LAMBERT93) return LAMBERT93_DEF;
+    const cc = ccZone(epsg);
+    if (cc !== null) return ccDefinition(cc);
     const utm = utmZone(epsg);
     return utm ? `+proj=utm +zone=${utm.zone}${utm.south ? ' +south' : ''} +datum=WGS84 +units=m +no_defs` : null;
 };
 
-// Nom court du système : « UTM 32N », « Lambert-93 », sinon « EPSG:xxxx ».
+// Nom court du système : « UTM 32N », « Lambert-93 », « CC43 », sinon « EPSG:xxxx ».
 const epsgName = (epsg: number): string => {
     if (epsg === LAMBERT93) return 'Lambert-93';
+    const cc = ccZone(epsg);
+    if (cc !== null) return `CC${cc}`;
     const utm = utmZone(epsg);
     return utm ? `UTM ${utm.zone}${utm.south ? 'S' : 'N'}` : `EPSG:${epsg}`;
 };
@@ -115,7 +153,8 @@ const invert3 = (m: Mat3Rows): Mat3Rows => {
 
 const loadProjection = (): Projection => {
     try {
-        return localStorage.getItem(PROJECTION_STORAGE_KEY) === 'lambert93' ? 'lambert93' : 'native';
+        const value = localStorage.getItem(PROJECTION_STORAGE_KEY) as Projection;
+        return PROJECTIONS.includes(value) ? value : 'native';
     } catch {
         return 'native';
     }
@@ -153,8 +192,10 @@ class CoordinateSystem {
     // Géoréférencement, null pour un modèle local.
     private geo: { epsg: number, offset: Triple, heightRef: 'ellipsoid' | 'ngf' } | null;
 
-    // Système du .lcc → Lambert-93, null si la conversion n'est pas proposée.
-    private toLambert93: proj4.Converter | null = null;
+    // Système du .lcc → système affiché, par choix proposé autre que
+    // 'native'. Absent si la scène y est déjà ou si la conversion est
+    // impossible.
+    private converters: Partial<Record<Projection, { epsg: number, converter: proj4.Converter }>> = {};
 
     private _projection: Projection;
 
@@ -188,8 +229,14 @@ class CoordinateSystem {
             { epsg, offset: [...offset], heightRef: coordinates.heightRef ?? 'ellipsoid' } :
             null;
         const def = this.geo ? projDefinition(epsg) : null;
-        if (def && epsg !== LAMBERT93) {
-            this.toLambert93 = proj4(def, LAMBERT93_DEF);
+        if (def) {
+            if (epsg !== LAMBERT93) {
+                this.converters.lambert93 = { epsg: LAMBERT93, converter: proj4(def, LAMBERT93_DEF) };
+            }
+            const cc = this.chooseCcZone(def, coordinates.displayEpsg);
+            if (cc !== ccZone(epsg)) {
+                this.converters.cc = { epsg: CC_EPSG_BASE + cc, converter: proj4(def, ccDefinition(cc)) };
+            }
         }
         this._projection = loadProjection();
         if (def && this.geo.heightRef === 'ellipsoid') {
@@ -201,9 +248,18 @@ class CoordinateSystem {
         this.load();
     }
 
+    // Zone CC du chantier : imposée par `displayEpsg` (3942 à 3950), sinon
+    // déduite de la latitude de l'origine de la scène.
+    private chooseCcZone(def: string, displayEpsg?: number): number {
+        const imposed = displayEpsg !== undefined ? ccZone(displayEpsg) : null;
+        if (imposed !== null) return imposed;
+        const [, lat] = proj4(def, LONGLAT_DEF).forward([this.geo.offset[0], this.geo.offset[1]]);
+        return ccZoneAt(lat);
+    }
+
     /**
      * Nom du repère affiché à côté des coordonnées : « Relatif » quand un zéro
-     * est défini, sinon le système géoréférencé (« UTM 32N », « Lambert-93 »),
+     * est défini, sinon le système géoréférencé (« UTM 32N », « CC43 »),
      * sinon « Local ».
      *
      * @returns {string} Nom localisé du repère.
@@ -211,7 +267,7 @@ class CoordinateSystem {
     get frameName(): string {
         if (this._zero) return localize('artlight.coords.frame-relative');
         if (this.geo) {
-            const system = this.lambert93 ? epsgName(LAMBERT93) : epsgName(this.geo.epsg);
+            const system = epsgName(this.activeConverter?.epsg ?? this.geo.epsg);
             return `${system} · ${localize(`artlight.coords.height-short-${this.heightSystem}`)}`;
         }
         return localize('artlight.coords.frame-local');
@@ -223,14 +279,6 @@ class CoordinateSystem {
      */
     get axisNames(): string[] {
         return this.geo && !this._zero ? GEO_AXES : AXES;
-    }
-
-    /**
-     * @returns {string | null} Nom du système du .lcc (« UTM 32N »), null pour
-     * un modèle local.
-     */
-    get nativeName(): string | null {
-        return this.geo ? epsgName(this.geo.epsg) : null;
     }
 
     /**
@@ -298,18 +346,26 @@ class CoordinateSystem {
     }
 
     /**
-     * @returns {boolean} true si la scène peut s'afficher en Lambert-93 sans
-     * l'être déjà.
+     * Choix de système proposés pour la scène, dans l'ordre d'affichage :
+     * celui du .lcc, puis Lambert-93 et la zone CC quand la scène n'y est pas
+     * déjà. Vide pour un modèle local ou un système inconnu.
+     *
+     * @returns {{ value: Projection, name: string }[]} Choix et nom court.
      */
-    get canUseLambert93(): boolean {
-        return this.toLambert93 !== null;
+    get projectionChoices(): { value: Projection, name: string }[] {
+        if (!this.geo) return [];
+        const others = PROJECTIONS
+        .filter(p => this.converters[p])
+        .map(p => ({ value: p, name: epsgName(this.converters[p].epsg) }));
+        return others.length ? [{ value: 'native', name: epsgName(this.geo.epsg) }, ...others] : [];
     }
 
     /**
      * Choisit le système affiché pour les scènes géoréférencées, mémorisé pour
      * toutes les scènes.
      *
-     * @param {Projection} value - 'native' (système du .lcc) ou 'lambert93'.
+     * @param {Projection} value - 'native' (système du .lcc), 'lambert93' ou
+     * 'cc' (zone Lambert CC du chantier).
      */
     set projection(value: Projection) {
         if (value === this._projection) return;
@@ -323,15 +379,16 @@ class CoordinateSystem {
     }
 
     /**
-     * @returns {Projection} Système choisi par l'utilisateur.
+     * @returns {Projection} Système affiché pour cette scène : le choix de
+     * l'utilisateur, ou 'native' si la scène y est déjà.
      */
     get projection(): Projection {
-        return this._projection;
+        return this.activeConverter ? this._projection : 'native';
     }
 
-    // Conversion Lambert-93 active pour cette scène.
-    private get lambert93(): boolean {
-        return this._projection === 'lambert93' && this.toLambert93 !== null;
+    // Conversion de système active pour cette scène, null en natif.
+    private get activeConverter() {
+        return this.converters[this._projection] ?? null;
     }
 
     // Conversion de H en altitude NGF active pour cette scène.
@@ -404,10 +461,10 @@ class CoordinateSystem {
      * @returns {Triple} Écart dans le repère affiché.
      */
     deltaToDisplay(a: Vec3, b: Vec3): Triple {
-        // Lambert-93 : la projection déforme légèrement les écarts ; altitude
+        // Autre système : la projection déforme légèrement les écarts ; altitude
         // NGF : N varie d'un point à l'autre. On prend la différence des
         // coordonnées affichées.
-        if (!this._zero && (this.lambert93 || this.ngfActive)) {
+        if (!this._zero && (this.activeConverter || this.ngfActive)) {
             const ga = this.toDisplay(a);
             const gb = this.toDisplay(b);
             return [gb[0] - ga[0], gb[1] - ga[1], gb[2] - ga[2]];
@@ -490,7 +547,7 @@ class CoordinateSystem {
         return { origin: toWorld(z.origin), axes };
     }
 
-    // Source → géoréférencé : geo = source + offset, puis Lambert-93 et
+    // Source → géoréférencé : geo = source + offset, puis système choisi et
     // altitude NGF (h − N) si choisis. Un point hors grille (impossible pour
     // une scène dont l'origine y est) donne NaN plutôt qu'une valeur fausse.
     private toGeo(s: Triple): Triple {
@@ -501,8 +558,9 @@ class CoordinateSystem {
         if (this.ngfActive) {
             h -= this.undulationAt(e, n) ?? NaN;
         }
-        if (!this.lambert93) return [e, n, h];
-        const [x, y] = this.toLambert93.forward([e, n]);
+        const target = this.activeConverter;
+        if (!target) return [e, n, h];
+        const [x, y] = target.converter.forward([e, n]);
         return [x, y, h];
     }
 
