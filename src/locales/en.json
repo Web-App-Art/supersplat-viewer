@@ -105,5 +105,14 @@
     "artlight.zero.axis-vertical": "Point is directly above or below the zero: pick another one",
     "artlight.zero.known-label": "Zero coordinates",
     "artlight.zero.section": "Reference zero",
-    "artlight.zero.optional": "optional"
+    "artlight.zero.optional": "optional",
+    "artlight.coords.height-ngf-converted": "H: NGF-IGN69 altitude, converted from ellipsoidal height with the IGN RAF20 grid (within a few cm).",
+    "artlight.coords.height-loading": "Loading the NGF grid… H stays ellipsoidal meanwhile.",
+    "artlight.coords.height-uncovered": "H: ellipsoidal height (WGS84). The scene is outside the NGF-IGN69 grid (mainland France): no conversion.",
+    "artlight.coords.height-error": "H: ellipsoidal height (WGS84). The NGF grid could not be loaded: no conversion.",
+    "artlight.coords.height-short-ngf": "NGF-IGN69",
+    "artlight.coords.height-short-ellipsoid": "ellipsoidal H",
+    "artlight.coords.height-choice-ellipsoid": "Ellipsoidal H",
+    "artlight.coords.height-choice-ngf": "NGF altitude",
+    "artlight.coords.height-system": "Height system"
 }

@@ -71,7 +71,11 @@ const buildPublic = {
         resolve(debugEngine ? { exportConditions: ['development'] } : {}),
         typescript(),
         json(),
-        htmlPlugin()
+        htmlPlugin(),
+        // ARTLIGHT (TKT-231) : grille NGF, chargée à la demande par geoid.ts
+        copy({
+            targets: [{ src: 'static/geoid/*', dest: 'public/geoid' }]
+        })
     ]
 };
 

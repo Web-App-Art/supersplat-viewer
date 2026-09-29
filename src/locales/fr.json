@@ -105,5 +105,14 @@
     "artlight.zero.axis-vertical": "Point à la verticale du zéro : choisissez-en un autre",
     "artlight.zero.known-label": "Coordonnées du zéro",
     "artlight.zero.section": "Zéro de référence",
-    "artlight.zero.optional": "facultatif"
+    "artlight.zero.optional": "facultatif",
+    "artlight.coords.height-ngf-converted": "H : altitude NGF-IGN69, convertie de la hauteur ellipsoïdale par la grille RAF20 de l'IGN, à quelques cm près.",
+    "artlight.coords.height-loading": "Chargement de la grille NGF… H reste la hauteur ellipsoïdale en attendant.",
+    "artlight.coords.height-uncovered": "H : hauteur ellipsoïdale (WGS84). La scène est hors de la grille NGF-IGN69 (France continentale) : pas de conversion.",
+    "artlight.coords.height-error": "H : hauteur ellipsoïdale (WGS84). La grille NGF n'a pas pu être chargée : pas de conversion.",
+    "artlight.coords.height-short-ngf": "NGF-IGN69",
+    "artlight.coords.height-short-ellipsoid": "H ellipsoïdale",
+    "artlight.coords.height-choice-ellipsoid": "H ellipsoïdale",
+    "artlight.coords.height-choice-ngf": "Altitude NGF",
+    "artlight.coords.height-system": "Système d'altitude"
 }

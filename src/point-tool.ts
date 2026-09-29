@@ -15,11 +15,13 @@
 //
 // TKT-227 : sur une scène géoréférencée, le panneau affiche ce que représente H
 // et, pour une scène en UTM, propose de basculer en Lambert-93.
+//
+// TKT-231 : si H est ellipsoïdale, une 2e bascule affiche l'altitude NGF.
 
 import type { Vec3 } from 'playcanvas';
 
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
-import type { Projection, Triple } from './coordinates';
+import type { HeightChoice, Projection, Triple } from './coordinates';
 import { localize } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, copyTable, ACCENT_COLOR } from './tool-utils';
@@ -95,6 +97,10 @@ class PointTool {
     private projectionEl: HTMLDivElement | null = null;
 
     private projectionButtons: { value: Projection, button: HTMLButtonElement }[] = [];
+
+    private heightChoiceEl: HTMLDivElement | null = null;
+
+    private heightButtons: { value: HeightChoice, button: HTMLButtonElement }[] = [];
 
     private heightEl: HTMLDivElement | null = null;
 
@@ -402,6 +408,27 @@ class PointTool {
         });
         section.appendChild(this.projectionEl);
 
+        // Bascule H ellipsoïdale ↔ altitude NGF, seulement si H est ellipsoïdale.
+        this.heightChoiceEl = document.createElement('div');
+        this.heightChoiceEl.className = 'point-projection';
+        this.heightChoiceEl.setAttribute('role', 'group');
+        this.heightChoiceEl.setAttribute('aria-label', localize('artlight.coords.height-system'));
+        const heights: [HeightChoice, string][] = [
+            ['ellipsoid', localize('artlight.coords.height-choice-ellipsoid')],
+            ['ngf', localize('artlight.coords.height-choice-ngf')]
+        ];
+        this.heightButtons = heights.map(([value, label]) => {
+            const button = document.createElement('button');
+            button.className = 'point-zero-button';
+            button.textContent = label;
+            button.addEventListener('click', () => {
+                coords.height = value;
+            });
+            this.heightChoiceEl.appendChild(button);
+            return { value, button };
+        });
+        section.appendChild(this.heightChoiceEl);
+
         this.heightEl = document.createElement('div');
         this.heightEl.className = 'point-height';
         section.appendChild(this.heightEl);
@@ -510,7 +537,7 @@ class PointTool {
 
         if (this.frameEl) this.frameEl.textContent = coords.frameName;
 
-        // Le repère relatif ne dépend pas du système : bascule et note sur H
+        // Le repère relatif ne dépend pas du système : bascules et note sur H
         // masquées tant qu'un zéro est actif.
         const geo = coords.heightRef !== null && !zero;
         this.projectionEl?.classList.toggle('hidden', !geo || !coords.canUseLambert93);
@@ -519,8 +546,14 @@ class PointTool {
             button.classList.toggle('active', active);
             button.setAttribute('aria-pressed', String(active));
         });
+        this.heightChoiceEl?.classList.toggle('hidden', !geo || !coords.canConvertHeight);
+        this.heightButtons.forEach(({ value, button }) => {
+            const active = coords.height === value;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
         if (this.heightEl) {
-            this.heightEl.textContent = geo ? localize(`artlight.coords.height-${coords.heightRef}`) : '';
+            this.heightEl.textContent = geo ? localize(`artlight.coords.height-${coords.heightStatus}`) : '';
             this.heightEl.parentElement?.classList.toggle('hidden', !geo);
         }
 
@@ -656,6 +689,8 @@ class PointTool {
         this.knownInputs = [];
         this.projectionEl = null;
         this.projectionButtons = [];
+        this.heightChoiceEl = null;
+        this.heightButtons = [];
         this.heightEl = null;
         this.noteEl = null;
     }

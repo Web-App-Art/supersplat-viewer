@@ -18,12 +18,20 @@
 // TKT-227 : une scène géoréférencée (`epsg` ≠ 0 et `offset` dans settings.json)
 // affiche geo = source + offset, calculé en double ici, jamais sur le GPU. Les
 // scènes en UTM peuvent basculer en Lambert-93 (proj4js) ; ce choix est
-// mémorisé dans le navigateur pour toutes les scènes. H n'est pas converti :
-// c'est la hauteur du .lcc (ellipsoïdale par défaut, voir `heightRef`).
+// mémorisé dans le navigateur pour toutes les scènes. H est la hauteur du
+// .lcc (ellipsoïdale par défaut, voir `heightRef`).
+//
+// TKT-231 : une scène dont H est ellipsoïdale peut afficher l'altitude
+// NGF-IGN69, par la grille RAF20 de l'IGN (geoid.ts), chargée à la demande.
+// Choix mémorisé dans le navigateur pour toutes les scènes. Tant que la grille
+// n'est pas là, ou si la scène est hors de la grille, H reste ellipsoïdale et
+// frameName le dit.
 
 import type { EventHandler, Vec3 } from 'playcanvas';
 import proj4 from 'proj4';
 
+import { loadNgfGrid, undulation } from './geoid';
+import type { Grid } from './geoid';
 import { getLocale, localize } from './localization';
 import type { Coordinates, Mat3Rows } from './settings';
 
@@ -51,9 +59,19 @@ type Projection = 'native' | 'lambert93';
 
 const PROJECTION_STORAGE_KEY = 'artlight.projection';
 
+// Altitude affichée pour une scène dont H est ellipsoïdale.
+type HeightChoice = 'ellipsoid' | 'ngf';
+
+const HEIGHT_STORAGE_KEY = 'artlight.height';
+
+// Ce que dit la note sur H dans le panneau Point.
+type HeightStatus = 'ngf' | 'ngf-converted' | 'ellipsoid' | 'loading' | 'uncovered' | 'error';
+
 const LAMBERT93 = 2154;
 
 const LAMBERT93_DEF = '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs';
+
+const LONGLAT_DEF = '+proj=longlat +datum=WGS84 +no_defs';
 
 // Zone UTM WGS84 d'un code EPSG (326zz nord, 327zz sud), null sinon.
 const utmZone = (epsg: number): { zone: number, south: boolean } | null => {
@@ -103,6 +121,14 @@ const loadProjection = (): Projection => {
     }
 };
 
+const loadHeightChoice = (): HeightChoice => {
+    try {
+        return localStorage.getItem(HEIGHT_STORAGE_KEY) === 'ngf' ? 'ngf' : 'ellipsoid';
+    } catch {
+        return 'ellipsoid';
+    }
+};
+
 const DEFAULT_SOURCE_FROM_WORLD: Mat3Rows = [
     [-1, 0, 0],
     [0, 0, 1],
@@ -132,6 +158,19 @@ class CoordinateSystem {
 
     private _projection: Projection;
 
+    // Système du .lcc → longitude/latitude, null si H ne peut pas être
+    // convertie (déjà en NGF, ou système inconnu).
+    private toLongLat: proj4.Converter | null = null;
+
+    private _height: HeightChoice;
+
+    private grid: Grid | null = null;
+
+    private gridState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+
+    // Origine de la scène dans la grille NGF (connu une fois la grille chargée).
+    private ngfCovered = false;
+
     /**
      * @param {Coordinates} [coordinates] - Bloc `coordinates` du settings.json.
      * @param {EventHandler} [events] - Reçoit `coords:changed` à chaque changement de zéro.
@@ -153,6 +192,11 @@ class CoordinateSystem {
             this.toLambert93 = proj4(def, LAMBERT93_DEF);
         }
         this._projection = loadProjection();
+        if (def && this.geo.heightRef === 'ellipsoid') {
+            this.toLongLat = proj4(def, LONGLAT_DEF);
+        }
+        this._height = loadHeightChoice();
+        if (this._height === 'ngf') this.ensureGrid();
 
         this.load();
     }
@@ -166,7 +210,10 @@ class CoordinateSystem {
      */
     get frameName(): string {
         if (this._zero) return localize('artlight.coords.frame-relative');
-        if (this.geo) return this.lambert93 ? epsgName(LAMBERT93) : epsgName(this.geo.epsg);
+        if (this.geo) {
+            const system = this.lambert93 ? epsgName(LAMBERT93) : epsgName(this.geo.epsg);
+            return `${system} · ${localize(`artlight.coords.height-short-${this.heightSystem}`)}`;
+        }
         return localize('artlight.coords.frame-local');
     }
 
@@ -192,6 +239,62 @@ class CoordinateSystem {
      */
     get heightRef(): 'ellipsoid' | 'ngf' | null {
         return this.geo?.heightRef ?? null;
+    }
+
+    /**
+     * @returns {'ellipsoid' | 'ngf' | null} Ce que représente le H affiché :
+     * NGF si la scène l'est déjà ou si la conversion est active, null pour un
+     * modèle local.
+     */
+    get heightSystem(): 'ellipsoid' | 'ngf' | null {
+        if (!this.geo) return null;
+        return this.geo.heightRef === 'ngf' || this.ngfActive ? 'ngf' : 'ellipsoid';
+    }
+
+    /**
+     * @returns {HeightStatus | null} État de H pour la note du panneau Point,
+     * null pour un modèle local.
+     */
+    get heightStatus(): HeightStatus | null {
+        if (!this.geo) return null;
+        if (this.geo.heightRef === 'ngf') return 'ngf';
+        if (this._height === 'ellipsoid' || !this.toLongLat) return 'ellipsoid';
+        if (this.gridState === 'ready') return this.ngfCovered ? 'ngf-converted' : 'uncovered';
+        return this.gridState === 'error' ? 'error' : 'loading';
+    }
+
+    /**
+     * @returns {boolean} true si H est ellipsoïdale et peut être convertie en
+     * altitude NGF.
+     */
+    get canConvertHeight(): boolean {
+        return this.toLongLat !== null;
+    }
+
+    /**
+     * Choisit l'altitude affichée pour les scènes dont H est ellipsoïdale,
+     * mémorisé pour toutes les scènes. La grille NGF est chargée au besoin ;
+     * `coords:changed` est relancé quand elle arrive.
+     *
+     * @param {HeightChoice} value - 'ellipsoid' ou 'ngf'.
+     */
+    set height(value: HeightChoice) {
+        if (value === this._height) return;
+        this._height = value;
+        try {
+            localStorage.setItem(HEIGHT_STORAGE_KEY, value);
+        } catch {
+            // stockage indisponible : choix valable pour cette page seulement
+        }
+        if (value === 'ngf') this.ensureGrid();
+        this.events?.fire('coords:changed');
+    }
+
+    /**
+     * @returns {HeightChoice} Altitude choisie par l'utilisateur.
+     */
+    get height(): HeightChoice {
+        return this._height;
     }
 
     /**
@@ -229,6 +332,36 @@ class CoordinateSystem {
     // Conversion Lambert-93 active pour cette scène.
     private get lambert93(): boolean {
         return this._projection === 'lambert93' && this.toLambert93 !== null;
+    }
+
+    // Conversion de H en altitude NGF active pour cette scène.
+    private get ngfActive(): boolean {
+        return this._height === 'ngf' && this.toLongLat !== null && this.gridState === 'ready' && this.ngfCovered;
+    }
+
+    // Charge la grille NGF si la scène en a besoin et qu'elle n'est pas déjà
+    // là. Un échec est retenté au prochain choix « Altitude NGF ».
+    private ensureGrid() {
+        if (!this.toLongLat || this.gridState === 'loading' || this.gridState === 'ready') return;
+        this.gridState = 'loading';
+        loadNgfGrid().then((grid) => {
+            this.grid = grid;
+            this.gridState = 'ready';
+            // L'origine suffit : une scène fait au plus quelques km, la grille
+            // couvre la France continentale et ses abords.
+            this.ngfCovered = this.undulationAt(this.geo.offset[0], this.geo.offset[1]) !== null;
+        }, (err) => {
+            console.warn('Grille NGF indisponible :', err);
+            this.gridState = 'error';
+        }).finally(() => {
+            this.events?.fire('coords:changed');
+        });
+    }
+
+    // Ondulation N (m) sous un point du système du .lcc, null hors grille.
+    private undulationAt(e: number, n: number): number | null {
+        const [lon, lat] = this.toLongLat.forward([e, n]);
+        return undulation(this.grid, lat, lon);
     }
 
     /**
@@ -271,9 +404,10 @@ class CoordinateSystem {
      * @returns {Triple} Écart dans le repère affiché.
      */
     deltaToDisplay(a: Vec3, b: Vec3): Triple {
-        // Lambert-93 : la projection déforme légèrement les écarts, on prend
-        // la différence des coordonnées affichées.
-        if (!this._zero && this.lambert93) {
+        // Lambert-93 : la projection déforme légèrement les écarts ; altitude
+        // NGF : N varie d'un point à l'autre. On prend la différence des
+        // coordonnées affichées.
+        if (!this._zero && (this.lambert93 || this.ngfActive)) {
             const ga = this.toDisplay(a);
             const gb = this.toDisplay(b);
             return [gb[0] - ga[0], gb[1] - ga[1], gb[2] - ga[2]];
@@ -356,13 +490,17 @@ class CoordinateSystem {
         return { origin: toWorld(z.origin), axes };
     }
 
-    // Source → géoréférencé : geo = source + offset, puis Lambert-93 si choisi.
-    // H n'est jamais converti.
+    // Source → géoréférencé : geo = source + offset, puis Lambert-93 et
+    // altitude NGF (h − N) si choisis. Un point hors grille (impossible pour
+    // une scène dont l'origine y est) donne NaN plutôt qu'une valeur fausse.
     private toGeo(s: Triple): Triple {
         const { offset } = this.geo;
         const e = s[0] + offset[0];
         const n = s[1] + offset[1];
-        const h = s[2] + offset[2];
+        let h = s[2] + offset[2];
+        if (this.ngfActive) {
+            h -= this.undulationAt(e, n) ?? NaN;
+        }
         if (!this.lambert93) return [e, n, h];
         const [x, y] = this.toLambert93.forward([e, n]);
         return [x, y, h];
@@ -492,4 +630,4 @@ export {
     coordsForClipboard,
     DEFAULT_SOURCE_FROM_WORLD
 };
-export type { Projection, Triple, UserZero };
+export type { HeightChoice, HeightStatus, Projection, Triple, UserZero };

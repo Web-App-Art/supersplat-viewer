@@ -240,6 +240,12 @@ splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/Vill
 # H est la hauteur du .lcc : ellipsoïdale par défaut, --height-ref ngf si elle est en NGF.
 node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 
+# altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
+# static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
+# et chargée seulement si l'utilisateur choisit « Altitude NGF ». Déployer public/geoid/ avec le viewer.
+# Régénérer la grille (PROJ l'installe, sinon https://cdn.proj.org/fr_ign_RAF20.tif) :
+gdal_translate -of GTX "$(projinfo --searchpaths | tail -1)/fr_ign_RAF20.tif" static/geoid/fr_ign_RAF20.gtx && rm static/geoid/*.aux.xml
+
 # nuage de points LiDAR → LOD (TKT-228)
 # Outil : scripts/las-to-splats.mjs. Chaque point LiDAR devient un petit splat opaque de sa couleur,
 # en 5 niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros).
