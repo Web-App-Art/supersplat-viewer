@@ -45,7 +45,7 @@
                 contents: projectParam ? null : fetch(contentUrl),
                 splatsUrl,
                 pointcloudUrl,
-                contentMode: contentUrl === pointcloudUrl ? 'pointcloud' : 'splats',
+                contentMode: wantsPointcloud && pointcloudUrl ? 'pointcloud' : 'splats',
                 noui: url.searchParams.has('noui'),
                 noanim: url.searchParams.has('noanim'),
                 // ARTLIGHT (TKT-228): `view` = pose conservée par la bascule splats / nuage.
