@@ -99,5 +99,7 @@
     "artlight.zero.set": "Zéro défini",
     "artlight.zero.axis-set": "Axe X orienté",
     "artlight.zero.axis-vertical": "Point à la verticale du zéro : choisissez-en un autre",
-    "artlight.zero.known-label": "Coordonnées du zéro"
+    "artlight.zero.known-label": "Coordonnées du zéro",
+    "artlight.zero.section": "Zéro de référence",
+    "artlight.zero.optional": "facultatif"
 }

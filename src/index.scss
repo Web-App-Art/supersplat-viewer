@@ -1241,6 +1241,17 @@ button {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.point-zero-title {
+    color: $clr-text-light;
+    font-weight: bold;
+}
+
+.point-zero-optional {
+    margin-left: 6px;
+    color: $clr-text-dark;
+    font-weight: normal;
+}
+
 .point-zero-actions {
     display: flex;
     gap: 4px;

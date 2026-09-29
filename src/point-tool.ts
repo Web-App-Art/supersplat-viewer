@@ -371,6 +371,16 @@ class PointTool {
         const section = document.createElement('div');
         section.className = 'point-zero';
 
+        // Titre : ces boutons ne règlent que le zéro, pas les points posés.
+        const title = document.createElement('div');
+        title.className = 'point-zero-title';
+        title.textContent = localize('artlight.zero.section');
+        const optional = document.createElement('span');
+        optional.className = 'point-zero-optional';
+        optional.textContent = localize('artlight.zero.optional');
+        title.appendChild(optional);
+        section.appendChild(title);
+
         const actions = document.createElement('div');
         actions.className = 'point-zero-actions';
 

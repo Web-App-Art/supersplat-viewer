@@ -99,5 +99,7 @@
     "artlight.zero.set": "Zero set",
     "artlight.zero.axis-set": "X axis oriented",
     "artlight.zero.axis-vertical": "Point is directly above or below the zero: pick another one",
-    "artlight.zero.known-label": "Zero coordinates"
+    "artlight.zero.known-label": "Zero coordinates",
+    "artlight.zero.section": "Reference zero",
+    "artlight.zero.optional": "optional"
 }
