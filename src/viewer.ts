@@ -518,6 +518,14 @@ class Viewer {
 
             const { gsplat } = app.scene;
 
+            // ARTLIGHT (TKT-228): le moteur écarte les splats de moins de
+            // 2 px de diamètre (≈ 0,45 px d'écart-type). Un nuage vu de loin
+            // n'est fait que de points plus petits : les blocs d'un niveau
+            // fin disparaissaient d'un coup, laissant un trou noir.
+            if (config.contentMode === 'pointcloud') {
+                gsplat.minPixelSize = 0;
+            }
+
             // quality budget
             const budgets = {
                 mobile: {

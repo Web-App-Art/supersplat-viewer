@@ -264,7 +264,8 @@ splat-transform -w --lod-chunk-count 256 tmp/parking-muy-pc/lod0.ply -l 0 tmp/pa
 node scripts/las-to-splats.mjs nuage.laz tmp/nuage --lcc lcc-result/Villa_Callian.lcc
 # puis dans project.json, à côté de "content" : "pointcloud": "./pointcloud/lod-meta.json"
 # → bouton « Nuage de points LiDAR » dans la barre d'outils (bascule avec caméra conservée).
-# Nuage seul (sans splats) : "content": "./pointcloud/lod-meta.json", comme projects/parking-muy/project.json.
+# Nuage seul (sans splats) : "pointcloud" sans "content", comme projects/parking-muy/project.json.
+# Le viewer sait alors que c'est un nuage et affiche aussi les points de moins d'un pixel (vue de loin).
 # Test : http://localhost:4001/?project=projects/parking-muy/project.json
 
 # 1. Export LCC → PLY (LOD 0 = pleine résolution)

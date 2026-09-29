@@ -37,12 +37,13 @@ type Portal = {
 type ProjectScene = {
     id: string;
     name?: string;
-    /** URL du contenu, relative au project.json. */
-    content: string;
+    /** URL des splats, relative au project.json. Facultative pour une scène nuage seul. */
+    content?: string;
     /**
      * ARTLIGHT (TKT-228) : nuage de points LiDAR converti en splats-points
-     * (scripts/las-to-splats.mjs), dans le même repère que `content`. Sa
-     * présence fait apparaître la bascule Splats / Nuage de points.
+     * (scripts/las-to-splats.mjs), dans le même repère que `content`. Avec
+     * `content`, la bascule Splats / Nuage de points apparaît ; seul, c'est le
+     * contenu de la scène.
      */
     pointcloud?: string;
     /** URL des réglages, relative au project.json. */
@@ -99,11 +100,15 @@ const validateProject = (data: unknown): Project => {
         }
         sceneIds.add(scene.id);
 
-        if (typeof scene.content !== 'string' || scene.content === '') {
-            throw new Error(`project.scenes[${i}].content manquant`);
+        const isUrl = (v: unknown) => typeof v === 'string' && v !== '';
+        if (scene.content !== undefined && !isUrl(scene.content)) {
+            throw new Error(`project.scenes[${i}].content doit être une URL`);
         }
-        if (scene.pointcloud !== undefined && (typeof scene.pointcloud !== 'string' || scene.pointcloud === '')) {
+        if (scene.pointcloud !== undefined && !isUrl(scene.pointcloud)) {
             throw new Error(`project.scenes[${i}].pointcloud doit être une URL`);
+        }
+        if (scene.content === undefined && scene.pointcloud === undefined) {
+            throw new Error(`project.scenes[${i}].content manquant`);
         }
 
         (scene.portals ?? []).forEach((portal, j) => {

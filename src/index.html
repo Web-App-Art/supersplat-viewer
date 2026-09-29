@@ -90,7 +90,8 @@
 
                 sseConfig.splatsUrl = rel(scene.content);
                 sseConfig.pointcloudUrl = rel(scene.pointcloud);
-                sseConfig.contentMode = wantsPointcloud && sseConfig.pointcloudUrl ? 'pointcloud' : 'splats';
+                // Scène nuage seul : pas de `content`, le nuage est le contenu.
+                sseConfig.contentMode = sseConfig.pointcloudUrl && (wantsPointcloud || !sseConfig.splatsUrl) ? 'pointcloud' : 'splats';
                 sseConfig.contentUrl = sseConfig.contentMode === 'pointcloud' ? sseConfig.pointcloudUrl : sseConfig.splatsUrl;
                 sseConfig.contents = fetch(sseConfig.contentUrl);
                 sseConfig.collisionUrl = rel(scene.collision) || collisionUrl;
