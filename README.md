@@ -240,19 +240,32 @@ splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/Vill
 # H est la hauteur du .lcc : ellipsoïdale par défaut, --height-ref ngf si elle est en NGF.
 node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 
-# nuage de points LiDAR (TKT-228) : LAS/LAZ → « splats-points » opaques, un par point,
+# nuage de points LiDAR → LOD (TKT-228)
+# Outil : scripts/las-to-splats.mjs. Chaque point LiDAR devient un petit splat opaque de sa couleur,
 # en 5 niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros).
-# --size = diamètre d'un point au niveau 0 (1,5 cm par défaut). Les LAZ passent par PDAL.
-# Les PLY intermédiaires sont gros (~2 × 56 octets par point) : les écrire hors de public/.
-# Nuage seul : l'offset retiré est celui du LAS, epsg à préciser s'il n'est pas déclaré.
-node scripts/las-to-splats.mjs nuage.las tmp/nuage --epsg 2154 --height-ref ngf --settings settings.json
-# Nuage superposé à des splats : reprendre l'offset et l'epsg du .lcc (même repère).
+# Options utiles :
+#   --size 0.02          diamètre d'un point au niveau 0, en m (0.015 par défaut ; plus gros = moins de trous de près)
+#   --epsg 2154          système du nuage, obligatoire si le LAS ne le déclare pas
+#   --height-ref ngf     H en altitude NGF (sinon ellipsoïdale)
+#   --settings <json>    écrit epsg / offset / heightRef dans le settings.json de la scène
+#   --lcc <modèle.lcc>   reprend l'offset et l'epsg du .lcc : nuage et splats dans le même repère
+# Les .laz sont décompressés par PDAL (brew install pdal).
+# Les PLY intermédiaires sont gros (~3 Go pour 25 M points) : les écrire dans tmp/, pas dans public/.
+
+## Étape 1 : LAS → PLY par niveau (quelques secondes)
+node scripts/las-to-splats.mjs public/projects/parking-muy/20260127_Parking_A8_Muy.las tmp/parking-muy-pc --epsg 2154 --height-ref ngf --settings public/projects/parking-muy/settings.json
+
+## Étape 2 : PLY → lod-meta.json (≈ 11 min pour 25 M points). Pas de -r : la rotation est déjà faite.
+splat-transform -w --lod-chunk-count 256 tmp/parking-muy-pc/lod0.ply -l 0 tmp/parking-muy-pc/lod1.ply -l 1 tmp/parking-muy-pc/lod2.ply -l 2 tmp/parking-muy-pc/lod3.ply -l 3 tmp/parking-muy-pc/lod4.ply -l 4 public/projects/parking-muy/pointcloud/lod-meta.json
+
+## Étape 3 : supprimer les PLY de tmp/
+
+## Nuage à superposer à un modèle splat existant : remplacer --epsg/--height-ref par --lcc
 node scripts/las-to-splats.mjs nuage.laz tmp/nuage --lcc lcc-result/Villa_Callian.lcc
-# puis la commande splat-transform affichée par le script (sans -r : rotation déjà faite)
-splat-transform -w --lod-chunk-count 256 tmp/nuage/lod0.ply -l 0 tmp/nuage/lod1.ply -l 1 tmp/nuage/lod2.ply -l 2 tmp/nuage/lod3.ply -l 3 tmp/nuage/lod4.ply -l 4 pointcloud/lod-meta.json
-# dans project.json, la scène déclare "pointcloud": "./pointcloud/lod-meta.json" à côté de "content" :
-# le bouton « Nuage de points LiDAR » apparaît et recharge la scène avec l'autre contenu, caméra conservée
-# (?mode=pointcloud&view=…). Hors projet : ?content=…&pointcloud=…
+# puis dans project.json, à côté de "content" : "pointcloud": "./pointcloud/lod-meta.json"
+# → bouton « Nuage de points LiDAR » dans la barre d'outils (bascule avec caméra conservée).
+# Nuage seul (sans splats) : "content": "./pointcloud/lod-meta.json", comme projects/parking-muy/project.json.
+# Test : http://localhost:4001/?project=projects/parking-muy/project.json
 
 # 1. Export LCC → PLY (LOD 0 = pleine résolution)
 splat-transform -w -L 0 Maison_Nico.lcc -r 90,0,0 full.ply
