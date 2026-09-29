@@ -25,6 +25,9 @@ The app supports a number of URL parameters (these are subject to change):
 | --------- | ----------- | ------- |
 | `settings` | URL of the `settings.json` file | `./settings.json` |
 | `content` | URL of the scene file (`.ply`, `.sog`, `.compressed.ply`, `.meta.json`, `.lod-meta.json`) | `./scene.compressed.ply` |
+| `pointcloud` | URL of a LiDAR point cloud converted with `scripts/las-to-splats.mjs`, in the same frame as `content` | |
+| `mode` | `pointcloud` shows the point cloud instead of the splats | |
+| `view` | Initial camera pose `px,py,pz,tx,ty,tz,fov`, set when switching content | |
 | `skybox` | URL of an equirectangular skybox image | |
 | `poster` | URL of an image to show while loading | |
 | `collision` | URL of a collision asset (`.glb` mesh, or voxel data). `voxel` is accepted as an alias. | |
@@ -236,6 +239,20 @@ splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/Vill
 # (offset recopié avec toutes ses décimales ; epsg 0 = repère local, rien n'est écrit).
 # H est la hauteur du .lcc : ellipsoïdale par défaut, --height-ref ngf si elle est en NGF.
 node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
+
+# nuage de points LiDAR (TKT-228) : LAS/LAZ → « splats-points » opaques, un par point,
+# en 5 niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros).
+# --size = diamètre d'un point au niveau 0 (1,5 cm par défaut). Les LAZ passent par PDAL.
+# Les PLY intermédiaires sont gros (~2 × 56 octets par point) : les écrire hors de public/.
+# Nuage seul : l'offset retiré est celui du LAS, epsg à préciser s'il n'est pas déclaré.
+node scripts/las-to-splats.mjs nuage.las tmp/nuage --epsg 2154 --height-ref ngf --settings settings.json
+# Nuage superposé à des splats : reprendre l'offset et l'epsg du .lcc (même repère).
+node scripts/las-to-splats.mjs nuage.laz tmp/nuage --lcc lcc-result/Villa_Callian.lcc
+# puis la commande splat-transform affichée par le script (sans -r : rotation déjà faite)
+splat-transform -w --lod-chunk-count 256 tmp/nuage/lod0.ply -l 0 tmp/nuage/lod1.ply -l 1 tmp/nuage/lod2.ply -l 2 tmp/nuage/lod3.ply -l 3 tmp/nuage/lod4.ply -l 4 pointcloud/lod-meta.json
+# dans project.json, la scène déclare "pointcloud": "./pointcloud/lod-meta.json" à côté de "content" :
+# le bouton « Nuage de points LiDAR » apparaît et recharge la scène avec l'autre contenu, caméra conservée
+# (?mode=pointcloud&view=…). Hors projet : ?content=…&pointcloud=…
 
 # 1. Export LCC → PLY (LOD 0 = pleine résolution)
 splat-transform -w -L 0 Maison_Nico.lcc -r 90,0,0 full.ply

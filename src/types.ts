@@ -7,6 +7,8 @@ type CameraMode = 'orbit' | 'anim' | 'fly' | 'walk';
 
 type InputMode = 'desktop' | 'touch';
 
+type ContentMode = 'splats' | 'pointcloud';
+
 // configuration options are immutable at runtime
 type Config = {
     poster?: HTMLImageElement;
@@ -14,6 +16,11 @@ type Config = {
     contentUrl?: string;
     contents?: Promise<Response>;
     collisionUrl?: string;
+    // ARTLIGHT (TKT-228): contenu affiché, splats ou nuage de points LiDAR.
+    // Les deux URL sont connues pour proposer la bascule ; contentUrl est l'une d'elles.
+    contentMode?: ContentMode;
+    splatsUrl?: string;
+    pointcloudUrl?: string;
 
     noui: boolean;
     noanim: boolean;
@@ -73,4 +80,4 @@ type Global = {
     coords: CoordinateSystem;                   // ARTLIGHT (TKT-226): repère affiché, zéro utilisateur partagé par les outils
 };
 
-export { CameraMode, InputMode, Config, State, Global };
+export { CameraMode, ContentMode, InputMode, Config, State, Global };

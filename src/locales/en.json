@@ -77,6 +77,7 @@
     "tooltip.artlight-floorplan": "Floor Plan",
     "artlight.low-precision-picking": "This device lacks high-precision picking: measurements use a slower fallback, accurate to a few millimetres.",
     "tooltip.artlight-point": "XYZ Point",
+    "tooltip.artlight-pointcloud": "LiDAR point cloud",
     "artlight.coords.frame-local": "Local",
     "artlight.point.title": "XYZ points",
     "artlight.point.empty": "Click or tap the model to place a point.",

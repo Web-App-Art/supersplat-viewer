@@ -39,6 +39,12 @@ type ProjectScene = {
     name?: string;
     /** URL du contenu, relative au project.json. */
     content: string;
+    /**
+     * ARTLIGHT (TKT-228) : nuage de points LiDAR converti en splats-points
+     * (scripts/las-to-splats.mjs), dans le même repère que `content`. Sa
+     * présence fait apparaître la bascule Splats / Nuage de points.
+     */
+    pointcloud?: string;
     /** URL des réglages, relative au project.json. */
     settings?: string;
     collision?: string;
@@ -95,6 +101,9 @@ const validateProject = (data: unknown): Project => {
 
         if (typeof scene.content !== 'string' || scene.content === '') {
             throw new Error(`project.scenes[${i}].content manquant`);
+        }
+        if (scene.pointcloud !== undefined && (typeof scene.pointcloud !== 'string' || scene.pointcloud === '')) {
+            throw new Error(`project.scenes[${i}].pointcloud doit être une URL`);
         }
 
         (scene.portals ?? []).forEach((portal, j) => {

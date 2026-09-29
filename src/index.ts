@@ -18,6 +18,7 @@ import {
 import { App } from './app';
 import { MeshCollision, loadVoxelCollision } from './collision';
 import type { Collision } from './collision';
+import { VIEW_PARAM, applyViewParam } from './content-mode'; // ARTLIGHT (TKT-228)
 import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
 import { observe } from './core/observe';
 import { initLocalization } from './localization';
@@ -308,6 +309,13 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         applyArrivalPose(settings, projectContext, new URL(location.href).searchParams.get('arrive'));
     }
 
+    // ARTLIGHT (TKT-228): après une bascule splats / nuage, la caméra reprend
+    // la pose transmise dans l'URL (l'intro est coupée dans index.html).
+    applyViewParam(settings, new URL(location.href).searchParams.get(VIEW_PARAM));
+
+    const sceneUrl = config.splatsUrl ?? config.contentUrl;
+    const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
+
     const global: Global = {
         app,
         settings,
@@ -316,8 +324,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         events,
         camera,
         renderer,
-        // ARTLIGHT (TKT-226) : le zéro est mémorisé par scène, clé = URL du contenu
-        coords: new CoordinateSystem(settings.coordinates, events, config.contentUrl ? new URL(config.contentUrl, location.href).href : undefined)
+        // ARTLIGHT (TKT-226) : le zéro est mémorisé par scène, clé = URL du contenu.
+        // TKT-228 : l'URL des splats, pour que le nuage de points partage le zéro.
+        coords: new CoordinateSystem(settings.coordinates, events, sceneKey)
     };
 
     initCanvas(global);

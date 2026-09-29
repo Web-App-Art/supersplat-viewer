@@ -263,6 +263,7 @@ const initUI = (global: Global) => {
         'flatnessMeasure',
         'volumeMeasure',
         'pointXYZ',
+        'contentMode',
         'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
@@ -814,6 +815,16 @@ const initUI = (global: Global) => {
         dom.pointXYZ.classList.toggle('active', value);
     });
 
+    // ARTLIGHT (TKT-228): bascule Splats / Nuage de points. La page est
+    // rechargée avec l'autre contenu (voir content-mode.ts).
+    if (config.splatsUrl && config.pointcloudUrl) {
+        dom.contentMode.classList.remove('hidden');
+        dom.contentMode.classList.toggle('active', config.contentMode === 'pointcloud');
+        dom.contentMode.addEventListener('click', () => {
+            events.fire('contentMode:switch', config.contentMode === 'pointcloud' ? 'splats' : 'pointcloud');
+        });
+    }
+
     // Floorplan tool toggle
     dom.floorplan.addEventListener('click', () => {
         state.floorplanMode = !state.floorplanMode;
@@ -883,6 +894,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.flatnessMeasure, localize('tooltip.artlight-flatness'), 'top');
     tooltip.register(dom.volumeMeasure, localize('tooltip.artlight-volume'), 'top');
     tooltip.register(dom.pointXYZ, localize('tooltip.artlight-point'), 'top');
+    tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
     tooltip.register(dom.floorplan, localize('tooltip.artlight-floorplan'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');

@@ -34,6 +34,7 @@ import { Camera } from './cameras/camera';
 import { Capture } from './capture';
 import type { Collision } from './collision';
 import { MeshCollision, VoxelCollision } from './collision';
+import { contentModeUrl } from './content-mode'; // ARTLIGHT (TKT-228)
 import { nearlyEquals } from './core/math';
 import { DebugPanel } from './debug';
 import { FlatnessTool } from './flatness-tool'; // ARTLIGHT
@@ -46,7 +47,7 @@ import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
-import type { Config, Global } from './types';
+import type { Config, ContentMode, Global } from './types';
 import { VolumeTool } from './volume-tool'; // ARTLIGHT
 import { VoxelDebugOverlay } from './voxel-debug-overlay';
 import { ZeroUI } from './zero-ui'; // ARTLIGHT (TKT-226)
@@ -503,6 +504,11 @@ class Viewer {
 
             this.cameraManager = new CameraManager(global, sceneBound, collision);
             applyCamera(this.cameraManager.camera);
+
+            // ARTLIGHT (TKT-228): bascule Splats / Nuage de points, caméra conservée.
+            events.on('contentMode:switch', (mode: ContentMode) => {
+                location.href = contentModeUrl(mode, this.cameraManager.camera);
+            });
 
             if (!config.noui) {
                 this.navCursor = new NavCursor(app, camera, collision ?? null, events, state);

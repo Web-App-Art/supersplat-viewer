@@ -77,6 +77,7 @@
     "tooltip.artlight-floorplan": "Plan au sol",
     "artlight.low-precision-picking": "Cet appareil ne gère pas le mode haute précision : les mesures utilisent un calcul de secours, plus lent, précis à quelques millimètres.",
     "tooltip.artlight-point": "Point XYZ",
+    "tooltip.artlight-pointcloud": "Nuage de points LiDAR",
     "artlight.coords.frame-local": "Local",
     "artlight.point.title": "Points XYZ",
     "artlight.point.empty": "Cliquez ou touchez le modèle pour poser un point.",
