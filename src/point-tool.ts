@@ -7,10 +7,16 @@
 //
 // Aucun mapping d'axes ici : tout passe par CoordinateSystem et les fonctions
 // de formatage de coordinates.ts (voir la spec « Coordonnées et repères »).
+//
+// TKT-226 : le panneau règle aussi le zéro utilisateur. « Définir le zéro »
+// et « Orienter X » font du clic suivant sur le modèle un point de référence
+// au lieu d'un nouveau point ; les coordonnées réelles du zéro se saisissent
+// sous ces boutons.
 
 import type { Vec3 } from 'playcanvas';
 
-import { CoordinateSystem, coordsForClipboard, formatCoordsInline } from './coordinates';
+import { coordsForClipboard, formatCoordsInline } from './coordinates';
+import type { Triple } from './coordinates';
 import { localize } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, copyTable, ACCENT_COLOR } from './tool-utils';
@@ -20,6 +26,9 @@ type XyzPoint = {
     label: string;
     pos: Vec3;
 };
+
+// Effet du prochain clic sur le modèle.
+type PickMode = 'point' | 'zero' | 'axis';
 
 type PanelRow = {
     row: HTMLDivElement;
@@ -33,8 +42,6 @@ const LABEL_FONT = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
 
 class PointTool {
     private global: Global;
-
-    private coords: CoordinateSystem;
 
     private pointerHandler: ToolPointerHandler;
 
@@ -66,13 +73,33 @@ class PointTool {
 
     private statusTimer: ReturnType<typeof setTimeout> | null = null;
 
+    private pickMode: PickMode = 'point';
+
+    private frameEl: HTMLSpanElement | null = null;
+
+    private zeroButton: HTMLButtonElement | null = null;
+
+    private axisButton: HTMLButtonElement | null = null;
+
+    private clearZeroButton: HTMLButtonElement | null = null;
+
+    private pickHintEl: HTMLDivElement | null = null;
+
+    private knownEl: HTMLDivElement | null = null;
+
+    private knownInputs: HTMLInputElement[] = [];
+
+    private coordsHandler = () => this.refreshZero();
+
     constructor(global: Global) {
         this.global = global;
-        this.coords = new CoordinateSystem(global.settings.coordinates);
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: pos => this.handleClick(pos),
-            getDraggablePoints: () => this.points.map(p => p.pos),
-            onClear: () => this.clearAll()
+            // En sélection du zéro, un clic sur un point existant vise le
+            // modèle dessous au lieu de saisir le point.
+            getDraggablePoints: () => (this.pickMode === 'point' ? this.points.map(p => p.pos) : []),
+            // Échap annule d'abord une sélection du zéro en cours.
+            onClear: () => (this.pickMode === 'point' ? this.clearAll() : this.setPickMode('point'))
         });
     }
 
@@ -91,6 +118,7 @@ class PointTool {
 
         this.showPanel();
         this.pointerHandler.activate();
+        this.global.events.on('coords:changed', this.coordsHandler);
 
         this.keyHandler = (event: KeyboardEvent) => {
             if (event.key !== 'Delete' && event.key !== 'Backspace') return;
@@ -124,6 +152,8 @@ class PointTool {
         }
 
         this.pointerHandler.deactivate();
+        this.global.events.off('coords:changed', this.coordsHandler);
+        this.pickMode = 'point';
 
         this.removePanel();
 
@@ -143,6 +173,22 @@ class PointTool {
     }
 
     private handleClick(pos: Vec3) {
+        const { coords } = this.global;
+
+        if (this.pickMode === 'zero') {
+            coords.setZero(pos);
+            this.setPickMode('point');
+            this.showStatus(localize('artlight.zero.set'));
+            return;
+        }
+
+        if (this.pickMode === 'axis') {
+            const ok = coords.orientX(pos);
+            this.setPickMode('point');
+            this.showStatus(localize(ok ? 'artlight.zero.axis-set' : 'artlight.zero.axis-vertical'));
+            return;
+        }
+
         // Comme l'outil Mesure : un clic sur un point le sélectionne (géré par
         // ToolPointerHandler) ; un clic ailleurs désélectionne d'abord.
         if (this.pointerHandler.selectedIndex >= 0) {
@@ -173,8 +219,9 @@ class PointTool {
         this.global.app.renderNextFrame = true;
     }
 
-    private sourceOf(point: XyzPoint) {
-        return this.coords.toSource(point.pos);
+    // Coordonnées affichées : repère source, ou relatives au zéro.
+    private coordsOf(point: XyzPoint) {
+        return this.global.coords.toDisplay(point.pos);
     }
 
     // ── Rendu canvas ──
@@ -206,7 +253,7 @@ class PointTool {
 
         const camera = this.global.camera;
         const selected = this.pointerHandler.selectedIndex;
-        const frame = this.coords.frameName;
+        const frame = this.global.coords.frameName;
 
         for (let i = 0; i < this.points.length; i++) {
             const point = this.points[i];
@@ -222,7 +269,7 @@ class PointTool {
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            this.drawLabel(ctx, sp, point.label, formatCoordsInline(this.sourceOf(point), frame));
+            this.drawLabel(ctx, sp, point.label, formatCoordsInline(this.coordsOf(point), frame));
         }
 
         if (selected >= 0 && selected < this.points.length) {
@@ -279,11 +326,12 @@ class PointTool {
         const title = document.createElement('span');
         title.className = 'point-title';
         title.textContent = localize('artlight.point.title');
-        const frame = document.createElement('span');
-        frame.className = 'point-frame';
-        frame.textContent = this.coords.frameName;
-        header.append(title, frame);
+        this.frameEl = document.createElement('span');
+        this.frameEl.className = 'point-frame';
+        header.append(title, this.frameEl);
         this.panel.appendChild(header);
+
+        this.panel.appendChild(this.buildZeroSection());
 
         this.emptyEl = document.createElement('div');
         this.emptyEl.className = 'point-empty';
@@ -298,7 +346,7 @@ class PointTool {
         this.copyAllButton.className = 'point-copy-all';
         this.copyAllButton.textContent = localize('artlight.point.copy-all');
         this.copyAllButton.addEventListener('click', () => {
-            this.copy(this.points.map(p => coordsForClipboard(this.sourceOf(p))));
+            this.copy(this.points.map(p => coordsForClipboard(this.coordsOf(p))));
         });
         this.panel.appendChild(this.copyAllButton);
 
@@ -313,7 +361,122 @@ class PointTool {
         this.panel.appendChild(note);
 
         this.overlay?.appendChild(this.panel);
+        this.refreshZero();
         this.rebuildList();
+    }
+
+    // ── Zéro (TKT-226) ──
+
+    private buildZeroSection() {
+        const section = document.createElement('div');
+        section.className = 'point-zero';
+
+        const actions = document.createElement('div');
+        actions.className = 'point-zero-actions';
+
+        const makeButton = (key: string, onClick: () => void) => {
+            const button = document.createElement('button');
+            button.className = 'point-zero-button';
+            button.textContent = localize(key);
+            button.addEventListener('click', onClick);
+            actions.appendChild(button);
+            return button;
+        };
+
+        this.zeroButton = makeButton('artlight.zero.define', () => {
+            this.setPickMode(this.pickMode === 'zero' ? 'point' : 'zero');
+        });
+        this.axisButton = makeButton('artlight.zero.orient', () => {
+            this.setPickMode(this.pickMode === 'axis' ? 'point' : 'axis');
+        });
+        this.clearZeroButton = makeButton('artlight.zero.clear', () => {
+            this.setPickMode('point');
+            this.global.coords.clearZero();
+        });
+        section.appendChild(actions);
+
+        this.pickHintEl = document.createElement('div');
+        this.pickHintEl.className = 'point-zero-hint';
+        section.appendChild(this.pickHintEl);
+
+        // Coordonnées réelles du point zéro, 0 par défaut.
+        this.knownEl = document.createElement('div');
+        this.knownEl.className = 'point-zero-known';
+        const knownLabel = document.createElement('span');
+        knownLabel.className = 'point-zero-known-label';
+        knownLabel.textContent = localize('artlight.zero.known-label');
+        this.knownEl.appendChild(knownLabel);
+        this.knownInputs = ['X', 'Y', 'Z'].map((axis) => {
+            const field = document.createElement('label');
+            field.className = 'point-zero-field';
+            const name = document.createElement('span');
+            name.textContent = axis;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.inputMode = 'decimal';
+            input.spellcheck = false;
+            input.setAttribute('aria-label', `${localize('artlight.zero.known-label')} ${axis}`);
+            input.addEventListener('change', () => this.applyKnown());
+            input.addEventListener('keydown', (event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') input.blur();
+            });
+            field.append(name, input);
+            this.knownEl.appendChild(field);
+            return input;
+        });
+        section.appendChild(this.knownEl);
+
+        return section;
+    }
+
+    private setPickMode(mode: PickMode) {
+        this.pickMode = mode;
+        if (mode !== 'point') this.pointerHandler.selectedIndex = -1;
+        this.refreshZero();
+        this.global.app.renderNextFrame = true;
+    }
+
+    // Accepte la virgule comme séparateur décimal. Une valeur illisible est
+    // ignorée et le champ reprend la valeur mémorisée.
+    private applyKnown() {
+        const values = this.knownInputs.map((input) => {
+            const text = input.value.trim().replace(/\s/g, '').replace(',', '.');
+            return text === '' ? 0 : Number(text);
+        });
+        if (values.every(Number.isFinite)) {
+            this.global.coords.setKnown(values as Triple);
+        }
+        this.refreshZero();
+    }
+
+    private refreshZero() {
+        const { coords } = this.global;
+        const zero = coords.zero;
+
+        if (this.frameEl) this.frameEl.textContent = coords.frameName;
+
+        this.zeroButton?.classList.toggle('active', this.pickMode === 'zero');
+        this.axisButton?.classList.toggle('active', this.pickMode === 'axis');
+        if (this.axisButton) this.axisButton.disabled = !zero;
+        if (this.clearZeroButton) this.clearZeroButton.disabled = !zero;
+
+        if (this.pickHintEl) {
+            const hint = this.pickMode === 'zero' ? 'artlight.zero.pick-zero' :
+                this.pickMode === 'axis' ? 'artlight.zero.pick-axis' : '';
+            this.pickHintEl.textContent = hint ? localize(hint) : '';
+            this.pickHintEl.classList.toggle('hidden', !hint);
+        }
+
+        this.knownEl?.classList.toggle('hidden', !zero);
+        if (zero) {
+            const values = coordsForClipboard(zero.known);
+            this.knownInputs.forEach((input, i) => {
+                if (document.activeElement !== input) input.value = values[i];
+            });
+        }
+
+        this.updateRowValues();
     }
 
     private rebuildList() {
@@ -345,7 +508,7 @@ class PointTool {
             });
 
             const copyRow = () => {
-                this.copy([coordsForClipboard(this.sourceOf(point))], point.label);
+                this.copy([coordsForClipboard(this.coordsOf(point))], point.label);
             };
             row.addEventListener('click', copyRow);
             row.addEventListener('keydown', (event) => {
@@ -367,7 +530,7 @@ class PointTool {
 
     private updateRowValues() {
         for (let i = 0; i < this.rows.length && i < this.points.length; i++) {
-            const text = formatCoordsInline(this.sourceOf(this.points[i]));
+            const text = formatCoordsInline(this.coordsOf(this.points[i]));
             const el = this.rows[i].coords;
             if (el.textContent !== text) el.textContent = text;
         }
@@ -410,6 +573,13 @@ class PointTool {
         this.copyAllButton = null;
         this.statusEl = null;
         this.rows = [];
+        this.frameEl = null;
+        this.zeroButton = null;
+        this.axisButton = null;
+        this.clearZeroButton = null;
+        this.pickHintEl = null;
+        this.knownEl = null;
+        this.knownInputs = [];
     }
 }
 

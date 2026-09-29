@@ -86,5 +86,18 @@
     "artlight.point.copied-all": "Points copiés",
     "artlight.point.copy-failed": "Copie impossible",
     "artlight.point.delete": "Supprimer",
-    "artlight.point.help": "Cliquez sur une ligne pour copier X;Y;Z. Glissez un point pour le déplacer, Suppr efface le point sélectionné, clic droit ou Échap efface tout."
+    "artlight.point.help": "Cliquez sur une ligne pour copier X;Y;Z. Glissez un point pour le déplacer, Suppr efface le point sélectionné, clic droit ou Échap efface tout.",
+    "artlight.coords.frame-relative": "Relatif",
+    "artlight.zero.badge": "Zéro actif",
+    "artlight.zero.oriented": "X orienté",
+    "artlight.zero.known": "coordonnées saisies",
+    "artlight.zero.clear": "Effacer",
+    "artlight.zero.define": "Définir le zéro",
+    "artlight.zero.orient": "Orienter X",
+    "artlight.zero.pick-zero": "Cliquez le point du modèle à prendre comme zéro (Échap pour annuler).",
+    "artlight.zero.pick-axis": "Cliquez un 2e point : l'axe X passera par lui (Échap pour annuler).",
+    "artlight.zero.set": "Zéro défini",
+    "artlight.zero.axis-set": "Axe X orienté",
+    "artlight.zero.axis-vertical": "Point à la verticale du zéro : choisissez-en un autre",
+    "artlight.zero.known-label": "Coordonnées du zéro"
 }

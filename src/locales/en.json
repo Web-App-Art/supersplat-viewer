@@ -86,5 +86,18 @@
     "artlight.point.copied-all": "Points copied",
     "artlight.point.copy-failed": "Copy failed",
     "artlight.point.delete": "Delete",
-    "artlight.point.help": "Click a row to copy X;Y;Z. Drag a point to move it, Delete removes the selected point, right-click or Esc clears all."
+    "artlight.point.help": "Click a row to copy X;Y;Z. Drag a point to move it, Delete removes the selected point, right-click or Esc clears all.",
+    "artlight.coords.frame-relative": "Relative",
+    "artlight.zero.badge": "Zero active",
+    "artlight.zero.oriented": "X oriented",
+    "artlight.zero.known": "entered coordinates",
+    "artlight.zero.clear": "Clear",
+    "artlight.zero.define": "Set zero",
+    "artlight.zero.orient": "Orient X",
+    "artlight.zero.pick-zero": "Click the point of the model to use as zero (Esc to cancel).",
+    "artlight.zero.pick-axis": "Click a second point: the X axis will pass through it (Esc to cancel).",
+    "artlight.zero.set": "Zero set",
+    "artlight.zero.axis-set": "X axis oriented",
+    "artlight.zero.axis-vertical": "Point is directly above or below the zero: pick another one",
+    "artlight.zero.known-label": "Zero coordinates"
 }

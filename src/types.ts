@@ -1,5 +1,6 @@
 import type { Entity, EventHandler, AppBase } from 'playcanvas';
 
+import type { CoordinateSystem } from './coordinates';
 import type { ExperienceSettings } from './settings';
 
 type CameraMode = 'orbit' | 'anim' | 'fly' | 'walk';
@@ -69,6 +70,7 @@ type Global = {
     events: EventHandler;
     camera: Entity;
     renderer: 'webgl' | 'webgpu';               // actual renderer in use (reflects engine fallback from WebGPU to WebGL2)
+    coords: CoordinateSystem;                   // ARTLIGHT (TKT-226): repère affiché, zéro utilisateur partagé par les outils
 };
 
 export { CameraMode, InputMode, Config, State, Global };

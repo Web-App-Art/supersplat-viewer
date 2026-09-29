@@ -1230,6 +1230,176 @@ button {
     line-height: 1.4;
 }
 
+/* Zéro utilisateur (TKT-226) */
+
+.point-zero {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.point-zero-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.point-zero-button {
+    flex: 1;
+    padding: 5px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 4px;
+    background: transparent;
+    color: $clr-text-light;
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    &.active {
+        border-color: $clr-accent;
+        background: rgba($clr-accent, 0.15);
+        color: $clr-accent;
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+}
+
+.point-zero-hint {
+    color: $clr-accent;
+    font-size: 11px;
+    line-height: 1.4;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.point-zero-known {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.point-zero-known-label {
+    flex: none;
+    color: $clr-text-dark;
+    font-size: 11px;
+}
+
+.point-zero-field {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    color: $clr-accent;
+    font-weight: bold;
+
+    input {
+        width: 100%;
+        min-width: 0;
+        padding: 3px 4px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.3);
+        color: $clr-text-light;
+        font: inherit;
+        font-weight: normal;
+        font-variant-numeric: tabular-nums;
+
+        &:focus {
+            border-color: $clr-accent;
+            outline: none;
+        }
+    }
+}
+
+#zeroMarker {
+    position: fixed;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 9;
+}
+
+#zeroBadge {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    max-width: calc(100vw - 32px);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 4px 4px 10px;
+    border-radius: 8px;
+    background: rgba(#141414, 0.92);
+    border: 1px solid rgba($clr-accent, 0.5);
+    color: $clr-text-light;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    pointer-events: auto;
+    backdrop-filter: blur(8px);
+    z-index: 20;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.zero-badge-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $clr-accent;
+}
+
+.zero-badge-label {
+    font-weight: bold;
+    color: $clr-accent;
+    white-space: nowrap;
+}
+
+.zero-badge-detail {
+    color: $clr-text-dark;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    &:empty {
+        display: none;
+    }
+}
+
+.zero-badge-clear {
+    flex: none;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: $clr-text-light;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.16);
+    }
+}
+
 /* Floorplan tool */
 
 #floorplanOverlay {

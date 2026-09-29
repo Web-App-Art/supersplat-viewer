@@ -18,6 +18,7 @@ import {
 import { App } from './app';
 import { MeshCollision, loadVoxelCollision } from './collision';
 import type { Collision } from './collision';
+import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
 import { observe } from './core/observe';
 import { initLocalization } from './localization';
 import { applyArrivalPose } from './portals';
@@ -314,7 +315,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         state,
         events,
         camera,
-        renderer
+        renderer,
+        // ARTLIGHT (TKT-226) : le zéro est mémorisé par scène, clé = URL du contenu
+        coords: new CoordinateSystem(settings.coordinates, events, config.contentUrl ? new URL(config.contentUrl, location.href).href : undefined)
     };
 
     initCanvas(global);

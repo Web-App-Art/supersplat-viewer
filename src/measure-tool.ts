@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { CoordinateSystem, formatCoords } from './coordinates';
+import { formatCoords } from './coordinates';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, drawEdgeLabel, formatDistance, ACCENT_COLOR } from './tool-utils';
 import type { Global } from './types';
@@ -16,7 +16,6 @@ function formatComponent(v: number): string {
 
 class MeasureTool {
     private global: Global;
-    private coords: CoordinateSystem;
     private pointerHandler: ToolPointerHandler;
     private points: Vec3[] = [];
     private measureState: MeasureState = 'idle';
@@ -34,7 +33,6 @@ class MeasureTool {
 
     constructor(global: Global) {
         this.global = global;
-        this.coords = new CoordinateSystem(global.settings.coordinates);
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
             getDraggablePoints: () => this.measureState === 'complete' ? this.points : [],
@@ -202,10 +200,11 @@ class MeasureTool {
         p: Vec3,
         index: number
     ) {
-        // Coordonnées dans le repère source (X = Est, Y = Nord, Z = Haut), cf. coordinates.ts
+        // Coordonnées dans le repère affiché (source ou relatif au zéro), cf. coordinates.ts
+        const { coords } = this.global;
         const lines = [
-            `P${index}`,
-            ...formatCoords(this.coords.toSource(p))
+            `P${index} · ${coords.frameName}`,
+            ...formatCoords(coords.toDisplay(p))
         ];
 
         ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -325,8 +324,8 @@ class MeasureTool {
         const p1 = this.points[0];
         const p2 = this.points[1];
         const dist = p1.distance(p2);
-        // Écarts dans le repère source (X = Est, Y = Nord, Z = Haut), cf. coordinates.ts
-        const [dx, dy, dz] = this.coords.deltaToSource(p1, p2);
+        // Écarts dans le repère affiché (orientation du zéro comprise), cf. coordinates.ts
+        const [dx, dy, dz] = this.global.coords.deltaToDisplay(p1, p2);
         if (this.panelDistEl) this.panelDistEl.textContent = formatDistance(dist);
         if (this.panelDxEl) this.panelDxEl.textContent = formatComponent(dx);
         if (this.panelDyEl) this.panelDyEl.textContent = formatComponent(dy);

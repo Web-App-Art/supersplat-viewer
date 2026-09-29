@@ -49,6 +49,7 @@ import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
 import type { Config, Global } from './types';
 import { VolumeTool } from './volume-tool'; // ARTLIGHT
 import { VoxelDebugOverlay } from './voxel-debug-overlay';
+import { ZeroUI } from './zero-ui'; // ARTLIGHT (TKT-226)
 
 // String.replace wrapper that warns when the source substring is missing, so
 // shader chunk patches against the engine fail loudly instead of silently
@@ -185,6 +186,8 @@ class Viewer {
     volumeTool: VolumeTool;
 
     pointTool: PointTool;
+
+    zeroUI: ZeroUI;
 
     origChunks: {
         glsl: {
@@ -477,7 +480,8 @@ class Viewer {
                 }
             });
 
-            // Point XYZ tool (TKT-225)
+            // Point XYZ tool (TKT-225), zéro utilisateur (TKT-226)
+            this.zeroUI = new ZeroUI(global);
             this.pointTool = new PointTool(global);
             events.on('pointMode:changed', (value: boolean) => {
                 if (value) {
