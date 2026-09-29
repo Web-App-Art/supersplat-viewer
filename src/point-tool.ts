@@ -12,11 +12,14 @@
 // et « Orienter X » font du clic suivant sur le modèle un point de référence
 // au lieu d'un nouveau point ; les coordonnées réelles du zéro se saisissent
 // sous ces boutons.
+//
+// TKT-227 : sur une scène géoréférencée, le panneau affiche ce que représente H
+// et, pour une scène en UTM, propose de basculer en Lambert-93.
 
 import type { Vec3 } from 'playcanvas';
 
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
-import type { Triple } from './coordinates';
+import type { Projection, Triple } from './coordinates';
 import { localize } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, copyTable, ACCENT_COLOR } from './tool-utils';
@@ -88,6 +91,14 @@ class PointTool {
     private knownEl: HTMLDivElement | null = null;
 
     private knownInputs: HTMLInputElement[] = [];
+
+    private projectionEl: HTMLDivElement | null = null;
+
+    private projectionButtons: { value: Projection, button: HTMLButtonElement }[] = [];
+
+    private heightEl: HTMLDivElement | null = null;
+
+    private noteEl: HTMLDivElement | null = null;
 
     private coordsHandler = () => this.refreshZero();
 
@@ -253,7 +264,7 @@ class PointTool {
 
         const camera = this.global.camera;
         const selected = this.pointerHandler.selectedIndex;
-        const frame = this.global.coords.frameName;
+        const { frameName: frame, axisNames: axes } = this.global.coords;
 
         for (let i = 0; i < this.points.length; i++) {
             const point = this.points[i];
@@ -269,7 +280,7 @@ class PointTool {
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            this.drawLabel(ctx, sp, point.label, formatCoordsInline(this.coordsOf(point), frame));
+            this.drawLabel(ctx, sp, point.label, formatCoordsInline(this.coordsOf(point), frame, axes));
         }
 
         if (selected >= 0 && selected < this.points.length) {
@@ -331,6 +342,8 @@ class PointTool {
         header.append(title, this.frameEl);
         this.panel.appendChild(header);
 
+        this.panel.appendChild(this.buildProjectionSection());
+
         this.panel.appendChild(this.buildZeroSection());
 
         this.emptyEl = document.createElement('div');
@@ -355,14 +368,45 @@ class PointTool {
         this.statusEl.setAttribute('aria-live', 'polite');
         this.panel.appendChild(this.statusEl);
 
-        const note = document.createElement('div');
-        note.className = 'point-note';
-        note.textContent = localize('artlight.point.help');
-        this.panel.appendChild(note);
+        this.noteEl = document.createElement('div');
+        this.noteEl.className = 'point-note';
+        this.panel.appendChild(this.noteEl);
 
         this.overlay?.appendChild(this.panel);
         this.refreshZero();
         this.rebuildList();
+    }
+
+    // ── Système géoréférencé (TKT-227) ──
+
+    private buildProjectionSection() {
+        const { coords } = this.global;
+        const section = document.createElement('div');
+        section.className = 'point-geo';
+
+        // Bascule UTM ↔ Lambert-93, seulement si la conversion est possible.
+        this.projectionEl = document.createElement('div');
+        this.projectionEl.className = 'point-projection';
+        this.projectionEl.setAttribute('role', 'group');
+        this.projectionEl.setAttribute('aria-label', localize('artlight.coords.system'));
+        const options: [Projection, string][] = [['native', coords.nativeName ?? ''], ['lambert93', 'Lambert-93']];
+        this.projectionButtons = options.map(([value, label]) => {
+            const button = document.createElement('button');
+            button.className = 'point-zero-button';
+            button.textContent = label;
+            button.addEventListener('click', () => {
+                coords.projection = value;
+            });
+            this.projectionEl.appendChild(button);
+            return { value, button };
+        });
+        section.appendChild(this.projectionEl);
+
+        this.heightEl = document.createElement('div');
+        this.heightEl.className = 'point-height';
+        section.appendChild(this.heightEl);
+
+        return section;
     }
 
     // ── Zéro (TKT-226) ──
@@ -466,6 +510,26 @@ class PointTool {
 
         if (this.frameEl) this.frameEl.textContent = coords.frameName;
 
+        // Le repère relatif ne dépend pas du système : bascule et note sur H
+        // masquées tant qu'un zéro est actif.
+        const geo = coords.heightRef !== null && !zero;
+        this.projectionEl?.classList.toggle('hidden', !geo || !coords.canUseLambert93);
+        this.projectionButtons.forEach(({ value, button }) => {
+            const active = coords.projection === value;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+        if (this.heightEl) {
+            this.heightEl.textContent = geo ? localize(`artlight.coords.height-${coords.heightRef}`) : '';
+            this.heightEl.parentElement?.classList.toggle('hidden', !geo);
+        }
+
+        const axes = coords.axisNames.join(';');
+        if (this.noteEl) this.noteEl.textContent = localize('artlight.point.help').replace('{axes}', axes);
+        this.rows.forEach(({ row }) => {
+            row.title = localize('artlight.point.copy-hint').replace('{axes}', axes);
+        });
+
         this.zeroButton?.classList.toggle('active', this.pickMode === 'zero');
         this.axisButton?.classList.toggle('active', this.pickMode === 'axis');
         if (this.axisButton) this.axisButton.disabled = !zero;
@@ -498,7 +562,7 @@ class PointTool {
             row.className = 'point-row';
             row.setAttribute('role', 'button');
             row.tabIndex = 0;
-            row.title = localize('artlight.point.copy-hint');
+            row.title = localize('artlight.point.copy-hint').replace('{axes}', this.global.coords.axisNames.join(';'));
 
             const name = document.createElement('span');
             name.className = 'point-name';
@@ -540,7 +604,7 @@ class PointTool {
 
     private updateRowValues() {
         for (let i = 0; i < this.rows.length && i < this.points.length; i++) {
-            const text = formatCoordsInline(this.coordsOf(this.points[i]));
+            const text = formatCoordsInline(this.coordsOf(this.points[i]), undefined, this.global.coords.axisNames);
             const el = this.rows[i].coords;
             if (el.textContent !== text) el.textContent = text;
         }
@@ -590,6 +654,10 @@ class PointTool {
         this.pickHintEl = null;
         this.knownEl = null;
         this.knownInputs = [];
+        this.projectionEl = null;
+        this.projectionButtons = [];
+        this.heightEl = null;
+        this.noteEl = null;
     }
 }
 

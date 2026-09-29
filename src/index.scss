@@ -1230,6 +1230,35 @@ button {
     line-height: 1.4;
 }
 
+/* Système géoréférencé (TKT-227) */
+
+.point-geo {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.point-projection {
+    display: flex;
+    gap: 4px;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.point-height {
+    color: $clr-text-dark;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
 /* Zéro utilisateur (TKT-226) */
 
 .point-zero {

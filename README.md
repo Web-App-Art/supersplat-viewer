@@ -231,6 +231,12 @@ ou
 
 splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/VillaCavalaire.lcc -r 90,0,0 lod-output/lod-meta.json
 
+# géoréférencement (TKT-227) : splat-transform perd "offset" et "epsg" du .lcc,
+# les recopier dans le bloc "coordinates" du settings.json de la scène
+# (offset recopié avec toutes ses décimales ; epsg 0 = repère local, rien n'est écrit).
+# H est la hauteur du .lcc : ellipsoïdale par défaut, --height-ref ngf si elle est en NGF.
+node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
+
 # 1. Export LCC → PLY (LOD 0 = pleine résolution)
 splat-transform -w -L 0 Maison_Nico.lcc -r 90,0,0 full.ply
 

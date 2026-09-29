@@ -57,3 +57,9 @@ declare module '*.js' {
     const content: string;
     export default content;
 }
+
+// ARTLIGHT (TKT-227) : les types de proj4 référencent geotiff (grilles de
+// correction), dépendance optionnelle non installée et inutilisée ici.
+declare module 'geotiff' {
+    type GeoTIFF = unknown;
+}

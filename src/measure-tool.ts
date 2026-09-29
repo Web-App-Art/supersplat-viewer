@@ -30,6 +30,8 @@ class MeasureTool {
     private panelDxEl: HTMLSpanElement | null = null;
     private panelDyEl: HTMLSpanElement | null = null;
     private panelDzEl: HTMLSpanElement | null = null;
+    // Libellés ΔX/ΔY/ΔZ, ou ΔE/ΔN/ΔH en géoréférencé
+    private panelDeltaLabels: HTMLSpanElement[] = [];
 
     constructor(global: Global) {
         this.global = global;
@@ -204,7 +206,7 @@ class MeasureTool {
         const { coords } = this.global;
         const lines = [
             `P${index} · ${coords.frameName}`,
-            ...formatCoords(coords.toDisplay(p))
+            ...formatCoords(coords.toDisplay(p), coords.axisNames)
         ];
 
         ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -308,6 +310,7 @@ class MeasureTool {
             row.appendChild(lbl);
             row.appendChild(val);
             this.panel.appendChild(row);
+            this.panelDeltaLabels.push(lbl);
             return val;
         };
 
@@ -326,6 +329,10 @@ class MeasureTool {
         const dist = p1.distance(p2);
         // Écarts dans le repère affiché (orientation du zéro comprise), cf. coordinates.ts
         const [dx, dy, dz] = this.global.coords.deltaToDisplay(p1, p2);
+        const axes = this.global.coords.axisNames;
+        this.panelDeltaLabels.forEach((lbl, i) => {
+            lbl.textContent = `Δ${axes[i]}`;
+        });
         if (this.panelDistEl) this.panelDistEl.textContent = formatDistance(dist);
         if (this.panelDxEl) this.panelDxEl.textContent = formatComponent(dx);
         if (this.panelDyEl) this.panelDyEl.textContent = formatComponent(dy);
@@ -340,6 +347,7 @@ class MeasureTool {
             this.panelDxEl = null;
             this.panelDyEl = null;
             this.panelDzEl = null;
+            this.panelDeltaLabels = [];
         }
     }
 }

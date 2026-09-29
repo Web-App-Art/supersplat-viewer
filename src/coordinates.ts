@@ -14,8 +14,15 @@
 // affichées deviennent alors relatif = R · (source − zéro) + valeur saisie,
 // R étant l'identité ou une rotation autour de Z (axe X orienté par un 2e
 // point). Le zéro est mémorisé par scène dans le navigateur.
+//
+// TKT-227 : une scène géoréférencée (`epsg` ≠ 0 et `offset` dans settings.json)
+// affiche geo = source + offset, calculé en double ici, jamais sur le GPU. Les
+// scènes en UTM peuvent basculer en Lambert-93 (proj4js) ; ce choix est
+// mémorisé dans le navigateur pour toutes les scènes. H n'est pas converti :
+// c'est la hauteur du .lcc (ellipsoïdale par défaut, voir `heightRef`).
 
 import type { EventHandler, Vec3 } from 'playcanvas';
+import proj4 from 'proj4';
 
 import { getLocale, localize } from './localization';
 import type { Coordinates, Mat3Rows } from './settings';
@@ -34,6 +41,43 @@ const MIN_AXIS_DISTANCE = 0.01;
 
 const STORAGE_PREFIX = 'artlight.zero:';
 
+// Noms des axes du repère affiché : local ou relatif, géoréférencé.
+const AXES = ['X', 'Y', 'Z'];
+
+const GEO_AXES = ['E', 'N', 'H'];
+
+// Système affiché pour une scène géoréférencée : celui du .lcc, ou Lambert-93.
+type Projection = 'native' | 'lambert93';
+
+const PROJECTION_STORAGE_KEY = 'artlight.projection';
+
+const LAMBERT93 = 2154;
+
+const LAMBERT93_DEF = '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs';
+
+// Zone UTM WGS84 d'un code EPSG (326zz nord, 327zz sud), null sinon.
+const utmZone = (epsg: number): { zone: number, south: boolean } | null => {
+    const zone = epsg % 100;
+    if (zone < 1 || zone > 60) return null;
+    if (epsg - zone === 32600) return { zone, south: false };
+    if (epsg - zone === 32700) return { zone, south: true };
+    return null;
+};
+
+// Définition proj4 des systèmes gérés, null pour les autres.
+const projDefinition = (epsg: number): string | null => {
+    if (epsg === LAMBERT93) return LAMBERT93_DEF;
+    const utm = utmZone(epsg);
+    return utm ? `+proj=utm +zone=${utm.zone}${utm.south ? ' +south' : ''} +datum=WGS84 +units=m +no_defs` : null;
+};
+
+// Nom court du système : « UTM 32N », « Lambert-93 », sinon « EPSG:xxxx ».
+const epsgName = (epsg: number): string => {
+    if (epsg === LAMBERT93) return 'Lambert-93';
+    const utm = utmZone(epsg);
+    return utm ? `UTM ${utm.zone}${utm.south ? 'S' : 'N'}` : `EPSG:${epsg}`;
+};
+
 const isTriple = (v: unknown): v is Triple => {
     return Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n));
 };
@@ -49,6 +93,14 @@ const invert3 = (m: Mat3Rows): Mat3Rows => {
         [B / det, (a * i - c * g) / det, (c * d - a * f) / det],
         [C / det, (b * g - a * h) / det, (a * e - b * d) / det]
     ];
+};
+
+const loadProjection = (): Projection => {
+    try {
+        return localStorage.getItem(PROJECTION_STORAGE_KEY) === 'lambert93' ? 'lambert93' : 'native';
+    } catch {
+        return 'native';
+    }
 };
 
 const DEFAULT_SOURCE_FROM_WORLD: Mat3Rows = [
@@ -72,6 +124,14 @@ class CoordinateSystem {
 
     private _zero: UserZero | null = null;
 
+    // Géoréférencement, null pour un modèle local.
+    private geo: { epsg: number, offset: Triple, heightRef: 'ellipsoid' | 'ngf' } | null;
+
+    // Système du .lcc → Lambert-93, null si la conversion n'est pas proposée.
+    private toLambert93: proj4.Converter | null = null;
+
+    private _projection: Projection;
+
     /**
      * @param {Coordinates} [coordinates] - Bloc `coordinates` du settings.json.
      * @param {EventHandler} [events] - Reçoit `coords:changed` à chaque changement de zéro.
@@ -82,18 +142,93 @@ class CoordinateSystem {
         this.mInv = invert3(this.m);
         this.events = events ?? null;
         this.storageKey = storageKey ? STORAGE_PREFIX + storageKey : null;
+
+        const epsg = coordinates?.epsg ?? 0;
+        const offset = coordinates?.offset;
+        this.geo = epsg !== 0 && isTriple(offset) ?
+            { epsg, offset: [...offset], heightRef: coordinates.heightRef ?? 'ellipsoid' } :
+            null;
+        const def = this.geo ? projDefinition(epsg) : null;
+        if (def && epsg !== LAMBERT93) {
+            this.toLambert93 = proj4(def, LAMBERT93_DEF);
+        }
+        this._projection = loadProjection();
+
         this.load();
     }
 
     /**
-     * Nom du repère affiché à côté des coordonnées : « Local » pour le repère
-     * source, « Relatif » quand un zéro est défini. TKT-227 ajoutera le
-     * géoréférencé.
+     * Nom du repère affiché à côté des coordonnées : « Relatif » quand un zéro
+     * est défini, sinon le système géoréférencé (« UTM 32N », « Lambert-93 »),
+     * sinon « Local ».
      *
      * @returns {string} Nom localisé du repère.
      */
     get frameName(): string {
-        return localize(this._zero ? 'artlight.coords.frame-relative' : 'artlight.coords.frame-local');
+        if (this._zero) return localize('artlight.coords.frame-relative');
+        if (this.geo) return this.lambert93 ? epsgName(LAMBERT93) : epsgName(this.geo.epsg);
+        return localize('artlight.coords.frame-local');
+    }
+
+    /**
+     * @returns {string[]} Noms des 3 axes affichés : E, N, H en géoréférencé,
+     * X, Y, Z en local ou relatif au zéro.
+     */
+    get axisNames(): string[] {
+        return this.geo && !this._zero ? GEO_AXES : AXES;
+    }
+
+    /**
+     * @returns {string | null} Nom du système du .lcc (« UTM 32N »), null pour
+     * un modèle local.
+     */
+    get nativeName(): string | null {
+        return this.geo ? epsgName(this.geo.epsg) : null;
+    }
+
+    /**
+     * @returns {'ellipsoid' | 'ngf' | null} Ce que représente H, null pour un
+     * modèle local.
+     */
+    get heightRef(): 'ellipsoid' | 'ngf' | null {
+        return this.geo?.heightRef ?? null;
+    }
+
+    /**
+     * @returns {boolean} true si la scène peut s'afficher en Lambert-93 sans
+     * l'être déjà.
+     */
+    get canUseLambert93(): boolean {
+        return this.toLambert93 !== null;
+    }
+
+    /**
+     * Choisit le système affiché pour les scènes géoréférencées, mémorisé pour
+     * toutes les scènes.
+     *
+     * @param {Projection} value - 'native' (système du .lcc) ou 'lambert93'.
+     */
+    set projection(value: Projection) {
+        if (value === this._projection) return;
+        this._projection = value;
+        try {
+            localStorage.setItem(PROJECTION_STORAGE_KEY, value);
+        } catch {
+            // stockage indisponible : choix valable pour cette page seulement
+        }
+        this.events?.fire('coords:changed');
+    }
+
+    /**
+     * @returns {Projection} Système choisi par l'utilisateur.
+     */
+    get projection(): Projection {
+        return this._projection;
+    }
+
+    // Conversion Lambert-93 active pour cette scène.
+    private get lambert93(): boolean {
+        return this._projection === 'lambert93' && this.toLambert93 !== null;
     }
 
     /**
@@ -114,7 +249,7 @@ class CoordinateSystem {
     }
 
     /**
-     * Point du moteur → repère affiché (source, ou relatif au zéro).
+     * Point du moteur → repère affiché (relatif au zéro, géoréférencé ou source).
      *
      * @param {Vec3} p - Point dans le repère du moteur.
      * @returns {Triple} Coordonnées à afficher.
@@ -122,7 +257,7 @@ class CoordinateSystem {
     toDisplay(p: Vec3): Triple {
         const s = this.toSource(p);
         const z = this._zero;
-        if (!z) return s;
+        if (!z) return this.geo ? this.toGeo(s) : s;
         const [x, y, h] = this.rotate(s[0] - z.origin[0], s[1] - z.origin[1], s[2] - z.origin[2]);
         return [x + z.known[0], y + z.known[1], h + z.known[2]];
     }
@@ -136,6 +271,13 @@ class CoordinateSystem {
      * @returns {Triple} Écart dans le repère affiché.
      */
     deltaToDisplay(a: Vec3, b: Vec3): Triple {
+        // Lambert-93 : la projection déforme légèrement les écarts, on prend
+        // la différence des coordonnées affichées.
+        if (!this._zero && this.lambert93) {
+            const ga = this.toDisplay(a);
+            const gb = this.toDisplay(b);
+            return [gb[0] - ga[0], gb[1] - ga[1], gb[2] - ga[2]];
+        }
         const [x, y, z] = this.apply(b.x - a.x, b.y - a.y, b.z - a.z);
         return this.rotate(x, y, z);
     }
@@ -214,6 +356,18 @@ class CoordinateSystem {
         return { origin: toWorld(z.origin), axes };
     }
 
+    // Source → géoréférencé : geo = source + offset, puis Lambert-93 si choisi.
+    // H n'est jamais converti.
+    private toGeo(s: Triple): Triple {
+        const { offset } = this.geo;
+        const e = s[0] + offset[0];
+        const n = s[1] + offset[1];
+        const h = s[2] + offset[2];
+        if (!this.lambert93) return [e, n, h];
+        const [x, y] = this.toLambert93.forward([e, n]);
+        return [x, y, h];
+    }
+
     // R · v : rotation de −angle autour de Z, pour que X pointe vers le 2e point.
     private rotate(x: number, y: number, z: number): Triple {
         const angle = this._zero?.angle ?? 0;
@@ -268,9 +422,6 @@ class CoordinateSystem {
     }
 }
 
-// Noms des axes du repère affiché.
-const AXES = ['X', 'Y', 'Z'];
-
 // Toujours en mètres, au millimètre.
 const DECIMALS = 3;
 
@@ -296,22 +447,26 @@ const formatCoordinate = (v: number): string => {
  * Lignes « X … / Y … / Z … » prêtes à afficher.
  *
  * @param {Triple} c - Coordonnées à afficher.
+ * @param {string[]} [axes] - Noms des axes (CoordinateSystem.axisNames).
  * @returns {string[]} Une ligne par axe.
  */
-const formatCoords = (c: Triple): string[] => {
-    return AXES.map((axis, i) => `${axis} ${formatCoordinate(c[i])}`);
+const formatCoords = (c: Triple, axes: string[] = AXES): string[] => {
+    return axes.map((axis, i) => `${axis} ${formatCoordinate(c[i])}`);
 };
 
 /**
  * Coordonnées sur une ligne, repère en tête s'il est fourni :
- * « Local · X 12.345 · Y -3.210 · Z 1.050 m ». Mêmes valeurs que formatCoords().
+ * « Local · X 12.345 · Y -3.210 · Z 1.050 m » ou
+ * « UTM 32N · E 318379.045 · N 4829596.951 · H 254.640 m ». Mêmes valeurs que
+ * formatCoords().
  *
  * @param {Triple} c - Coordonnées à afficher.
  * @param {string} [frame] - Nom du repère (CoordinateSystem.frameName).
+ * @param {string[]} [axes] - Noms des axes (CoordinateSystem.axisNames).
  * @returns {string} Libellé d'une ligne.
  */
-const formatCoordsInline = (c: Triple, frame?: string): string => {
-    const values = AXES.map((axis, i) => `${axis} ${toFixedMm(c[i])}`);
+const formatCoordsInline = (c: Triple, frame?: string, axes: string[] = AXES): string => {
+    const values = axes.map((axis, i) => `${axis} ${toFixedMm(c[i])}`);
     return `${(frame ? [frame, ...values] : values).join(' · ')} m`;
 };
 
@@ -337,4 +492,4 @@ export {
     coordsForClipboard,
     DEFAULT_SOURCE_FROM_WORLD
 };
-export type { Triple, UserZero };
+export type { Projection, Triple, UserZero };
