@@ -8,6 +8,10 @@ import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
 
+// Plan de référence des écarts : le plan moyen (planéité), un plan horizontal
+// (niveau d'un sol) ou vertical (aplomb d'un mur).
+type ReferenceMode = 'mean' | 'horizontal' | 'vertical';
+
 // Grid cell data for heatmap
 interface GridData {
     grid: (number | null)[][];  // signed deviation values per cell (null = no data)
@@ -114,6 +118,12 @@ const HIDDEN_NEIGHBOR_RADIUS = 2;
 // toiture), la bosse est vers le haut ; pour un mur, vers l'observateur.
 const UP_MIN_COS = Math.cos(60 * Math.PI / 180);
 
+// Plan de référence : « Horizontal » n'est proposé que si le plan moyen est à
+// moins de 10° de l'horizontale (sol, dalle, chape), « Vertical » que s'il est
+// à moins de 10° de la verticale (mur). Entre les deux (toiture, rampe), seul
+// le plan moyen a un sens.
+const REFERENCE_MAX_TILT = 10 * Math.PI / 180;
+
 // Cases isolées : écart à la médiane des voisines de plus de 4 σ (1 cm au
 // moins) et moins de 2 voisines qui le confirment. C'est typiquement un splat
 // flottant seul dans sa case ; une bosse ou une marche réelle couvre plusieurs
@@ -186,11 +196,23 @@ interface Plane {
     normal: Vec3;
 }
 
-// Splat retenu, dans le repère du plan : position (pu, pv), écart au plan.
+// Splat retenu, dans le repère du plan de référence : position (pu, pv),
+// écart au plan. `fit` : écart au plan moyen, qui sert à trier les splats
+// (épaisseur analysée, reflets) quel que soit le plan de référence.
 interface KeptPoint {
     dist: number;
     pu: number;
     pv: number;
+    fit: number;
+}
+
+// Orientation de la caméra au moment du calcul : la carte et le côté de
+// l'observateur ne changent pas quand on tourne autour de la zone.
+interface ViewSnapshot {
+    position: Vec3;
+    right: Vec3;
+    up: Vec3;
+    forward: Vec3;
 }
 
 // Générateur pseudo-aléatoire à graine fixe (mulberry32) : deux calculs sur la
@@ -686,7 +708,18 @@ class FlatnessTool {
 
     private recomputeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Plane & grid results
+    private view: ViewSnapshot | null = null;
+
+    // Plan moyen ajusté sur le nuage, normale orientée côté bosse.
+    private fittedPlane: Plane | null = null;
+
+    // Plan de référence choisi. S'il n'a pas de sens pour la zone (horizontal
+    // sur un mur), c'est le plan moyen qui s'applique ; le choix reste pour
+    // la zone suivante.
+    private reference: ReferenceMode = 'mean';
+
+    // Plan de référence (repère planeOrigin, planeU, planeV, planeNormal).
+    // Horizontal ou vertical, il passe par la médiane des écarts.
     private planeOrigin: Vec3 | null = null;
 
     private planeNormal: Vec3 | null = null;
@@ -905,6 +938,8 @@ class FlatnessTool {
         this.currentPoints = [];
         this.analyzedPoints = [];
         this.state = 'idle';
+        this.view = null;
+        this.fittedPlane = null;
         this.planeOrigin = null;
         this.planeNormal = null;
         this.planeU = null;
@@ -1001,6 +1036,15 @@ class FlatnessTool {
         this.insideMask = null;
         this.stats = null;
         this.rule = null;
+        this.fittedPlane = null;
+
+        const camera = this.global.camera;
+        this.view = {
+            position: camera.getPosition().clone(),
+            right: camera.right.clone(),
+            up: camera.up.clone(),
+            forward: camera.forward.clone()
+        };
 
         const footprint = this.computeFootprintPlane();
         if (!footprint) return;
@@ -1010,8 +1054,58 @@ class FlatnessTool {
 
         const plane = this.fitReferencePlane(this.candidates, footprint) ?? footprint;
         this.orientNormal(plane);
-        this.setPlane(plane);
+        this.fittedPlane = plane;
+        this.applyReference();
         this.computeDeviations();
+    }
+
+    // Plans de référence qui ont un sens pour la zone, selon l'orientation du
+    // plan moyen.
+    private availableReferences(): ReferenceMode[] {
+        const fit = this.fittedPlane;
+        if (!fit) return ['mean'];
+        const tilt = Math.acos(Math.min(1, Math.abs(fit.normal.dot(Vec3.UP))));
+        if (tilt <= REFERENCE_MAX_TILT) return ['mean', 'horizontal'];
+        if (tilt >= Math.PI / 2 - REFERENCE_MAX_TILT) return ['mean', 'vertical'];
+        return ['mean'];
+    }
+
+    private activeReference(): ReferenceMode {
+        return this.availableReferences().includes(this.reference) ? this.reference : 'mean';
+    }
+
+    // Orientation du plan de référence, tirée du plan moyen. Sa position
+    // (horizontal, vertical) est fixée ensuite sur la médiane des écarts,
+    // dans computeDeviations. Les normales gardent le sens de la bosse :
+    // vers le haut pour un sol (pente < 10°), vers l'observateur pour un mur.
+    private applyReference() {
+        const fit = this.fittedPlane;
+        if (!fit) return;
+        const normal = fit.normal.clone();
+        const mode = this.activeReference();
+        if (mode === 'horizontal') {
+            normal.copy(Vec3.UP);
+        } else if (mode === 'vertical') {
+            const up = normal.dot(Vec3.UP);
+            normal.sub(Vec3.UP.clone().mulScalar(up)).normalize();
+        }
+        this.setPlane({ origin: fit.origin.clone(), normal });
+    }
+
+    // Pente du plan moyen : par rapport à l'horizontale pour un sol ou une
+    // toiture, faux aplomb (écart à la verticale) pour un mur. ratio = tangente
+    // de l'angle ; lean : +1 si le haut du mur part en arrière, −1 s'il penche
+    // vers l'observateur.
+    private fittedSlope(): { kind: 'slope' | 'plumb'; ratio: number; angle: number; lean: number } | null {
+        const fit = this.fittedPlane;
+        if (!fit) return null;
+        const up = fit.normal.dot(Vec3.UP);
+        const cos = Math.min(1, Math.abs(up));
+        const sin = Math.sqrt(1 - cos * cos);
+        if (this.bumpTowards === 'up') {
+            return { kind: 'slope', ratio: sin / Math.max(cos, 1e-9), angle: Math.acos(cos), lean: 0 };
+        }
+        return { kind: 'plumb', ratio: cos / Math.max(sin, 1e-9), angle: Math.asin(cos), lean: Math.sign(up) };
     }
 
     // Plan des sommets : ne sert qu'à délimiter la zone et à orienter la recherche.
@@ -1050,25 +1144,26 @@ class FlatnessTool {
             if (up < 0) N.mulScalar(-1);
             this.bumpTowards = 'up';
         } else {
-            const toCamera = new Vec3().sub2(this.global.camera.getPosition(), plane.origin);
+            const toCamera = new Vec3().sub2(this.view.position, plane.origin);
             if (toCamera.dot(N) < 0) N.mulScalar(-1);
             this.bumpTowards = 'viewer';
         }
     }
 
-    // Base 2D du plan alignée sur la caméra :
+    // Base 2D du plan alignée sur la caméra au moment du calcul :
     // U = droite caméra projetée sur le plan (horizontale de la carte ≈ écran),
     // V = N × U, calculé avec la normale tournée vers la caméra pour que la
     // verticale de la carte descende comme l'écran, quel que soit le sens de N.
     private planeBasis(normal: Vec3) {
-        const N = normal.dot(this.global.camera.forward) > 0 ? normal.clone().mulScalar(-1) : normal;
-        const camRight = this.global.camera.right.clone();
+        const view = this.view;
+        const N = normal.dot(view.forward) > 0 ? normal.clone().mulScalar(-1) : normal;
+        const camRight = view.right.clone();
         const dotNR = camRight.dot(N);
         const U = new Vec3(camRight.x - dotNR * N.x, camRight.y - dotNR * N.y, camRight.z - dotNR * N.z);
         const uLen = U.length();
         if (uLen < 1e-10) {
             // Camera looking straight at the plane normal — fallback
-            const camUp = this.global.camera.up.clone();
+            const camUp = view.up.clone();
             const dotNU = camUp.dot(N);
             U.set(camUp.x - dotNU * N.x, camUp.y - dotNU * N.y, camUp.z - dotNU * N.z).normalize();
         } else {
@@ -1242,17 +1337,24 @@ class FlatnessTool {
 
     // ── Écarts au plan de référence, rangés dans la grille ──
 
+    // Les splats sont triés selon leur écart au plan moyen (épaisseur
+    // analysée, reflets), puis mesurés par rapport au plan de référence.
     private computeDeviations() {
         this.gridData = null;
         this.stats = null;
         this.rule = null;
-        if (!this.planeOrigin || !this.planeNormal || !this.planeU || !this.planeV || !this.candidates) return;
+        const fit = this.fittedPlane;
+        if (!fit || !this.planeOrigin || !this.planeNormal || !this.planeU || !this.planeV || !this.candidates) return;
 
         const pts = this.candidates;
+        const mode = this.activeReference();
+        // Horizontal ou vertical : le plan est recalé plus bas sur la médiane.
+        if (mode !== 'mean') this.planeOrigin = fit.origin.clone();
         const O = this.planeOrigin;
         const N = this.planeNormal;
         const U = this.planeU;
         const V = this.planeV;
+        const Of = fit.origin, Nf = fit.normal;
         const band = this.bandHalfWidth;
 
         // Polygone projeté sur le plan de référence
@@ -1277,12 +1379,12 @@ class FlatnessTool {
             const pv = dx * V.x + dy * V.y + dz * V.z;
             if (pu < uMin || pu > uMax || pv < vMin || pv > vMax) continue;
             if (!this.pointInPolygon(pu, pv, polyUV)) continue;
-            const dist = dx * N.x + dy * N.y + dz * N.z;
-            if (Math.abs(dist) > band) {
+            const fitDist = (pts[k] - Of.x) * Nf.x + (pts[k + 1] - Of.y) * Nf.y + (pts[k + 2] - Of.z) * Nf.z;
+            if (Math.abs(fitDist) > band) {
                 excluded++;
                 continue;
             }
-            kept.push({ dist, pu, pv });
+            kept.push({ dist: dx * N.x + dy * N.y + dz * N.z, pu, pv, fit: fitDist });
         }
 
         this.excludedSplatCount = excluded;
@@ -1293,8 +1395,8 @@ class FlatnessTool {
                 const a = polyUV[i], b = polyUV[(i + 1) % polyUV.length];
                 polyArea += a.u * b.v - b.u * a.v;
             }
-            const toCamera = new Vec3().sub2(this.global.camera.getPosition(), O);
-            const visible = this.removeHiddenLayer(kept, toCamera.dot(N) >= 0 ? 1 : -1, Math.abs(polyArea) / 2, uMin, vMin, uRange, vRange);
+            const toCamera = new Vec3().sub2(this.view.position, Of);
+            const visible = this.removeHiddenLayer(kept, toCamera.dot(Nf) >= 0 ? 1 : -1, Math.abs(polyArea) / 2, uMin, vMin, uRange, vRange);
             this.hiddenSplatCount = kept.length - visible.length;
             kept = visible;
         }
@@ -1356,6 +1458,22 @@ class FlatnessTool {
             rawGrid.push(row);
         }
         const noise = 1.4826 * median(subsample(residuals, NOISE_SAMPLE).map(r => Math.abs(r)));
+
+        // Horizontal ou vertical : le plan passe par la médiane des cases, pour
+        // que chaque partie de la zone compte selon sa surface et non selon sa
+        // densité de points.
+        if (mode !== 'mean') {
+            const values: number[] = [];
+            for (const row of rawGrid) {
+                for (const v of row) if (v !== null) values.push(v);
+            }
+            const offset = median(values);
+            for (const row of rawGrid) {
+                for (let i = 0; i < resX; i++) if (row[i] !== null) row[i] -= offset;
+            }
+            for (let k = 2; k < this.keptPoints.length; k += 3) this.keptPoints[k] -= offset;
+            O.add(N.clone().mulScalar(offset));
+        }
 
         const spikeCells = this.removeSpikes(rawGrid, resX, resY);
 
@@ -1430,8 +1548,9 @@ class FlatnessTool {
         this.computeRule();
     }
 
-    // Ne garde que la couche visible depuis l'observateur (voir HIDDEN_*).
-    // side : +1 si l'observateur est du côté de la normale, −1 sinon.
+    // Ne garde que la couche visible depuis l'observateur (voir HIDDEN_*),
+    // d'après l'écart au plan moyen des splats (`fit`).
+    // side : +1 si l'observateur est du côté de sa normale, −1 sinon.
     private removeHiddenLayer(points: KeptPoint[], side: number, area: number,
         uMin: number, vMin: number, uRange: number, vRange: number): KeptPoint[] {
         const density = points.length / Math.max(area, 1e-6);
@@ -1444,7 +1563,7 @@ class FlatnessTool {
         // Écart compté vers l'observateur : plus grand = plus près de lui
         const buckets: number[][] = new Array(resX * resY);
         for (let k = 0; k < resX * resY; k++) buckets[k] = [];
-        for (const p of points) buckets[cellOf(p)].push(side * p.dist);
+        for (const p of points) buckets[cellOf(p)].push(side * p.fit);
 
         // 1. Niveau de la première couche dense en partant de l'observateur
         const levels = new Float64Array(resX * resY).fill(NaN);
@@ -1503,7 +1622,7 @@ class FlatnessTool {
         // 3. Écarter ce qui est en retrait de la couche visible
         return points.filter((p) => {
             const level = fixed[cellOf(p)];
-            return Number.isNaN(level) || side * p.dist >= level - depth;
+            return Number.isNaN(level) || side * p.fit >= level - depth;
         });
     }
 
@@ -2008,8 +2127,7 @@ class FlatnessTool {
 
         const note = document.createElement('div');
         note.className = 'flatness-legend-note';
-        note.textContent = this.bumpTowards === 'up' ? 'Bosse = vers le haut' : 'Bosse = vers l\'observateur';
-        if (this.waveWidth > 0) note.textContent += ` · ondulation de ${formatLength(this.waveWidth)} lissée`;
+        note.textContent = `${this.deviationsTitle()} · ${this.bumpText()}`;
         wrapper.appendChild(note);
 
         return wrapper;
@@ -2076,6 +2194,9 @@ class FlatnessTool {
         tab.appendChild(createRow('Écart type', formatLength(stats.rms)));
         tab.appendChild(createRow('Surface', `${stats.area.toFixed(2).replace('.', ',')} m²`));
         tab.appendChild(createRow('Taille des cases', `${formatLength(geo.du)} × ${formatLength(geo.dv)}`));
+        for (const row of [this.slopeRow(), this.levelRow()]) {
+            if (row) tab.appendChild(createRow(row[0], row[1]));
+        }
         if (stats.emptyPct >= 0.5) {
             const estimated = this.interpolationEnabled ? ' (hachurée)' : '';
             tab.appendChild(createRow(`Zone sans points${estimated}`, `${Math.round(stats.emptyPct)} %`));
@@ -2084,7 +2205,7 @@ class FlatnessTool {
         const info = document.createElement('div');
         info.className = 'tool-info';
         const total = this.rawSplatCount + this.excludedSplatCount;
-        const lines = [`Écarts au plan moyen${this.waveWidth > 0 ? ', tuiles lissées' : ''}.`];
+        const lines = [`${this.deviationsTitle()}.`];
         lines.push(`${this.rawSplatCount.toLocaleString('fr-FR')} points analysés`);
         if (this.excludedSplatCount > 0) {
             const pct = Math.round(this.excludedSplatCount / total * 100);
@@ -2185,6 +2306,26 @@ class FlatnessTool {
     private createSettingsTab(): HTMLDivElement {
         const tab = document.createElement('div');
 
+        // Plan de référence : seuls les choix qui ont un sens pour la zone.
+        const titles: Record<ReferenceMode, [string, string]> = {
+            mean: ['Plan moyen', 'Planéité : écarts au plan qui épouse au mieux la surface'],
+            horizontal: ['Horizontal', 'Niveau : écarts à un plan horizontal passant par la hauteur médiane de la zone'],
+            vertical: ['Vertical', 'Aplomb : écarts à un plan vertical passant par la position médiane de la zone']
+        };
+        const refs = this.availableReferences();
+        const refField = createField('Plan de référence', refs.length > 1 ?
+            createSegmented(refs.map(mode => ({ value: mode, label: titles[mode][0], title: titles[mode][1] })), this.activeReference(), (mode) => {
+                this.reference = mode;
+                this.applyReference();
+                this.computeDeviations();
+                this.showPanel();
+                this.global.app.renderNextFrame = true;
+            }) :
+            createNote('Plan moyen : surface ni horizontale ni verticale (à plus de 10°).'));
+        const slope = this.slopeRow();
+        if (slope) refField.appendChild(createNote(`${slope[0]} : ${slope[1]}`));
+        tab.appendChild(refField);
+
         // Échelle des couleurs : automatique, valeurs prédéfinies, puis curseur
         // logarithmique de 2 mm à 30 cm pour un réglage fin.
         const presetActive = SCALE_PRESETS.find(p => Math.abs(p - this.colorScale) < 1e-6);
@@ -2243,7 +2384,7 @@ class FlatnessTool {
                 this.global.app.renderNextFrame = true;
             }
         }));
-        bandField.title = 'Les splats plus éloignés du plan de référence sont ignorés (objets posés, charpente, végétation…)';
+        bandField.title = 'Les splats plus éloignés du plan moyen sont ignorés (objets posés, charpente, végétation…)';
         tab.appendChild(bandField);
 
         // Lissage des tuiles (ou d'une tôle ondulée)
@@ -2376,6 +2517,50 @@ class FlatnessTool {
         return length < 1 ? `${Math.round(length * 100)} cm` : `${length} m`;
     }
 
+    // Plan de référence en toutes lettres : « plan moyen », « plan horizontal ».
+    private referenceName(): string {
+        switch (this.activeReference()) {
+            case 'horizontal': return 'plan horizontal';
+            case 'vertical': return 'plan vertical';
+            default: return 'plan moyen';
+        }
+    }
+
+    // Titre des écarts : « Écarts au plan moyen (tuiles lissées) ».
+    private deviationsTitle(): string {
+        return `Écarts au ${this.referenceName()}${this.waveWidth > 0 ? ' (tuiles lissées)' : ''}`;
+    }
+
+    private bumpText(): string {
+        return this.bumpTowards === 'up' ? 'Bosse = vers le haut' : 'Bosse = vers l\'observateur';
+    }
+
+    // Pente du plan moyen (sol, toiture) ou son faux aplomb (mur) :
+    // « 0,8 % · 8 mm/m » pour une faible pente, « 35,0° · 70 % » au-delà.
+    private slopeRow(): [string, string] | null {
+        const slope = this.fittedSlope();
+        if (!slope) return null;
+        const num = (v: number, digits: number) => v.toFixed(digits).replace('.', ',');
+        const pct = slope.ratio * 100;
+        const mmPerM = slope.ratio * 1000;
+        const value = slope.ratio < 0.2 ?
+            `${num(pct, pct < 1 ? 2 : 1)} % · ${num(mmPerM, mmPerM < 10 ? 1 : 0)} mm/m` :
+            `${num(slope.angle * 180 / Math.PI, 1)}° · ${num(pct, 0)} %`;
+        if (slope.kind === 'slope') return ['Pente du plan moyen', value];
+        // Sens du faux aplomb, sauf pour un mur d'aplomb au demi-millimètre par mètre près
+        let lean = '';
+        if (mmPerM >= 0.5) lean = slope.lean > 0 ? ', haut en arrière' : ', haut vers l\'observateur';
+        return ['Faux aplomb du plan moyen', value + lean];
+    }
+
+    // Hauteur du plan horizontal de référence dans le repère affiché.
+    private levelRow(): [string, string] | null {
+        if (this.activeReference() !== 'horizontal' || !this.planeOrigin) return null;
+        const coords = this.global.coords;
+        const level = coords.toDisplay(this.planeOrigin);
+        return ['Niveau de référence (médiane)', formatCoordsInline([level[2], 0, 0], coords.frameName, [coords.axisNames[2]])];
+    }
+
     // ── Exports ──
 
     // Résumé de l'analyse, partagé par l'image et le presse-papier.
@@ -2395,8 +2580,12 @@ class FlatnessTool {
             ['Date', new Date().toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })],
             ['Centre de la zone', formatCoordsInline(center, coords.frameName, coords.axisNames)],
             ['Surface', `${stats.area.toFixed(2).replace('.', ',')} m²`],
+            ['Plan de référence', this.referenceName()],
             ['Sens des écarts', this.bumpTowards === 'up' ? '+ = bosse vers le haut' : '+ = bosse vers l\'observateur']
         ];
+        for (const row of [this.slopeRow(), this.levelRow()]) {
+            if (row) zone.push(row);
+        }
 
         const deviations: [string, string][] = [
             ['Creux max', formatLength(stats.hollow, true)],
@@ -2434,7 +2623,7 @@ class FlatnessTool {
 
         return [
             { title: 'Zone', rows: zone },
-            { title: this.waveWidth > 0 ? 'Écarts au plan moyen (tuiles lissées)' : 'Écarts au plan moyen', rows: deviations },
+            { title: this.deviationsTitle(), rows: deviations },
             { title: 'Règle', rows: ruleRows },
             { title: 'Réglages et relevé', rows: settings }
         ];
@@ -2549,7 +2738,7 @@ class FlatnessTool {
         ctx.textAlign = 'left';
         ctx.fillStyle = '#71717a';
         const notes = [
-            this.bumpTowards === 'up' ? 'Bosse = vers le haut.' : 'Bosse = vers l\'observateur.',
+            `${this.deviationsTitle()}. ${this.bumpText()}.`,
             'Carte vue depuis le point de vue du calcul. Trait blanc : position la plus défavorable de la règle.'
         ];
         if (this.waveWidth > 0) notes.push(`Ondulation de ${formatLength(this.waveWidth)} lissée (tuiles).`);
