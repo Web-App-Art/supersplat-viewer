@@ -326,7 +326,7 @@ export function displayedLodInBox(global: Global, box: BoundingBox): LodUsage | 
 
 export type FinestResult =
     | { status: 'ok'; data: SplatCenters }
-    | { status: 'unsupported' | 'too-large' | 'failed' };
+    | { status: 'unsupported' | 'too-large' | 'failed' | 'cancelled' };
 
 /**
  * Centres des splats du niveau de détail le plus fin possible sur la zone
@@ -335,9 +335,10 @@ export type FinestResult =
  * @param {Global} global - Contexte du visualisateur.
  * @param {BoundingBox} box - Zone, repère monde.
  * @param {number} coarsest - Niveau affiché : un niveau aussi grossier n'apporte rien.
+ * @param {() => boolean} cancelled - Vrai si le résultat n'est plus attendu : on rend les fichiers sans attendre.
  * @returns {Promise<FinestResult>} Centres, ou la raison de l'échec.
  */
-export async function loadFinestCenters(global: Global, box: BoundingBox, coarsest: number): Promise<FinestResult> {
+export async function loadFinestCenters(global: Global, box: BoundingBox, coarsest: number, cancelled: () => boolean = () => false): Promise<FinestResult> {
     const found = findOctree(global);
     if (!found) return { status: 'unsupported' };
     const { entity, octree } = found;
@@ -380,6 +381,7 @@ export async function loadFinestCenters(global: Global, box: BoundingBox, coarse
         for (;;) {
             files.forEach(fi => octree.ensureFileResource(fi));
             if (files.every(fi => octree.getFileResource(fi)?.centers?.length > 0)) break;
+            if (cancelled()) return { status: 'cancelled' };
             const failed = files.some(fi => octree.assetLoader?.hasFailed?.(octree.files[fi]?.url));
             if (octree.destroyed || failed || performance.now() - start > FINEST_TIMEOUT) return { status: 'failed' };
             // Attente volontairement séquentielle : on sonde le chargement.

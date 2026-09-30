@@ -4,7 +4,7 @@ import { coordsForClipboard, formatCoordsInline } from './coordinates';
 import { getLocale, localize } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
-import type { LodUsage, SplatCenters } from './tool-utils';
+import type { FinestResult, LodUsage, SplatCenters } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -53,7 +53,9 @@ interface RuleOk {
     fleches: Float32Array;      // flèche de chaque position de la règle, triée
     cellSize: number;           // pas de la grille de la règle (m)
     noiseFloor: number;         // flèche que le bruit seul produirait (m)
-    start: PlanePoint;          // règle la plus défavorable
+    // Règle la plus défavorable : (u, v) sur le plan de référence, h au-dessus
+    // du plan moyen (voir rulePoint).
+    start: PlanePoint;
     end: PlanePoint;
     gapSurface: PlanePoint;     // surface sous la flèche maximale
     gapRule: PlanePoint;        // règle au-dessus
@@ -808,6 +810,9 @@ class FlatnessTool {
 
     private view: ViewSnapshot | null = null;
 
+    // Verticale du relevé dans le repère du moteur (voir verticalAxis).
+    private up = Vec3.UP.clone();
+
     // Modèle LOD : niveaux de détail analysés. 'finer' : zone trop grande
     // pour le niveau 0, on a chargé le plus fin possible ; 'loading' : mesure
     // provisoire sur le niveau affiché, un plus fin est en cours de
@@ -870,6 +875,9 @@ class FlatnessTool {
     // Splats retenus, dans le repère du plan : (u, v, écart) entrelacés.
     private keptPoints: Float64Array | null = null;
 
+    // Écart de chaque splat retenu au plan moyen, pour la règle.
+    private keptFit: Float64Array | null = null;
+
     private stats: FlatnessStats | null = null;
 
     private rule: RuleResult | null = null;
@@ -922,8 +930,11 @@ class FlatnessTool {
 
     private viewMapKey = '';
 
-    // Image de la carte, une case par pixel, et la carte qu'elle représente.
-    private viewTexture: HTMLCanvasElement | null = null;
+    // Images de la carte, une case par pixel, et la carte qu'elles représentent.
+    private viewTextures: { measured: HTMLCanvasElement; estimated: HTMLCanvasElement | null } | null = null;
+
+    // Calque des zones sans points, composé atténué sur la carte de la vue.
+    private estimatedLayer: HTMLCanvasElement | null = null;
 
     private viewTextureKey = '';
 
@@ -1117,6 +1128,7 @@ class FlatnessTool {
         this.rawSplatCount = 0;
         this.excludedSplatCount = 0;
         this.keptPoints = null;
+        this.keptFit = null;
         this.stats = null;
         this.rule = null;
         this.probe = null;
@@ -1193,7 +1205,9 @@ class FlatnessTool {
 
     // ── Analyse complète : zone, plan de référence, écarts ──
 
-    private analyze() {
+    // keepView : garder la caméra du calcul précédent (niveau fin arrivé après
+    // coup) ; la carte ne tourne pas si l'utilisateur a bougé entre-temps.
+    private analyze(keepView = false) {
         this.analyzedPoints = this.currentPoints.map(p => p.clone());
         this.gridData = null;
         this.gridGeom = null;
@@ -1203,13 +1217,16 @@ class FlatnessTool {
         this.rule = null;
         this.fittedPlane = null;
 
-        const camera = this.global.camera;
-        this.view = {
-            position: camera.getPosition().clone(),
-            right: camera.right.clone(),
-            up: camera.up.clone(),
-            forward: camera.forward.clone()
-        };
+        if (!keepView || !this.view) {
+            const camera = this.global.camera;
+            this.view = {
+                position: camera.getPosition().clone(),
+                right: camera.right.clone(),
+                up: camera.up.clone(),
+                forward: camera.forward.clone()
+            };
+        }
+        this.up = this.verticalAxis();
 
         const footprint = this.computeFootprintPlane();
         if (!footprint) return;
@@ -1245,6 +1262,8 @@ class FlatnessTool {
     private splatCenters(): SplatCenters | null {
         const box = this.zoneBox();
         const finest = this.finest;
+        // Un chargement en cours pour une zone précédente est abandonné
+        this.finestRequest++;
         if (finest && finest.box.containsPoint(box.getMin()) && finest.box.containsPoint(box.getMax())) {
             this.lod = { usage: finest.data.lod, status: finest.data.lod.min === 0 ? 'finest' : 'finer' };
             return finest.data;
@@ -1269,14 +1288,17 @@ class FlatnessTool {
     // un sommet ajusté de peu ne relance pas le chargement), puis refait
     // l'analyse.
     private requestFinest(box: BoundingBox, displayed: LodUsage) {
-        const request = ++this.finestRequest;
+        const request = this.finestRequest;
+        const cancelled = () => request !== this.finestRequest || this.state !== 'closed';
         const padded = new BoundingBox(box.center.clone(), box.halfExtents.clone().addScalar(FINEST_MARGIN));
-        loadFinestCenters(this.global, padded, displayed.min).then((result) => {
-            if (request !== this.finestRequest || this.state !== 'closed') return;
+        loadFinestCenters(this.global, padded, displayed.min, cancelled)
+        .catch((): FinestResult => ({ status: 'failed' }))
+        .then((result) => {
+            if (cancelled() || this.lod?.status !== 'loading') return;
             if (result.status === 'ok') {
                 this.finest = { box: padded, data: result.data };
-                this.analyze();
-            } else if (this.lod) {
+                this.analyze(true);
+            } else {
                 this.lod.status = result.status === 'too-large' ? 'too-large' : 'failed';
             }
             this.showPanel();
@@ -1284,12 +1306,26 @@ class FlatnessTool {
         });
     }
 
+    // Verticale du relevé : la direction de H, 3e axe du repère source
+    // (coordinates.ts). C'est Y pour les scènes du pipeline .lcc ; une scène
+    // qui déclare `coordinates.sourceFromWorld` dans son settings.json peut
+    // en avoir une autre. Un modèle non calé (Maison Nico : Z vers le haut,
+    // sans sourceFromWorld) donne une verticale fausse, ici comme dans
+    // l'outil Point.
+    private verticalAxis(): Vec3 {
+        const coords = this.global.coords;
+        if (typeof coords?.toSource !== 'function') return Vec3.UP.clone();
+        const h = (x: number, y: number, z: number) => coords.toSource(new Vec3(x, y, z))[2];
+        const up = new Vec3(h(1, 0, 0), h(0, 1, 0), h(0, 0, 1));
+        return up.length() > 1e-9 ? up.normalize() : Vec3.UP.clone();
+    }
+
     // Plans de référence qui ont un sens pour la zone, selon l'orientation du
     // plan moyen.
     private availableReferences(): ReferenceMode[] {
         const fit = this.fittedPlane;
         if (!fit) return ['mean'];
-        const tilt = Math.acos(Math.min(1, Math.abs(fit.normal.dot(Vec3.UP))));
+        const tilt = Math.acos(Math.min(1, Math.abs(fit.normal.dot(this.up))));
         if (tilt <= REFERENCE_MAX_TILT) return ['mean', 'horizontal'];
         if (tilt >= Math.PI / 2 - REFERENCE_MAX_TILT) return ['mean', 'vertical'];
         return ['mean'];
@@ -1309,10 +1345,10 @@ class FlatnessTool {
         const normal = fit.normal.clone();
         const mode = this.activeReference();
         if (mode === 'horizontal') {
-            normal.copy(Vec3.UP);
+            normal.copy(this.up);
         } else if (mode === 'vertical') {
-            const up = normal.dot(Vec3.UP);
-            normal.sub(Vec3.UP.clone().mulScalar(up)).normalize();
+            const up = normal.dot(this.up);
+            normal.sub(this.up.clone().mulScalar(up)).normalize();
         }
         this.setPlane({ origin: fit.origin.clone(), normal });
     }
@@ -1324,7 +1360,7 @@ class FlatnessTool {
     private fittedSlope(): { kind: 'slope' | 'plumb'; ratio: number; angle: number; lean: number } | null {
         const fit = this.fittedPlane;
         if (!fit) return null;
-        const up = fit.normal.dot(Vec3.UP);
+        const up = fit.normal.dot(this.up);
         const cos = Math.min(1, Math.abs(up));
         const sin = Math.sqrt(1 - cos * cos);
         if (this.bumpTowards === 'up') {
@@ -1364,7 +1400,7 @@ class FlatnessTool {
     // + = bosse : vers le haut pour une surface peu pentue, vers l'observateur sinon.
     private orientNormal(plane: Plane) {
         const N = plane.normal;
-        const up = N.dot(Vec3.UP);
+        const up = N.dot(this.up);
         if (Math.abs(up) >= UP_MIN_COS) {
             if (up < 0) N.mulScalar(-1);
             this.bumpTowards = 'up';
@@ -1394,7 +1430,7 @@ class FlatnessTool {
         // caméra est presque selon la normale, sa projection ne donne plus de
         // direction fiable. On prend l'horizontale de la surface, dans le
         // sens de la droite de la caméra.
-        const horizontal = new Vec3().cross(Vec3.UP, N);
+        const horizontal = new Vec3().cross(this.up, N);
         if (uLen < 0.5 && horizontal.length() > 0.1) {
             U.copy(horizontal.normalize());
             if (U.dot(camRight) < 0) U.mulScalar(-1);
@@ -1582,8 +1618,8 @@ class FlatnessTool {
 
         const pts = this.candidates;
         const mode = this.activeReference();
-        // Horizontal ou vertical : le plan est recalé plus bas sur la médiane.
-        if (mode !== 'mean') this.planeOrigin = fit.origin.clone();
+        // Le plan peut être recalé plus bas sur la médiane des écarts.
+        this.planeOrigin = fit.origin.clone();
         const O = this.planeOrigin;
         const N = this.planeNormal;
         const U = this.planeU;
@@ -1638,10 +1674,12 @@ class FlatnessTool {
         if (kept.length === 0) return;
 
         this.keptPoints = new Float64Array(kept.length * 3);
+        this.keptFit = new Float64Array(kept.length);
         kept.forEach((s, k) => {
             this.keptPoints[k * 3] = s.pu;
             this.keptPoints[k * 3 + 1] = s.pv;
             this.keptPoints[k * 3 + 2] = s.dist;
+            this.keptFit[k] = s.fit;
         });
 
         // Adaptive resolution with aspect ratio: target ~3 splats per cell
@@ -1656,14 +1694,21 @@ class FlatnessTool {
         const du = uRange / resX, dv = vRange / resY;
         this.gridGeom = { uMin, vMin, du, dv };
 
-        // Bucket into grid
+        // Bucket into grid. Écarts au plan moyen à part, pour le bruit : sur
+        // un sol en pente mesuré au plan horizontal, la pente à l'intérieur
+        // d'une case ne doit pas compter comme du bruit.
         const gridValues: number[][] = new Array(resX * resY);
-        for (let k = 0; k < resX * resY; k++) gridValues[k] = [];
+        const gridFit: number[][] = new Array(resX * resY);
+        for (let k = 0; k < resX * resY; k++) {
+            gridValues[k] = [];
+            gridFit[k] = [];
+        }
 
         for (const s of kept) {
             const gi = Math.min(Math.floor((s.pu - uMin) / uRange * resX), resX - 1);
             const gj = Math.min(Math.floor((s.pv - vMin) / vRange * resY), resY - 1);
             gridValues[gj * resX + gi].push(s.dist);
+            gridFit[gj * resX + gi].push(s.fit);
         }
 
         // Build raw grid with MEDIAN signed deviation per cell, and the noise:
@@ -1682,32 +1727,17 @@ class FlatnessTool {
                 }
                 row.push(median(vals));
                 if (vals.length >= 2) {
+                    const fits = gridFit[j * resX + i];
                     let mean = 0;
-                    for (const v of vals) mean += v;
-                    mean /= vals.length;
-                    const correction = Math.sqrt(vals.length / (vals.length - 1));
-                    for (const v of vals) residuals.push((v - mean) * correction);
+                    for (const v of fits) mean += v;
+                    mean /= fits.length;
+                    const correction = Math.sqrt(fits.length / (fits.length - 1));
+                    for (const v of fits) residuals.push((v - mean) * correction);
                 }
             }
             rawGrid.push(row);
         }
         const noise = 1.4826 * median(subsample(residuals, NOISE_SAMPLE).map(r => Math.abs(r)));
-
-        // Horizontal ou vertical : le plan passe par la médiane des cases, pour
-        // que chaque partie de la zone compte selon sa surface et non selon sa
-        // densité de points.
-        if (mode !== 'mean') {
-            const values: number[] = [];
-            for (const row of rawGrid) {
-                for (const v of row) if (v !== null) values.push(v);
-            }
-            const offset = median(values);
-            for (const row of rawGrid) {
-                for (let i = 0; i < resX; i++) if (row[i] !== null) row[i] -= offset;
-            }
-            for (let k = 2; k < this.keptPoints.length; k += 3) this.keptPoints[k] -= offset;
-            O.add(N.clone().mulScalar(offset));
-        }
 
         const spikeCells = this.removeSpikes(rawGrid, resX, resY);
 
@@ -1718,6 +1748,25 @@ class FlatnessTool {
             if (sigma / Math.max(du, dv) >= WAVE_MIN_SIGMA_CELLS) {
                 grid = smoothGrid(rawGrid, resX, resY, sigma / du, sigma / dv);
             }
+        }
+
+        // Le plan passe par la médiane des cases (chaque partie de la zone
+        // compte selon sa surface, pas selon sa densité de points) :
+        // - horizontal ou vertical ;
+        // - tuiles lissées : sur des tuiles canal, le plan moyen s'accroche au
+        //   creux des tuiles, la carte lissée sortait toute du côté bosse.
+        // La règle, insensible à ce décalage, n'en dépend pas.
+        if (mode !== 'mean' || grid !== rawGrid) {
+            const values: number[] = [];
+            for (const row of grid) {
+                for (const v of row) if (v !== null) values.push(v);
+            }
+            const offset = median(values);
+            for (const row of grid) {
+                for (let i = 0; i < resX; i++) if (row[i] !== null) row[i] -= offset;
+            }
+            for (let k = 2; k < this.keptPoints.length; k += 3) this.keptPoints[k] -= offset;
+            O.add(N.clone().mulScalar(offset));
         }
 
         // Build inside mask
@@ -1751,11 +1800,14 @@ class FlatnessTool {
             sumSq += v * v;
         }
 
-        let area = 0;
-        for (let i = 0; i < polyUV.length; i++) {
-            const a = polyUV[i], b = polyUV[(i + 1) % polyUV.length];
-            area += a.u * b.v - b.u * a.v;
+        // Surface de la zone projetée sur le plan moyen : la même quel que soit
+        // le plan de référence.
+        const areaVec = new Vec3();
+        const pts3 = this.currentPoints;
+        for (let i = 0; i < pts3.length; i++) {
+            areaVec.add(new Vec3().cross(pts3[i], pts3[(i + 1) % pts3.length]));
         }
+        const area = areaVec.dot(Nf);
 
         this.stats = {
             hollow: Math.min(0, hollow),
@@ -1984,10 +2036,15 @@ class FlatnessTool {
     // le vide, ne compte pas : il doublait la hauteur d'une bosse étroite.
     // Une position n'est retenue que si la règle porte sur des points à ses
     // deux bouts et sur au moins 70 % de sa longueur.
+    // Une règle réelle se pose sur la surface : sa flèche ne dépend pas du
+    // plan de référence. Elle est calculée sur les écarts au plan moyen. Sur
+    // un sol plan en pente de 8 %, les écarts au plan horizontal donnaient
+    // une flèche de 6,9 mm au lieu de 2,2 : chaque case de la grille faisait
+    // une marche de pente × taille de case.
 
     private computeRule() {
         this.rule = null;
-        const pts = this.keptPoints, poly = this.polyUV, stats = this.stats;
+        const pts = this.keptPoints, fit = this.keptFit, poly = this.polyUV, stats = this.stats;
         if (!pts || !poly || !stats) return;
 
         let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
@@ -2020,7 +2077,7 @@ class FlatnessTool {
         for (let k = 0; k < pts.length; k += 3) {
             const gi = Math.min(resX - 1, Math.floor((pts[k] - uMin) / cell));
             const gj = Math.min(resY - 1, Math.floor((pts[k + 1] - vMin) / cell));
-            buckets[gj * resX + gi].push(pts[k + 2]);
+            buckets[gj * resX + gi].push(fit[k / 3]);
         }
         let grid: (number | null)[][] = [];
         let filled = 0, filledPoints = 0;
@@ -2266,6 +2323,9 @@ class FlatnessTool {
             this.panel = null;
             this.heatmapCanvas = null;
             this.probeMarker = null;
+            // La carte disparaît sans « pointerleave » : le survol ne doit pas
+            // rester attaché au panneau.
+            if (this.probe?.from === 'map') this.probe = null;
             this.banner = null;
             this.ruleResults = null;
         }
@@ -3129,6 +3189,12 @@ class FlatnessTool {
         return p;
     }
 
+    // Point de la règle dans le monde : (u, v) sur le plan de référence, h
+    // au-dessus du plan moyen.
+    private rulePoint(p: PlanePoint): Vec3 {
+        return this.surfacePoint(p.u, p.v).add(this.fittedPlane.normal.clone().mulScalar(p.h));
+    }
+
     // Position (u, v) sur le plan de référence d'un point du plan moyen.
     private planePosition(p: Vec3): { u: number; v: number } {
         const d = new Vec3().sub2(p, this.planeOrigin);
@@ -3198,34 +3264,44 @@ class FlatnessTool {
         (marker.firstElementChild as HTMLElement).textContent = text;
     }
 
-    // Image de la carte pour la vue, une case par pixel : couleurs pleines
-    // pour les cases mesurées, atténuées pour les zones sans points.
-    private getViewTexture(): HTMLCanvasElement {
+    // Images de la carte pour la vue, une case par pixel, opaques : les cases
+    // mesurées d'un côté, les zones sans points (hachurées dans le panneau)
+    // de l'autre, atténuées d'un bloc au moment de les composer. Des cases
+    // semi-transparentes montraient le découpage en triangles, dont les
+    // bords se recouvrent.
+    private getViewTextures(): { measured: HTMLCanvasElement; estimated: HTMLCanvasElement | null } {
         const key = `${this.mapVersion}:${this.colorScale}`;
-        if (this.viewTexture && this.viewTextureKey === key) return this.viewTexture;
+        if (this.viewTextures && this.viewTextureKey === key) return this.viewTextures;
         const data = this.gridData;
-        const texture = this.viewTexture ?? document.createElement('canvas');
-        texture.width = data.resX;
-        texture.height = data.resY;
-        const ctx = texture.getContext('2d');
-        const image = ctx.createImageData(data.resX, data.resY);
-        const px = image.data;
-        for (let j = 0; j < data.resY; j++) {
-            for (let i = 0; i < data.resX; i++) {
-                const value = data.grid[j][i];
-                if (value === null) continue;
-                const c = this.deviationToColor(value);
-                const k = (j * data.resX + i) * 4;
-                px[k] = c.r;
-                px[k + 1] = c.g;
-                px[k + 2] = c.b;
-                px[k + 3] = data.hatched[j][i] ? Math.round(255 * VIEW_ESTIMATED_ALPHA) : 255;
+        const paint = (keep: (i: number, j: number) => boolean): [HTMLCanvasElement, boolean] => {
+            const texture = document.createElement('canvas');
+            texture.width = data.resX;
+            texture.height = data.resY;
+            const ctx = texture.getContext('2d');
+            const image = ctx.createImageData(data.resX, data.resY);
+            const px = image.data;
+            let any = false;
+            for (let j = 0; j < data.resY; j++) {
+                for (let i = 0; i < data.resX; i++) {
+                    const value = data.grid[j][i];
+                    if (value === null || !keep(i, j)) continue;
+                    const c = this.deviationToColor(value);
+                    const k = (j * data.resX + i) * 4;
+                    px[k] = c.r;
+                    px[k + 1] = c.g;
+                    px[k + 2] = c.b;
+                    px[k + 3] = 255;
+                    any = true;
+                }
             }
-        }
-        ctx.putImageData(image, 0, 0);
-        this.viewTexture = texture;
+            ctx.putImageData(image, 0, 0);
+            return [texture, any];
+        };
+        const [measured] = paint((i, j) => !data.hatched[j][i]);
+        const [estimated, anyEstimated] = paint((i, j) => data.hatched[j][i]);
+        this.viewTextures = { measured, estimated: anyEstimated ? estimated : null };
         this.viewTextureKey = key;
-        return texture;
+        return this.viewTextures;
     }
 
     private viewMapVisible(): boolean {
@@ -3263,7 +3339,7 @@ class FlatnessTool {
         if (!visible) return;
 
         const data = this.gridData, geo = this.gridGeom;
-        const texture = this.getViewTexture();
+        const textures = this.getViewTextures();
         const P = Math.min(VIEW_MAP_PATCHES, data.resX);
         const Q = Math.min(VIEW_MAP_PATCHES, data.resY);
 
@@ -3278,19 +3354,34 @@ class FlatnessTool {
             }
         }
 
-        ctx.imageSmoothingEnabled = false;
-        for (let j = 0; j < Q; j++) {
-            for (let i = 0; i < P; i++) {
-                const c00 = corners[j * (P + 1) + i], c10 = corners[j * (P + 1) + i + 1];
-                const c01 = corners[(j + 1) * (P + 1) + i], c11 = corners[(j + 1) * (P + 1) + i + 1];
-                if (!c00 || !c10 || !c01 || !c11) continue;
-                const t00 = { x: i / P * data.resX, y: j / Q * data.resY };
-                const t10 = { x: (i + 1) / P * data.resX, y: t00.y };
-                const t01 = { x: t00.x, y: (j + 1) / Q * data.resY };
-                const t11 = { x: t10.x, y: t01.y };
-                drawImageTriangle(ctx, texture, data.resX, data.resY, [t00, t10, t11], [c00, c10, c11], dpr);
-                drawImageTriangle(ctx, texture, data.resX, data.resY, [t00, t11, t01], [c00, c11, c01], dpr);
+        const drawPatches = (target: CanvasRenderingContext2D, texture: HTMLCanvasElement) => {
+            target.imageSmoothingEnabled = false;
+            for (let j = 0; j < Q; j++) {
+                for (let i = 0; i < P; i++) {
+                    const c00 = corners[j * (P + 1) + i], c10 = corners[j * (P + 1) + i + 1];
+                    const c01 = corners[(j + 1) * (P + 1) + i], c11 = corners[(j + 1) * (P + 1) + i + 1];
+                    if (!c00 || !c10 || !c01 || !c11) continue;
+                    const t00 = { x: i / P * data.resX, y: j / Q * data.resY };
+                    const t10 = { x: (i + 1) / P * data.resX, y: t00.y };
+                    const t01 = { x: t00.x, y: (j + 1) / Q * data.resY };
+                    const t11 = { x: t10.x, y: t01.y };
+                    drawImageTriangle(target, texture, data.resX, data.resY, [t00, t10, t11], [c00, c10, c11], dpr);
+                    drawImageTriangle(target, texture, data.resX, data.resY, [t00, t11, t01], [c00, c11, c01], dpr);
+                }
             }
+        };
+
+        drawPatches(ctx, textures.measured);
+        if (textures.estimated) {
+            const layer = this.estimatedLayer ?? document.createElement('canvas');
+            this.estimatedLayer = layer;
+            layer.width = canvas.width;
+            layer.height = canvas.height;
+            const layerCtx = layer.getContext('2d');
+            drawPatches(layerCtx, textures.estimated);
+            ctx.globalAlpha = VIEW_ESTIMATED_ALPHA;
+            ctx.drawImage(layer, 0, 0);
+            ctx.globalAlpha = 1;
         }
     }
 
@@ -3363,10 +3454,10 @@ class FlatnessTool {
         if (this.recomputeTimer) return;
 
         const camera = this.global.camera;
-        const a = worldToScreen(camera, this.toWorld(rule.start));
-        const b = worldToScreen(camera, this.toWorld(rule.end));
-        const gs = worldToScreen(camera, this.toWorld(rule.gapSurface));
-        const gr = worldToScreen(camera, this.toWorld(rule.gapRule));
+        const a = worldToScreen(camera, this.rulePoint(rule.start));
+        const b = worldToScreen(camera, this.rulePoint(rule.end));
+        const gs = worldToScreen(camera, this.rulePoint(rule.gapSurface));
+        const gr = worldToScreen(camera, this.rulePoint(rule.gapRule));
         if (a.behind || b.behind || gs.behind || gr.behind) return;
 
         ctx.lineCap = 'round';
