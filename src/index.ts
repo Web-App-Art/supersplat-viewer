@@ -294,6 +294,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         flatnessMeasureMode: false,
         volumeMeasureMode: false,
         pointMode: false,
+        sectionMode: false,
         isFullscreen: false,
         controlsHidden: false,
         showAnnotations: localStorage.getItem('showAnnotations') !== 'false',

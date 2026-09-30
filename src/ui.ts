@@ -264,6 +264,7 @@ const initUI = (global: Global) => {
         'flatnessMeasure',
         'volumeMeasure',
         'pointXYZ',
+        'section',
         'contentMode',
         'floorplan',
         'tooltip',
@@ -763,13 +764,14 @@ const initUI = (global: Global) => {
     // referme avant que le nouveau s'ouvre : chacun rend le curseur qu'il a
     // trouvé en s'ouvrant.
     type ToolMode = 'measureMode' | 'areaMeasureMode' | 'flatnessMeasureMode' | 'volumeMeasureMode' |
-        'pointMode' | 'floorplanMode';
+        'pointMode' | 'sectionMode' | 'floorplanMode';
     const toolButtons: [ToolMode, HTMLElement][] = [
         ['measureMode', dom.measure],
         ['areaMeasureMode', dom.areaMeasure],
         ['flatnessMeasureMode', dom.flatnessMeasure],
         ['volumeMeasureMode', dom.volumeMeasure],
         ['pointMode', dom.pointXYZ],
+        ['sectionMode', dom.section],
         ['floorplanMode', dom.floorplan]
     ];
     for (const [mode, button] of toolButtons) {
@@ -850,6 +852,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.flatnessMeasure, localize('tooltip.artlight-flatness'), 'top');
     tooltip.register(dom.volumeMeasure, localize('tooltip.artlight-volume'), 'top');
     tooltip.register(dom.pointXYZ, localize('tooltip.artlight-point'), 'top');
+    tooltip.register(dom.section, localize('tooltip.artlight-section'), 'top');
     tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
     tooltip.register(dom.floorplan, localize('tooltip.artlight-floorplan'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');

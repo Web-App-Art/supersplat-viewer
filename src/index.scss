@@ -259,6 +259,7 @@ button {
             &#measure.active,
             &#areaMeasure.active,
             &#flatnessMeasure.active,
+            &#section.active,
             &#pointXYZ.active {
                 color: $clr-text;
                 background-color: $clr-accent;
@@ -952,7 +953,8 @@ button {
 
 /* Flatness measure tool */
 
-#flatnessMeasureOverlay {
+#flatnessMeasureOverlay,
+#sectionOverlay {
     position: fixed;
     top: 0;
     left: 0;
@@ -1230,6 +1232,11 @@ $tool-warning: #fbbf24;
         font-size: 13px;
         font-weight: 600;
         text-align: left;
+    }
+
+    &:disabled {
+        opacity: 0.45;
+        cursor: default;
     }
 }
 
@@ -1538,6 +1545,195 @@ $tool-warning: #fbbf24;
 
     .tool-note {
         margin-top: 3px;
+    }
+}
+
+/* ARTLIGHT (TKT-238) : outil « Coupe » */
+
+// Sélecteur du type de coupe dans l'aide en haut de l'écran
+.tool-hint .section-hint-modes {
+    flex: none;
+
+    .tool-seg-btn {
+        padding: 4px 10px;
+    }
+}
+
+// Panneau en bas de l'écran, au-dessus de la barre d'outils : réglages à
+// gauche, profil à droite.
+#sectionPanel.section-dock {
+    top: auto;
+    left: max(16px, env(safe-area-inset-left));
+    right: max(16px, env(safe-area-inset-right));
+    bottom: 64px;
+    width: auto;
+    height: min(42vh, 460px);
+    max-height: none;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 10px 14px 12px;
+
+    &.large {
+        height: calc(100vh - 64px - 76px);
+    }
+
+    &.collapsed {
+        height: auto;
+    }
+
+    .tool-header {
+        flex: none;
+    }
+
+    .section-summary {
+        flex: 1;
+        min-width: 0;
+        margin: 0 8px;
+        overflow: hidden;
+        font-size: 12px;
+        color: $tool-text-muted;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .section-body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        gap: 16px;
+        margin-top: 10px;
+    }
+
+    .section-side {
+        flex: none;
+        width: 280px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding-right: 6px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+
+        .tool-switch-row {
+            margin-top: 10px;
+        }
+
+        .tool-seg-btn {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
+    .section-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .section-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+    }
+
+    .section-export {
+        margin-top: 12px;
+    }
+
+    .section-results {
+        margin-top: 12px;
+
+        .tool-info {
+            margin-top: 8px;
+        }
+    }
+}
+
+// Petit écran : le profil au-dessus, les réglages en dessous, le tout défile.
+@media (max-width: 720px) {
+    #sectionPanel.section-dock {
+        height: 62vh;
+
+        .section-body {
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .section-main {
+            flex: none;
+            height: 300px;
+        }
+
+        .section-side {
+            width: auto;
+            overflow: visible;
+        }
+    }
+}
+
+.section-profile-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.section-profile {
+    // Annule la règle globale « canvas » (plein écran), prévue pour le
+    // canvas 3D.
+    position: absolute;
+    top: 0;
+    left: 0;
+    opacity: 1;
+    display: block;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.section-bar {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+
+    .section-bar-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .section-bar-label {
+        font-size: 12px;
+        color: $tool-text-muted;
+    }
+
+    .tool-seg-btn {
+        padding: 4px 8px;
+    }
+}
+
+.section-readout {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 24px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: $tool-text-muted;
+    font-variant-numeric: tabular-nums;
+
+    .measure {
+        color: #fbbf24;
+        font-weight: 600;
     }
 }
 

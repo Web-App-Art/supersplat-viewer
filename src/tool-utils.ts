@@ -14,7 +14,8 @@ export function isToolActive(state: State): boolean {
         state.flatnessMeasureMode ||
         state.volumeMeasureMode ||
         state.pointMode ||
-        state.floorplanMode;
+        state.floorplanMode ||
+        state.sectionMode;
 }
 
 // ── Calculs sur le nuage, partagés par la planéité et la coupe ──
@@ -351,6 +352,25 @@ const FINEST_MAX_FILES = 16;
 const FINEST_TIMEOUT = 60000;
 const FINEST_POLL = 50;
 
+// Boîte orientée (repère monde) : axes unitaires orthogonaux, demi-dimensions
+// selon chaque axe.
+export type OrientedBox = {
+    center: Vec3;
+    axes: [Vec3, Vec3, Vec3];
+    half: [number, number, number];
+};
+
+// Boîte alignée sur les axes qui contient une boîte orientée.
+export const orientedBoxAabb = (obb: OrientedBox): BoundingBox => {
+    const half = new Vec3();
+    obb.axes.forEach((axis, a) => {
+        half.x += Math.abs(axis.x) * obb.half[a];
+        half.y += Math.abs(axis.y) * obb.half[a];
+        half.z += Math.abs(axis.z) * obb.half[a];
+    });
+    return new BoundingBox(obb.center.clone(), half);
+};
+
 // Octree du modèle affiché et entité qui le porte, null pour un modèle simple.
 const findOctree = (global: Global): { entity: Entity; octree: any } | null => {
     const entity = global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
@@ -360,17 +380,43 @@ const findOctree = (global: Global): { entity: Entity; octree: any } | null => {
 };
 
 // Nœuds de l'octree dont la boîte (repère local du modèle) touche `box` (monde).
-const nodesInBox = (entity: Entity, octree: any, box: BoundingBox): number[] => {
+// ARTLIGHT (TKT-238) : `obb`, facultative, resserre la sélection aux nœuds qui
+// touchent une boîte orientée (la tranche fine et longue d'une coupe, dont la
+// boîte alignée sur les axes peut couvrir tout un bâtiment). Test des axes de
+// la boîte orientée seulement : quelques nœuds de trop, jamais un de moins.
+const nodesInBox = (entity: Entity, octree: any, box: BoundingBox, obb?: OrientedBox): number[] => {
     const local = new BoundingBox();
     local.setFromTransformedAabb(box, new Mat4().copy(entity.getWorldTransform()).invert());
     const mn = local.getMin(), mx = local.getMax();
     const b = octree.nodeBoundsMinMax as Float32Array;
+    const m = entity.getWorldTransform().data;
+    const corner = new Vec3();
     const out: number[] = [];
     for (let i = 0; i < octree.nodes.length; i++) {
         const k = i * 6;
-        if (b[k] <= mx.x && b[k + 3] >= mn.x && b[k + 1] <= mx.y && b[k + 4] >= mn.y && b[k + 2] <= mx.z && b[k + 5] >= mn.z) {
-            out.push(i);
+        if (!(b[k] <= mx.x && b[k + 3] >= mn.x && b[k + 1] <= mx.y && b[k + 4] >= mn.y && b[k + 2] <= mx.z && b[k + 5] >= mn.z)) continue;
+        if (obb) {
+            let separated = false;
+            for (let a = 0; a < 3 && !separated; a++) {
+                const axis = obb.axes[a];
+                const c = obb.center.dot(axis);
+                let lo = Infinity, hi = -Infinity;
+                for (let q = 0; q < 8; q++) {
+                    const x = b[k + (q & 1 ? 3 : 0)], y = b[k + 1 + (q & 2 ? 3 : 0)], z = b[k + 2 + (q & 4 ? 3 : 0)];
+                    corner.set(
+                        m[0] * x + m[4] * y + m[8] * z + m[12],
+                        m[1] * x + m[5] * y + m[9] * z + m[13],
+                        m[2] * x + m[6] * y + m[10] * z + m[14]
+                    );
+                    const d = corner.dot(axis);
+                    if (d < lo) lo = d;
+                    if (d > hi) hi = d;
+                }
+                separated = hi < c - obb.half[a] || lo > c + obb.half[a];
+            }
+            if (separated) continue;
         }
+        out.push(i);
     }
     return out;
 };
@@ -380,9 +426,10 @@ const nodesInBox = (entity: Entity, octree: any, box: BoundingBox): number[] => 
  *
  * @param {Global} global - Contexte du visualisateur.
  * @param {BoundingBox} box - Zone, repère monde.
+ * @param {OrientedBox} [obb] - Boîte orientée incluse dans `box` : seuls les nœuds qui la touchent comptent.
  * @returns {LodUsage | null} null pour un modèle simple ou si l'octree n'est pas lisible.
  */
-export function displayedLodInBox(global: Global, box: BoundingBox): LodUsage | null {
+export function displayedLodInBox(global: Global, box: BoundingBox, obb?: OrientedBox): LodUsage | null {
     const found = findOctree(global);
     if (!found) return null;
     const { entity, octree } = found;
@@ -398,7 +445,7 @@ export function displayedLodInBox(global: Global, box: BoundingBox): LodUsage | 
     if (!instance?.nodeInfos) return null;
 
     const usage: LodUsage = { min: Infinity, max: -1, levels: octree.lodLevels };
-    for (const n of nodesInBox(entity, octree, box)) {
+    for (const n of nodesInBox(entity, octree, box, obb)) {
         const lod = instance.nodeInfos[n]?.currentLod;
         if (typeof lod !== 'number' || lod < 0) continue;
         usage.min = Math.min(usage.min, lod);
@@ -419,9 +466,10 @@ export type FinestResult =
  * @param {BoundingBox} box - Zone, repère monde.
  * @param {number} coarsest - Niveau affiché : un niveau aussi grossier n'apporte rien.
  * @param {() => boolean} cancelled - Vrai si le résultat n'est plus attendu : on rend les fichiers sans attendre.
+ * @param {OrientedBox} [obb] - Boîte orientée incluse dans `box` : seuls les nœuds qui la touchent sont lus.
  * @returns {Promise<FinestResult>} Centres, ou la raison de l'échec.
  */
-export async function loadFinestCenters(global: Global, box: BoundingBox, coarsest: number, cancelled: () => boolean = () => false): Promise<FinestResult> {
+export async function loadFinestCenters(global: Global, box: BoundingBox, coarsest: number, cancelled: () => boolean = () => false, obb?: OrientedBox): Promise<FinestResult> {
     const found = findOctree(global);
     if (!found) return { status: 'unsupported' };
     const { entity, octree } = found;
@@ -432,7 +480,7 @@ export async function loadFinestCenters(global: Global, box: BoundingBox, coarse
 
     // Plages de splats à lire, par fichier : pour chaque nœud, son premier
     // niveau disponible à partir de `level`.
-    const nodes = nodesInBox(entity, octree, box);
+    const nodes = nodesInBox(entity, octree, box, obb);
     const collect = (level: number) => {
         const ranges = new Map<number, [number, number][]>();
         const usage: LodUsage = { min: Infinity, max: -1, levels: octree.lodLevels };

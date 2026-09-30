@@ -48,6 +48,28 @@ fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
 }
 `;
 
+// `setParameter` ne redemande la recopie que du placement principal. En LOD,
+// chaque fichier chargé a son propre placement (qui hérite des paramètres) :
+// on les marque aussi, sinon la surbrillance ne suivrait pas sur les scènes
+// streamées.
+const markPlacementsDirty = (global: Global) => {
+    const director = (global.app as any).renderer?.gsplatDirector;
+    if (director) {
+        for (const cameraData of director.camerasMap.values()) {
+            for (const layerData of cameraData.layersMap.values()) {
+                const octreeInstances = layerData.gsplatManager?.world?._octreeInstances;
+                if (!octreeInstances) continue;
+                for (const octreeInstance of octreeInstances.values()) {
+                    for (const placement of octreeInstance.activePlacements) {
+                        placement.renderDirty = true;
+                    }
+                }
+            }
+        }
+    }
+    global.app.renderNextFrame = true;
+};
+
 class SplatBoxHighlight {
     private global: Global;
 
@@ -91,27 +113,102 @@ class SplatBoxHighlight {
         this.markDirty();
     }
 
-    // `setParameter` ne redemande la recopie que du placement principal. En
-    // LOD, chaque fichier chargé a son propre placement (qui hérite des
-    // paramètres) : on les marque aussi, sinon la surbrillance ne suivrait pas
-    // la boîte sur les scènes streamées.
     private markDirty() {
-        const director = (this.global.app as any).renderer?.gsplatDirector;
-        if (director) {
-            for (const cameraData of director.camerasMap.values()) {
-                for (const layerData of cameraData.layersMap.values()) {
-                    const octreeInstances = layerData.gsplatManager?.world?._octreeInstances;
-                    if (!octreeInstances) continue;
-                    for (const octreeInstance of octreeInstances.values()) {
-                        for (const placement of octreeInstance.activePlacements) {
-                            placement.renderDirty = true;
-                        }
-                    }
-                }
-            }
-        }
-        this.global.app.renderNextFrame = true;
+        markPlacementsDirty(this.global);
     }
 }
 
-export { SplatBoxHighlight };
+// ARTLIGHT (TKT-238) : coupe. Les splats du côté avant du plan (au-delà de la
+// demi-épaisseur, côté normale) sont masqués ; ceux de la tranche, limitée
+// par les demi-dimensions sur les axes X et Y du plan, sont teintés.
+const SECTION_GLSL = `
+uniform vec3 uSecCenter;
+uniform vec3 uSecAxisX;
+uniform vec3 uSecAxisY;
+uniform vec3 uSecNormal;
+uniform vec3 uSecHalf;
+uniform float uSecClip;
+void modifySplatCenter(inout vec3 center) {
+}
+void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
+}
+void modifySplatColor(vec3 center, inout vec4 color) {
+    vec3 d = center - uSecCenter;
+    float n = dot(d, uSecNormal);
+    if (uSecClip > 0.5 && n > uSecHalf.z) {
+        color.a = 0.0;
+    } else if (abs(n) <= uSecHalf.z && abs(dot(d, uSecAxisX)) <= uSecHalf.x && abs(dot(d, uSecAxisY)) <= uSecHalf.y) {
+        color.rgb = mix(color.rgb, vec3(${TINT}), ${TINT_AMOUNT});
+    }
+}
+`;
+
+const SECTION_WGSL = `
+uniform uSecCenter: vec3f;
+uniform uSecAxisX: vec3f;
+uniform uSecAxisY: vec3f;
+uniform uSecNormal: vec3f;
+uniform uSecHalf: vec3f;
+uniform uSecClip: f32;
+fn modifySplatCenter(center: ptr<function, vec3f>) {
+}
+fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
+}
+fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
+    let d = center - uniform.uSecCenter;
+    let n = dot(d, uniform.uSecNormal);
+    if (uniform.uSecClip > 0.5 && n > uniform.uSecHalf.z) {
+        *color = vec4f((*color).rgb, 0.0);
+    } else if (abs(n) <= uniform.uSecHalf.z && abs(dot(d, uniform.uSecAxisX)) <= uniform.uSecHalf.x && abs(dot(d, uniform.uSecAxisY)) <= uniform.uSecHalf.y) {
+        *color = vec4f(mix((*color).rgb, vec3f(${TINT}), ${TINT_AMOUNT}), (*color).a);
+    }
+}
+`;
+
+const SECTION_PARAMS = ['uSecCenter', 'uSecAxisX', 'uSecAxisY', 'uSecNormal', 'uSecHalf', 'uSecClip'];
+
+class SplatSectionHighlight {
+    private global: Global;
+
+    private component: GSplatComponent | null = null;
+
+    constructor(global: Global) {
+        this.global = global;
+    }
+
+    // Tranche centrée sur `center`, de normale `normal` (côté masqué si
+    // `clip`), bornée à ±halfX sur axisX et ±halfY sur axisY.
+    set(center: Vec3, axisX: Vec3, axisY: Vec3, normal: Vec3, halfX: number, halfY: number, halfThickness: number, clip: boolean) {
+        const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+        const comp = (entity as any)?.gsplat as GSplatComponent | undefined;
+        if (!comp) return;
+
+        if (comp !== this.component) {
+            this.clear();
+            comp.setWorkBufferModifier({ glsl: SECTION_GLSL, wgsl: SECTION_WGSL });
+            this.component = comp;
+        }
+
+        comp.setParameter('uSecCenter', new Float32Array([center.x, center.y, center.z]));
+        comp.setParameter('uSecAxisX', new Float32Array([axisX.x, axisX.y, axisX.z]));
+        comp.setParameter('uSecAxisY', new Float32Array([axisY.x, axisY.y, axisY.z]));
+        comp.setParameter('uSecNormal', new Float32Array([normal.x, normal.y, normal.z]));
+        comp.setParameter('uSecHalf', new Float32Array([halfX, halfY, halfThickness]));
+        comp.setParameter('uSecClip', clip ? 1 : 0);
+        markPlacementsDirty(this.global);
+    }
+
+    clear() {
+        const comp = this.component;
+        if (!comp) return;
+        this.component = null;
+
+        comp.setWorkBufferModifier(null);
+        for (const name of SECTION_PARAMS) {
+            comp.deleteParameter(name);
+        }
+        markPlacementsDirty(this.global);
+    }
+}
+
+export { SplatBoxHighlight, SplatSectionHighlight };

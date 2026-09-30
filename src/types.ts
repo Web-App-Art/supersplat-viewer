@@ -63,6 +63,7 @@ type State = {
     flatnessMeasureMode: boolean;
     volumeMeasureMode: boolean;
     pointMode: boolean;                         // ARTLIGHT (TKT-225): outil « Point XYZ »
+    sectionMode: boolean;                       // ARTLIGHT (TKT-238): outil « Coupe »
     isFullscreen: boolean;
     controlsHidden: boolean;
     showAnnotations: boolean;

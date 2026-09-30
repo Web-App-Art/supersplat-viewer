@@ -45,6 +45,7 @@ import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
+import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
 import type { Config, ContentMode, Global } from './types';
@@ -187,6 +188,8 @@ class Viewer {
     volumeTool: VolumeTool;
 
     pointTool: PointTool;
+
+    sectionTool: SectionTool;
 
     zeroUI: ZeroUI;
 
@@ -489,6 +492,16 @@ class Viewer {
                     this.pointTool.activate();
                 } else {
                     this.pointTool.deactivate();
+                }
+            });
+
+            // Coupe (TKT-238)
+            this.sectionTool = new SectionTool(global);
+            events.on('sectionMode:changed', (value: boolean) => {
+                if (value) {
+                    this.sectionTool.activate();
+                } else {
+                    this.sectionTool.deactivate();
                 }
             });
 

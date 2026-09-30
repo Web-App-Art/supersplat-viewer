@@ -19,7 +19,8 @@ const TOOL_MODE_EVENTS = [
     'areaMeasureMode:changed',
     'flatnessMeasureMode:changed',
     'pointMode:changed',
-    'floorplanMode:changed'
+    'floorplanMode:changed',
+    'sectionMode:changed'
 ];
 
 const canTargetFly = (global: Global) => (
