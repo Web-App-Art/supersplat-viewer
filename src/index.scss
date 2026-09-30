@@ -1098,7 +1098,6 @@ $tool-warning: #fbbf24;
         height: 12px;
         border-radius: 3px;
         margin-bottom: 4px;
-        background: linear-gradient(to right, #3b82f6 0%, #4ade80 50%, #ef4444 100%);
     }
 
     .flatness-legend-labels {
@@ -1499,12 +1498,13 @@ $tool-warning: #fbbf24;
         color: $tool-text-strong;
         text-align: right;
 
+        // Teintes de la palette de la carte des écarts (flatness-tool.ts)
         &.hollow {
-            color: #93c5fd;
+            color: #6dabdf;
         }
 
         &.bump {
-            color: $tool-ko;
+            color: #e99355;
         }
     }
 }

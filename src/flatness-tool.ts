@@ -181,6 +181,29 @@ const WAVE_SIGMA_RATIO = 0.5;
 // En dessous d'un tiers de case, le lissage n'a pas d'effet : on s'en passe.
 const WAVE_MIN_SIGMA_CELLS = 0.33;
 
+// Palette divergente des écarts, lisible par les daltoniens : bleu (creux),
+// gris clair (0), orange (bosse). Construite en OKLCH, même clarté pour −x et
+// +x (0,46 aux pôles, 0,96 au centre) et une seule teinte par bras. Vérifiée
+// en simulation (Machado 2009) : un creux et une bosse de même valeur restent
+// distincts en deutéranopie (ΔE OKLab ≥ 11), protanopie (≥ 10) et tritanopie
+// (≥ 13). La même pour la carte, la légende, la vue 3D et l'image PNG.
+const PALETTE = ['#24569f', '#3a7fce', '#6dabdf', '#b1d3ec', '#f1f0ed', '#f0c49f', '#e99355', '#ce5d1e', '#95330f'];
+
+// 256 couleurs interpolées entre les paliers, de −échelle à +échelle.
+const PALETTE_LUT = (() => {
+    const rgb = PALETTE.map(hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)));
+    const lut = new Uint8ClampedArray(256 * 3);
+    for (let k = 0; k < 256; k++) {
+        const x = k / 255 * (rgb.length - 1);
+        const i = Math.min(rgb.length - 2, Math.floor(x));
+        const f = x - i;
+        for (let c = 0; c < 3; c++) lut[k * 3 + c] = Math.round(rgb[i][c] + f * (rgb[i + 1][c] - rgb[i][c]));
+    }
+    return lut;
+})();
+
+const PALETTE_CSS = `linear-gradient(to right, ${PALETTE.map((c, i) => `${c} ${Math.round(i / (PALETTE.length - 1) * 1000) / 10}%`).join(', ')})`;
+
 // Échelle des couleurs : valeurs prédéfinies et bornes du curseur (log).
 const SCALE_PRESETS = [0.005, 0.01, 0.02, 0.05, 0.10];
 const SCALE_MIN = 0.002;
@@ -2127,28 +2150,12 @@ class FlatnessTool {
         return fleches.length > 0 ? (fleches.length - lo) / fleches.length * 100 : 0;
     }
 
-    // ── Heatmap color mapping (diverging: blue → green → red) ──
+    // ── Couleur d'un écart (palette divergente, voir PALETTE) ──
 
     private deviationToColor(signedDeviation: number): { r: number; g: number; b: number } {
-        const scale = this.colorScale;
-        // Normalize to [-1, 1] and clamp
-        const t = Math.max(-1, Math.min(1, signedDeviation / scale));
-
-        if (t < 0) {
-            // Negative (creux): blue (#3b82f6) → green (#4ade80)
-            const s = -t; // 0..1
-            return {
-                r: Math.round(74 + s * (59 - 74)),
-                g: Math.round(222 + s * (130 - 222)),
-                b: Math.round(128 + s * (246 - 128))
-            };
-        }
-        // Positive (bosse): green (#4ade80) → red (#ef4444)
-        return {
-            r: Math.round(74 + t * (239 - 74)),
-            g: Math.round(222 + t * (68 - 222)),
-            b: Math.round(128 + t * (68 - 128))
-        };
+        const t = Math.max(-1, Math.min(1, signedDeviation / this.colorScale));
+        const k = Math.round((t + 1) / 2 * 255) * 3;
+        return { r: PALETTE_LUT[k], g: PALETTE_LUT[k + 1], b: PALETTE_LUT[k + 2] };
     }
 
     // ── Panneau ──
@@ -2347,6 +2354,7 @@ class FlatnessTool {
 
         const bar = document.createElement('div');
         bar.className = 'flatness-gradient';
+        bar.style.background = PALETTE_CSS;
         wrapper.appendChild(bar);
 
         const labels = document.createElement('div');
@@ -2709,12 +2717,19 @@ class FlatnessTool {
                     pixels[k + 3] = 255;
                 } else {
                     const c = this.deviationToColor(val);
-                    // Cases interpolées : hachures claires, pour ne pas les
-                    // confondre avec une mesure.
+                    // Cases interpolées : hachures, pour ne pas les confondre
+                    // avec une mesure. Sombres sur les teintes claires (le
+                    // centre de la palette), claires sur les foncées.
                     const hatch = data.hatched[gj][gi] && (di + dj) % 6 < 2;
-                    pixels[k] = hatch ? (c.r + 255) >> 1 : c.r;
-                    pixels[k + 1] = hatch ? (c.g + 255) >> 1 : c.g;
-                    pixels[k + 2] = hatch ? (c.b + 255) >> 1 : c.b;
+                    if (hatch && 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 150) {
+                        pixels[k] = c.r * 0.6;
+                        pixels[k + 1] = c.g * 0.6;
+                        pixels[k + 2] = c.b * 0.6;
+                    } else {
+                        pixels[k] = hatch ? (c.r + 255) >> 1 : c.r;
+                        pixels[k + 1] = hatch ? (c.g + 255) >> 1 : c.g;
+                        pixels[k + 2] = hatch ? (c.b + 255) >> 1 : c.b;
+                    }
                     pixels[k + 3] = 255;
                 }
             }
@@ -2980,9 +2995,7 @@ class FlatnessTool {
         let y = top + mapH + 24;
         const barW = 320;
         const gradient = ctx.createLinearGradient(margin, 0, margin + barW, 0);
-        gradient.addColorStop(0, '#3b82f6');
-        gradient.addColorStop(0.5, '#4ade80');
-        gradient.addColorStop(1, '#ef4444');
+        PALETTE.forEach((color, i) => gradient.addColorStop(i / (PALETTE.length - 1), color));
         ctx.fillStyle = gradient;
         ctx.fillRect(margin, y, barW, 14);
         y += 32;
