@@ -278,9 +278,29 @@ const initUI = (global: Global) => {
     dom.appVersionLabel.textContent = appVersion;
 
     // Remove focus from buttons after click so keyboard input isn't captured by the UI
-    dom.ui.addEventListener('click', () => {
-        (document.activeElement as HTMLElement)?.blur();
+    // ARTLIGHT (TKT-236) : sauf le clic qui entre dans un champ de saisie. Le
+    // champ recevait le focus puis le perdait aussitôt : impossible d'y taper.
+    const textFields = 'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), textarea, select, [contenteditable]';
+    dom.ui.addEventListener('click', (event: MouseEvent) => {
+        const active = document.activeElement as HTMLElement | null;
+        const target = event.target as HTMLElement | null;
+        const editing = active?.matches?.(textFields) &&
+            (active.contains(target) || !!target?.closest?.('label')?.contains(active));
+        if (editing) return;
+        active?.blur();
     });
+
+    // ARTLIGHT (TKT-236) : élément entre la cible et #ui qui défile lui-même
+    // (panneau d'outil plus haut que l'écran).
+    const scrollsItself = (target: HTMLElement | null) => {
+        for (let node = target; node && node !== dom.ui; node = node.parentElement) {
+            const { overflowY } = getComputedStyle(node);
+            if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     // Forward wheel events from UI overlays to the canvas so the camera zooms
     // instead of the page scrolling (e.g. annotation nav, tooltips, hotspots).
@@ -290,6 +310,9 @@ const initUI = (global: Global) => {
     // whether the event originated on the canvas or was forwarded from the UI.
     const canvas = global.app.graphicsDevice.canvas as HTMLCanvasElement;
     dom.ui.addEventListener('wheel', (event: WheelEvent) => {
+        // ARTLIGHT (TKT-236) : au-dessus d'un panneau qui défile, la molette
+        // fait défiler le panneau au lieu de zoomer la caméra.
+        if (scrollsItself(event.target as HTMLElement)) return;
         event.preventDefault();
         const forwarded = new WheelEvent(event.type, event);
         const src = event as WheelEvent & {
