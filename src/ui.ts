@@ -3,6 +3,7 @@ import { EventHandler } from 'playcanvas';
 import { version as appVersion } from '../package.json';
 import { localize } from './localization';
 import type { Annotation } from './settings';
+import { isToolActive } from './tool-utils';
 import { Tooltip } from './tooltip';
 import { Global } from './types';
 
@@ -583,7 +584,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !state.measureMode && !state.areaMeasureMode && !state.flatnessMeasureMode && !state.volumeMeasureMode && !state.pointMode && !state.floorplanMode) {
+            if (!annotationVisible && !isToolActive(state)) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -758,85 +759,33 @@ const initUI = (global: Global) => {
         dom.showCollision.classList.toggle('active', value);
     });
 
-    // Measure tool toggle
-    dom.measure.addEventListener('click', () => {
-        state.measureMode = !state.measureMode;
-        if (state.measureMode) {
-            state.areaMeasureMode = false;
-            state.flatnessMeasureMode = false;
-            state.volumeMeasureMode = false;
-            state.pointMode = false;
-            state.floorplanMode = false;
-        }
-    });
-
-    events.on('measureMode:changed', (value: boolean) => {
-        dom.measure.classList.toggle('active', value);
-    });
-
-    // Area measure tool toggle
-    dom.areaMeasure.addEventListener('click', () => {
-        state.areaMeasureMode = !state.areaMeasureMode;
-        if (state.areaMeasureMode) {
-            state.measureMode = false;
-            state.flatnessMeasureMode = false;
-            state.volumeMeasureMode = false;
-            state.pointMode = false;
-            state.floorplanMode = false;
-        }
-    });
-
-    events.on('areaMeasureMode:changed', (value: boolean) => {
-        dom.areaMeasure.classList.toggle('active', value);
-    });
-
-    // Flatness measure tool toggle
-    dom.flatnessMeasure.addEventListener('click', () => {
-        state.flatnessMeasureMode = !state.flatnessMeasureMode;
-        if (state.flatnessMeasureMode) {
-            state.measureMode = false;
-            state.areaMeasureMode = false;
-            state.volumeMeasureMode = false;
-            state.pointMode = false;
-            state.floorplanMode = false;
-        }
-    });
-
-    events.on('flatnessMeasureMode:changed', (value: boolean) => {
-        dom.flatnessMeasure.classList.toggle('active', value);
-    });
-
-    // Volume (cubature) tool toggle
-    dom.volumeMeasure.addEventListener('click', () => {
-        state.volumeMeasureMode = !state.volumeMeasureMode;
-        if (state.volumeMeasureMode) {
-            state.measureMode = false;
-            state.areaMeasureMode = false;
-            state.flatnessMeasureMode = false;
-            state.pointMode = false;
-            state.floorplanMode = false;
-        }
-    });
-
-    events.on('volumeMeasureMode:changed', (value: boolean) => {
-        dom.volumeMeasure.classList.toggle('active', value);
-    });
-
-    // ARTLIGHT (TKT-225): outil « Point XYZ »
-    dom.pointXYZ.addEventListener('click', () => {
-        state.pointMode = !state.pointMode;
-        if (state.pointMode) {
-            state.measureMode = false;
-            state.areaMeasureMode = false;
-            state.flatnessMeasureMode = false;
-            state.volumeMeasureMode = false;
-            state.floorplanMode = false;
-        }
-    });
-
-    events.on('pointMode:changed', (value: boolean) => {
-        dom.pointXYZ.classList.toggle('active', value);
-    });
+    // ARTLIGHT: outils de mesure, un seul ouvert à la fois. L'outil quitté se
+    // referme avant que le nouveau s'ouvre : chacun rend le curseur qu'il a
+    // trouvé en s'ouvrant.
+    type ToolMode = 'measureMode' | 'areaMeasureMode' | 'flatnessMeasureMode' | 'volumeMeasureMode' |
+        'pointMode' | 'floorplanMode';
+    const toolButtons: [ToolMode, HTMLElement][] = [
+        ['measureMode', dom.measure],
+        ['areaMeasureMode', dom.areaMeasure],
+        ['flatnessMeasureMode', dom.flatnessMeasure],
+        ['volumeMeasureMode', dom.volumeMeasure],
+        ['pointMode', dom.pointXYZ],
+        ['floorplanMode', dom.floorplan]
+    ];
+    for (const [mode, button] of toolButtons) {
+        button.addEventListener('click', () => {
+            const open = !state[mode];
+            if (open) {
+                for (const [other] of toolButtons) {
+                    if (other !== mode) state[other] = false;
+                }
+            }
+            state[mode] = open;
+        });
+        events.on(`${mode}:changed`, (value: boolean) => {
+            button.classList.toggle('active', value);
+        });
+    }
 
     // ARTLIGHT (TKT-228): bascule Splats / Nuage de points. La page est
     // rechargée avec l'autre contenu (voir content-mode.ts).
@@ -847,22 +796,6 @@ const initUI = (global: Global) => {
             events.fire('contentMode:switch', config.contentMode === 'pointcloud' ? 'splats' : 'pointcloud');
         });
     }
-
-    // Floorplan tool toggle
-    dom.floorplan.addEventListener('click', () => {
-        state.floorplanMode = !state.floorplanMode;
-        if (state.floorplanMode) {
-            state.measureMode = false;
-            state.areaMeasureMode = false;
-            state.flatnessMeasureMode = false;
-            state.volumeMeasureMode = false;
-            state.pointMode = false;
-        }
-    });
-
-    events.on('floorplanMode:changed', (value: boolean) => {
-        dom.floorplan.classList.toggle('active', value);
-    });
 
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');

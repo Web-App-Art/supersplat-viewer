@@ -140,7 +140,7 @@ class ToolPointerHandler {
             const rect = appCanvas.getBoundingClientRect();
             const overCanvas = event.clientX >= rect.left && event.clientX <= rect.right &&
                                event.clientY >= rect.top && event.clientY <= rect.bottom;
-            if (!overCanvas || (event.target !== appCanvas && (event.target as HTMLElement)?.closest?.('#ui .controlBar, #flatnessPanel, #flatnessHint, #volumePanel, #measurePanel, #pointPanel, #settingsPanel, #infoPanelContent'))) {
+            if (!overCanvas || (event.target !== appCanvas && (event.target as HTMLElement)?.closest?.('#ui .controlBar, .tool-panel, .tool-hint, #volumePanel, #measurePanel, #pointPanel, #settingsPanel, #infoPanelContent'))) {
                 this.downOnCanvas = false;
                 return;
             }

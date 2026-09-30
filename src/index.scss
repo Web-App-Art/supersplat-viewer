@@ -979,7 +979,8 @@ $tool-ok: #bef264;
 $tool-ko: #fca5a5;
 $tool-warning: #fbbf24;
 
-#flatnessHint {
+// Aide contextuelle en haut de l'écran (planéité, coupe)
+.tool-hint {
     position: fixed;
     top: 16px;
     left: 50%;
@@ -1002,7 +1003,8 @@ $tool-warning: #fbbf24;
     pointer-events: auto;
 }
 
-#flatnessPanel {
+// Panneau d'outil à droite (planéité, coupe)
+.tool-panel {
     position: fixed;
     top: 80px;
     right: 16px;
@@ -1035,7 +1037,7 @@ $tool-warning: #fbbf24;
         border-radius: 4px;
     }
 
-    &.collapsed .flatness-body {
+    &.collapsed .tool-body {
         display: none;
     }
 }

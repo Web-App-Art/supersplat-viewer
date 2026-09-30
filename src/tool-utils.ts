@@ -17,6 +17,89 @@ export function isToolActive(state: State): boolean {
         state.floorplanMode;
 }
 
+// ── Calculs sur le nuage, partagés par la planéité et la coupe ──
+
+export const median = (values: number[]) => {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+// Au plus `max` valeurs prises à pas régulier : assez pour une médiane ou une
+// MAD, sans trier des centaines de milliers de valeurs.
+export const subsample = (values: number[], max: number) => {
+    if (values.length <= max) return values;
+    const stride = values.length / max;
+    const out: number[] = [];
+    for (let k = 0; k < max; k++) out.push(values[Math.floor(k * stride)]);
+    return out;
+};
+
+export interface Plane {
+    origin: Vec3;
+    normal: Vec3;
+}
+
+// Plan des moindres carrés sur les points d'indices `indices` (xyz entrelacés).
+// La normale est le vecteur propre de plus petite valeur propre de la
+// covariance, obtenu par itération de puissance sur sa comatrice ; `hint`
+// sert de départ et fixe le sens de la normale.
+export const fitPlaneLS = (pts: Float64Array, indices: ArrayLike<number>, hint: Vec3): Plane | null => {
+    const n = indices.length;
+    if (n < 3) return null;
+
+    let ox = 0, oy = 0, oz = 0;
+    for (let k = 0; k < n; k++) {
+        const i = indices[k] * 3;
+        ox += pts[i]; oy += pts[i + 1]; oz += pts[i + 2];
+    }
+    ox /= n; oy /= n; oz /= n;
+
+    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+    for (let k = 0; k < n; k++) {
+        const i = indices[k] * 3;
+        const dx = pts[i] - ox, dy = pts[i + 1] - oy, dz = pts[i + 2] - oz;
+        xx += dx * dx; xy += dx * dy; xz += dx * dz;
+        yy += dy * dy; yz += dy * dz; zz += dz * dz;
+    }
+
+    const c00 = yy * zz - yz * yz;
+    const c01 = xz * yz - xy * zz;
+    const c02 = xy * yz - xz * yy;
+    const c11 = xx * zz - xz * xz;
+    const c12 = xy * xz - xx * yz;
+    const c22 = xx * yy - xy * xy;
+
+    let nx = hint.x, ny = hint.y, nz = hint.z;
+    for (let iter = 0; iter < 30; iter++) {
+        const tx = c00 * nx + c01 * ny + c02 * nz;
+        const ty = c01 * nx + c11 * ny + c12 * nz;
+        const tz = c02 * nx + c12 * ny + c22 * nz;
+        const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        if (len < 1e-18) break;
+        nx = tx / len; ny = ty / len; nz = tz / len;
+    }
+
+    const normal = new Vec3(nx, ny, nz);
+    if (normal.dot(hint) < 0) normal.mulScalar(-1);
+    return { origin: new Vec3(ox, oy, oz), normal };
+};
+
+// Verticale du relevé : la direction de H, 3e axe du repère source
+// (coordinates.ts). C'est Y pour les scènes du pipeline .lcc ; une scène
+// qui déclare `coordinates.sourceFromWorld` dans son settings.json peut
+// en avoir une autre. Un modèle non calé (Maison Nico : Z vers le haut,
+// sans sourceFromWorld) donne une verticale fausse, ici comme dans
+// l'outil Point.
+export const verticalAxis = (global: Global): Vec3 => {
+    const coords = global.coords;
+    if (typeof coords?.toSource !== 'function') return Vec3.UP.clone();
+    const h = (x: number, y: number, z: number) => coords.toSource(new Vec3(x, y, z))[2];
+    const up = new Vec3(h(1, 0, 0), h(0, 1, 0), h(0, 0, 1));
+    return up.length() > 1e-9 ? up.normalize() : Vec3.UP.clone();
+};
+
 // Accent color — must match $clr-accent in index.scss
 export const ACCENT_COLOR = '#84cc16';
 export const ACCENT_R = 132;

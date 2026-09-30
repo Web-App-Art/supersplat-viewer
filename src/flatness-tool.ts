@@ -1,10 +1,18 @@
 import { BoundingBox, Vec3 } from 'playcanvas';
 
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
-import { getLocale, localize } from './localization';
+import { getLocale } from './localization';
+import {
+    translator, formatNumber, formatCount, formatLength, readStoredNumber, storeNumber, readStoredText, storeText,
+    sceneName, exportBaseName, downloadBlob, createRow, createNote, createField, createSegmented, createStepper,
+    createRange, createSwitch, createCollapseButton, createTabs
+} from './tool-panel';
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
-import type { FinestResult, LodUsage, SplatCenters } from './tool-utils';
+import {
+    worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable,
+    median, subsample, fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba
+} from './tool-utils';
+import type { FinestResult, LodUsage, Plane, SplatCenters } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -274,11 +282,6 @@ const drawImageTriangle = (ctx: CanvasRenderingContext2D, image: HTMLCanvasEleme
     ctx.restore();
 };
 
-interface Plane {
-    origin: Vec3;
-    normal: Vec3;
-}
-
 // Splat retenu, dans le repère du plan de référence : position (pu, pv),
 // écart au plan. `fit` : écart au plan moyen, qui sert à trier les splats
 // (épaisseur analysée, reflets) quel que soit le plan de référence.
@@ -311,56 +314,9 @@ const createRandom = (seed: number) => {
     };
 };
 
-const median = (values: number[]) => {
-    if (values.length === 0) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-};
-
-// Au plus `max` valeurs prises à pas régulier : assez pour une médiane ou une
-// MAD, sans trier des centaines de milliers de valeurs.
-const subsample = (values: number[], max: number) => {
-    if (values.length <= max) return values;
-    const stride = values.length / max;
-    const out: number[] = [];
-    for (let k = 0; k < max; k++) out.push(values[Math.floor(k * stride)]);
-    return out;
-};
-
 // Texte du panneau, de l'aide et des exports (clés artlight.flatness.* des
 // fichiers de langue) ; {nom} est remplacé par params.nom.
-const tr = (key: string, params: Record<string, string | number> = {}) => {
-    let text = localize(`artlight.flatness.${key}`);
-    for (const [name, value] of Object.entries(params)) text = text.split(`{${name}}`).join(String(value));
-    return text;
-};
-
-// Nombre dans la langue de l'interface : « 1,5 » en français, « 1.5 » en anglais.
-const formatNumber = (value: number, digits: number) => value.toLocaleString(getLocale(), {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits
-});
-
-// Nombre entier (compte de points) : « 12 345 » en français, « 12,345 » en anglais.
-const formatCount = (value: number) => value.toLocaleString(getLocale());
-
-// Longueur lisible : mm sous le centimètre, cm sous le mètre.
-const formatLength = (m: number, signed = false) => {
-    const a = Math.abs(m);
-    let text: string;
-    if (a < 0.01) {
-        text = `${formatNumber(a * 1000, 1)} mm`;
-    } else if (a < 1) {
-        text = `${formatNumber(a * 100, 1)} cm`;
-    } else {
-        text = `${formatNumber(a, 2)} m`;
-    }
-    let sign = '';
-    if (m < 0) sign = '−';
-    else if (signed && m > 0) sign = '+';
-    return sign + text;
-};
+const tr = translator('artlight.flatness');
 
 // Lissage gaussien d'une grille à trous (convolution normalisée, séparable) :
 // chaque case mesurée devient la moyenne pondérée des cases mesurées voisines.
@@ -460,338 +416,10 @@ const measureWindow = (profile: Float64Array, i0: number, i1: number, hull: Int3
     }
 };
 
-// Nom de la scène pour les exports : nom du projet, sinon dossier de l'URL.
-const sceneName = (): string => {
-    const projectName = (window as any).sse?.project?.project?.name;
-    if (typeof projectName === 'string' && projectName) return projectName;
-    const params = new URLSearchParams(location.search);
-    for (const key of ['project', 'settings', 'content']) {
-        const value = params.get(key);
-        const parts = value?.split('/').filter(part => part && !part.includes('.')) ?? [];
-        const folder = parts.filter(part => !/^lod-output/.test(part)).pop();
-        if (folder) return folder;
-    }
-    return 'scene';
-};
-
-const slugify = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-.toLowerCase()
-.replace(/[^a-z0-9]+/g, '-')
-.replace(/^-|-$/g, '');
-
-const downloadBlob = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
-
 // Tolérance toujours en mm, comme dans le compteur : « 5 mm », « 12,5 mm ».
 const formatTolerance = (m: number) => {
     const mm = Math.round(m * 10000) / 10;
     return `${formatNumber(mm, Number.isInteger(mm) ? 0 : 1)} mm`;
-};
-
-const readStoredNumber = (key: string, fallback: number, isValid: (v: number) => boolean) => {
-    try {
-        const value = parseFloat(localStorage.getItem(key) ?? '');
-        return isValid(value) ? value : fallback;
-    } catch {
-        return fallback;
-    }
-};
-
-const storeNumber = (key: string, value: number) => {
-    try {
-        localStorage.setItem(key, String(value));
-    } catch {
-        // stockage indisponible (navigation privée) : le choix vaut pour la session
-    }
-};
-
-const readStoredText = (key: string, fallback: string, isValid: (v: string) => boolean) => {
-    try {
-        const value = localStorage.getItem(key);
-        return value !== null && isValid(value) ? value : fallback;
-    } catch {
-        return fallback;
-    }
-};
-
-const storeText = (key: string, value: string) => {
-    try {
-        localStorage.setItem(key, value);
-    } catch {
-        // stockage indisponible : le choix vaut pour la session
-    }
-};
-
-// ── Composants du panneau (styles .tool-* dans index.scss) ──
-
-const createRow = (label: string, value: string, kind?: 'hollow' | 'bump'): HTMLDivElement => {
-    const row = document.createElement('div');
-    row.className = 'tool-row';
-    const labelEl = document.createElement('span');
-    labelEl.className = 'tool-row-label';
-    labelEl.textContent = label;
-    const valueEl = document.createElement('span');
-    valueEl.className = kind ? `tool-row-value ${kind}` : 'tool-row-value';
-    valueEl.textContent = value;
-    row.append(labelEl, valueEl);
-    return row;
-};
-
-const createNote = (text: string, warning = false): HTMLDivElement => {
-    const note = document.createElement('div');
-    note.className = warning ? 'tool-note warning' : 'tool-note';
-    note.textContent = warning ? `⚠ ${text}` : text;
-    return note;
-};
-
-// Libellé au-dessus, contrôle en dessous : le contrôle a toute la largeur.
-const createField = (label: string, control: HTMLElement): HTMLDivElement => {
-    const field = document.createElement('div');
-    field.className = 'tool-field';
-    const labelEl = document.createElement('div');
-    labelEl.className = 'tool-field-label';
-    labelEl.textContent = label;
-    field.append(labelEl, control);
-    return field;
-};
-
-interface SegmentOption<T> {
-    value: T;
-    label: string;
-    title?: string;
-}
-
-// Boutons côte à côte, un seul actif : remplace les listes déroulantes.
-const createSegmented = <T>(options: SegmentOption<T>[], current: T | null, onSelect: (value: T) => void): HTMLDivElement => {
-    const group = document.createElement('div');
-    group.className = 'tool-seg';
-    for (const option of options) {
-        const button = document.createElement('button');
-        button.className = 'tool-seg-btn';
-        button.textContent = option.label;
-        if (option.title) button.title = option.title;
-        const active = option.value === current;
-        button.classList.toggle('active', active);
-        button.setAttribute('aria-pressed', String(active));
-        button.addEventListener('click', () => {
-            if (option.value !== current) onSelect(option.value);
-        });
-        group.appendChild(button);
-    }
-    return group;
-};
-
-interface StepperOptions {
-    value: number;
-    min: number;
-    max: number;
-    step: number;
-    unit: string;
-    label: string;      // nom lu par les lecteurs d'écran
-    onChange: (value: number) => void;
-}
-
-// Compteur − / valeur / +. Maintenir un bouton répète le pas. La valeur se
-// tape au clavier (virgule acceptée) : Entrée valide, Échap annule, ↑ et ↓
-// ajoutent ou retirent un pas. Les touches ne remontent pas aux raccourcis
-// du visualisateur (Échap effacerait la zone).
-const createStepper = (opts: StepperOptions): HTMLDivElement => {
-    let value = opts.value;
-    const format = (v: number) => formatNumber(v, Number.isInteger(v) ? 0 : 1);
-    const clamp = (v: number) => Math.min(opts.max, Math.max(opts.min, Math.round(v / opts.step) * opts.step));
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'tool-stepper';
-
-    const box = document.createElement('label');
-    box.className = 'tool-stepper-value';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.inputMode = 'decimal';
-    input.spellcheck = false;
-    input.value = format(value);
-    input.setAttribute('aria-label', opts.label);
-    const unit = document.createElement('span');
-    unit.textContent = opts.unit;
-    box.append(input, unit);
-
-    const set = (v: number) => {
-        const next = clamp(v);
-        input.value = format(next);
-        if (next !== value) {
-            value = next;
-            opts.onChange(value);
-        }
-    };
-    const commit = () => {
-        const v = parseFloat(input.value.replace(',', '.'));
-        if (Number.isFinite(v)) set(v);
-        else input.value = format(value);
-    };
-
-    input.addEventListener('focus', () => input.select());
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', (event) => {
-        event.stopPropagation();
-        if (event.key === 'Enter') {
-            commit();
-            input.blur();
-        } else if (event.key === 'Escape') {
-            input.value = format(value);
-            input.blur();
-        } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-            event.preventDefault();
-            set(value + (event.key === 'ArrowUp' ? opts.step : -opts.step));
-            input.select();
-        }
-    });
-
-    const makeButton = (text: string, delta: number, label: string) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'tool-stepper-btn';
-        button.textContent = text;
-        button.setAttribute('aria-label', label);
-        let delay: ReturnType<typeof setTimeout> | null = null;
-        let repeat: ReturnType<typeof setInterval> | null = null;
-        const stop = () => {
-            if (delay) clearTimeout(delay);
-            if (repeat) clearInterval(repeat);
-            delay = null;
-            repeat = null;
-        };
-        button.addEventListener('pointerdown', (event) => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            set(value + delta);
-            stop();
-            delay = setTimeout(() => {
-                repeat = setInterval(() => set(value + delta), 70);
-            }, 400);
-        });
-        for (const type of ['pointerup', 'pointerleave', 'pointercancel']) {
-            button.addEventListener(type, stop);
-        }
-        // Clavier (Entrée, Espace) : un pas par appui
-        button.addEventListener('click', (event) => {
-            if (event.detail === 0) set(value + delta);
-        });
-        return button;
-    };
-
-    wrapper.append(
-        makeButton('−', -opts.step, tr('stepper.decrease', { label: opts.label })),
-        box,
-        makeButton('+', opts.step, tr('stepper.increase', { label: opts.label }))
-    );
-    return wrapper;
-};
-
-interface RangeOptions {
-    min: number;
-    max: number;
-    step: number;
-    value: number;
-    format: (value: number) => string;
-    onCommit: (value: number) => void;
-}
-
-// Curseur stylé : partie gauche remplie, valeur affichée pendant le glissé,
-// appliquée au relâchement.
-const createRange = (opts: RangeOptions): HTMLDivElement => {
-    const row = document.createElement('div');
-    row.className = 'tool-range-row';
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.className = 'tool-range';
-    input.min = String(opts.min);
-    input.max = String(opts.max);
-    input.step = String(opts.step);
-    input.value = String(opts.value);
-    const label = document.createElement('span');
-    label.className = 'tool-range-value';
-    const update = () => {
-        const v = parseFloat(input.value);
-        label.textContent = opts.format(v);
-        input.style.setProperty('--fill', `${(v - opts.min) / (opts.max - opts.min) * 100}%`);
-    };
-    update();
-    input.addEventListener('input', update);
-    input.addEventListener('change', () => opts.onCommit(parseFloat(input.value)));
-    row.append(input, label);
-    return row;
-};
-
-const createSwitch = (label: string, value: boolean, onChange: (value: boolean) => void): HTMLDivElement => {
-    const row = document.createElement('div');
-    row.className = 'tool-switch-row';
-    const text = document.createElement('span');
-    text.textContent = label;
-    const toggle = document.createElement('button');
-    toggle.className = 'tool-switch';
-    toggle.setAttribute('role', 'switch');
-    toggle.setAttribute('aria-checked', String(value));
-    toggle.setAttribute('aria-label', label);
-    toggle.addEventListener('click', () => {
-        const next = toggle.getAttribute('aria-checked') !== 'true';
-        toggle.setAttribute('aria-checked', String(next));
-        onChange(next);
-    });
-    row.append(text, toggle);
-    return row;
-};
-
-// Plan des moindres carrés sur les points d'indices `indices` (xyz entrelacés).
-// La normale est le vecteur propre de plus petite valeur propre de la
-// covariance, obtenu par itération de puissance sur sa comatrice ; `hint`
-// sert de départ et fixe le sens de la normale.
-const fitPlaneLS = (pts: Float64Array, indices: ArrayLike<number>, hint: Vec3): Plane | null => {
-    const n = indices.length;
-    if (n < 3) return null;
-
-    let ox = 0, oy = 0, oz = 0;
-    for (let k = 0; k < n; k++) {
-        const i = indices[k] * 3;
-        ox += pts[i]; oy += pts[i + 1]; oz += pts[i + 2];
-    }
-    ox /= n; oy /= n; oz /= n;
-
-    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
-    for (let k = 0; k < n; k++) {
-        const i = indices[k] * 3;
-        const dx = pts[i] - ox, dy = pts[i + 1] - oy, dz = pts[i + 2] - oz;
-        xx += dx * dx; xy += dx * dy; xz += dx * dz;
-        yy += dy * dy; yz += dy * dz; zz += dz * dz;
-    }
-
-    const c00 = yy * zz - yz * yz;
-    const c01 = xz * yz - xy * zz;
-    const c02 = xy * yz - xz * yy;
-    const c11 = xx * zz - xz * xz;
-    const c12 = xy * xz - xx * yz;
-    const c22 = xx * yy - xy * xy;
-
-    let nx = hint.x, ny = hint.y, nz = hint.z;
-    for (let iter = 0; iter < 30; iter++) {
-        const tx = c00 * nx + c01 * ny + c02 * nz;
-        const ty = c01 * nx + c11 * ny + c12 * nz;
-        const tz = c02 * nx + c12 * ny + c22 * nz;
-        const len = Math.sqrt(tx * tx + ty * ty + tz * tz);
-        if (len < 1e-18) break;
-        nx = tx / len; ny = ty / len; nz = tz / len;
-    }
-
-    const normal = new Vec3(nx, ny, nz);
-    if (normal.dot(hint) < 0) normal.mulScalar(-1);
-    return { origin: new Vec3(ox, oy, oz), normal };
 };
 
 class FlatnessTool {
@@ -978,6 +606,7 @@ class FlatnessTool {
 
         this.hint = document.createElement('div');
         this.hint.id = 'flatnessHint';
+        this.hint.className = 'tool-hint';
         this.overlay.appendChild(this.hint);
         this.updateHint();
 
@@ -1226,7 +855,7 @@ class FlatnessTool {
                 forward: camera.forward.clone()
             };
         }
-        this.up = this.verticalAxis();
+        this.up = verticalAxis(this.global);
 
         const footprint = this.computeFootprintPlane();
         if (!footprint) return;
@@ -1304,20 +933,6 @@ class FlatnessTool {
             this.showPanel();
             this.global.app.renderNextFrame = true;
         });
-    }
-
-    // Verticale du relevé : la direction de H, 3e axe du repère source
-    // (coordinates.ts). C'est Y pour les scènes du pipeline .lcc ; une scène
-    // qui déclare `coordinates.sourceFromWorld` dans son settings.json peut
-    // en avoir une autre. Un modèle non calé (Maison Nico : Z vers le haut,
-    // sans sourceFromWorld) donne une verticale fausse, ici comme dans
-    // l'outil Point.
-    private verticalAxis(): Vec3 {
-        const coords = this.global.coords;
-        if (typeof coords?.toSource !== 'function') return Vec3.UP.clone();
-        const h = (x: number, y: number, z: number) => coords.toSource(new Vec3(x, y, z))[2];
-        const up = new Vec3(h(1, 0, 0), h(0, 1, 0), h(0, 0, 1));
-        return up.length() > 1e-9 ? up.normalize() : Vec3.UP.clone();
     }
 
     // Plans de référence qui ont un sens pour la zone, selon l'orientation du
@@ -2249,6 +1864,7 @@ class FlatnessTool {
 
         this.panel = document.createElement('div');
         this.panel.id = 'flatnessPanel';
+        this.panel.className = 'tool-panel';
         this.panel.classList.toggle('collapsed', this.collapsed);
         this.panel.appendChild(this.createHeader());
 
@@ -2258,7 +1874,7 @@ class FlatnessTool {
         this.renderBanner();
 
         const body = document.createElement('div');
-        body.className = 'flatness-body';
+        body.className = 'tool-body';
         body.appendChild(this.createLegend());
 
         // Heatmap canvas — match polygon aspect ratio. Hauteur plafonnée : une
@@ -2348,22 +1964,10 @@ class FlatnessTool {
         reset.addEventListener('click', () => this.clearAll());
 
         // Réduire / agrandir : le panneau garde l'en-tête et le verdict.
-        const collapse = document.createElement('button');
-        collapse.className = 'tool-icon-btn';
-        const updateCollapse = () => {
-            collapse.title = tr(this.collapsed ? 'expand' : 'collapse');
-            collapse.setAttribute('aria-label', collapse.title);
-            collapse.setAttribute('aria-expanded', String(!this.collapsed));
-            collapse.innerHTML = this.collapsed ?
-                '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>' :
-                '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>';
-        };
-        updateCollapse();
-        collapse.addEventListener('click', () => {
-            this.collapsed = !this.collapsed;
-            storeText(COLLAPSED_STORAGE_KEY, this.collapsed ? '1' : '0');
-            this.panel?.classList.toggle('collapsed', this.collapsed);
-            updateCollapse();
+        const collapse = createCollapseButton(this.collapsed, (collapsed) => {
+            this.collapsed = collapsed;
+            storeText(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+            this.panel?.classList.toggle('collapsed', collapsed);
         });
 
         actions.append(reset, collapse);
@@ -2455,51 +2059,23 @@ class FlatnessTool {
     // ── Onglets ──
 
     private createTabs(): HTMLDivElement {
-        const wrapper = document.createElement('div');
-        const bar = document.createElement('div');
-        bar.className = 'tool-tabs';
-        bar.setAttribute('role', 'tablist');
-        const content = document.createElement('div');
-        content.className = 'tool-tab-content';
-        content.setAttribute('role', 'tabpanel');
-
         const tabs: { id: FlatnessTab; label: string }[] = [
             { id: 'deviations', label: tr('tab.deviations') },
             { id: 'rule', label: tr('tab.rule') },
             { id: 'settings', label: tr('tab.settings') },
             { id: 'export', label: tr('tab.export') }
         ];
-        const buttons: HTMLButtonElement[] = [];
-        const render = () => {
-            tabs.forEach((tab, i) => {
-                buttons[i].classList.toggle('active', tab.id === this.activeTab);
-                buttons[i].setAttribute('aria-selected', String(tab.id === this.activeTab));
-            });
+        const render = (id: FlatnessTab): HTMLElement => {
             this.ruleResults = null;
-            content.textContent = '';
-            if (this.activeTab === 'rule') content.appendChild(this.createRuleTab());
-            else if (this.activeTab === 'settings') content.appendChild(this.createSettingsTab());
-            else if (this.activeTab === 'export') content.appendChild(this.createExportTab());
-            else content.appendChild(this.createDeviationsTab());
+            if (id === 'rule') return this.createRuleTab();
+            if (id === 'settings') return this.createSettingsTab();
+            if (id === 'export') return this.createExportTab();
+            return this.createDeviationsTab();
         };
-
-        for (const tab of tabs) {
-            const button = document.createElement('button');
-            button.className = 'tool-tab';
-            button.textContent = tab.label;
-            button.setAttribute('role', 'tab');
-            button.addEventListener('click', () => {
-                this.activeTab = tab.id;
-                storeText(TAB_STORAGE_KEY, tab.id);
-                render();
-            });
-            bar.appendChild(button);
-            buttons.push(button);
-        }
-        render();
-
-        wrapper.append(bar, content);
-        return wrapper;
+        return createTabs(tabs, this.activeTab, render, (id) => {
+            this.activeTab = id;
+            storeText(TAB_STORAGE_KEY, id);
+        });
     }
 
     private createDeviationsTab(): HTMLDivElement {
@@ -2975,10 +2551,7 @@ class FlatnessTool {
     }
 
     private exportBaseName(): string {
-        const d = new Date();
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}h${pad(d.getMinutes())}`;
-        return `${slugify(tr('export.file'))}-${slugify(sceneName()) || 'scene'}-${stamp}`;
+        return exportBaseName(tr('export.file'));
     }
 
     // Image de rapport : carte à gauche avec légende et échelle, résultats à droite.
