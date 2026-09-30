@@ -1,7 +1,7 @@
 import { BoundingBox, Vec3 } from 'playcanvas';
 
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
-import { getLocale } from './localization';
+import { getLocale, localize } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
 import type { LodUsage, SplatCenters } from './tool-utils';
@@ -326,21 +326,38 @@ const subsample = (values: number[], max: number) => {
     return out;
 };
 
-// Longueur lisible : mm sous le centimètre, cm sous le mètre, virgule décimale.
+// Texte du panneau, de l'aide et des exports (clés artlight.flatness.* des
+// fichiers de langue) ; {nom} est remplacé par params.nom.
+const tr = (key: string, params: Record<string, string | number> = {}) => {
+    let text = localize(`artlight.flatness.${key}`);
+    for (const [name, value] of Object.entries(params)) text = text.split(`{${name}}`).join(String(value));
+    return text;
+};
+
+// Nombre dans la langue de l'interface : « 1,5 » en français, « 1.5 » en anglais.
+const formatNumber = (value: number, digits: number) => value.toLocaleString(getLocale(), {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+});
+
+// Nombre entier (compte de points) : « 12 345 » en français, « 12,345 » en anglais.
+const formatCount = (value: number) => value.toLocaleString(getLocale());
+
+// Longueur lisible : mm sous le centimètre, cm sous le mètre.
 const formatLength = (m: number, signed = false) => {
     const a = Math.abs(m);
     let text: string;
     if (a < 0.01) {
-        text = `${(a * 1000).toFixed(1)} mm`;
+        text = `${formatNumber(a * 1000, 1)} mm`;
     } else if (a < 1) {
-        text = `${(a * 100).toFixed(1)} cm`;
+        text = `${formatNumber(a * 100, 1)} cm`;
     } else {
-        text = `${a.toFixed(2)} m`;
+        text = `${formatNumber(a, 2)} m`;
     }
     let sign = '';
     if (m < 0) sign = '−';
     else if (signed && m > 0) sign = '+';
-    return sign + text.replace('.', ',');
+    return sign + text;
 };
 
 // Lissage gaussien d'une grille à trous (convolution normalisée, séparable) :
@@ -474,7 +491,7 @@ const downloadBlob = (blob: Blob, filename: string) => {
 // Tolérance toujours en mm, comme dans le compteur : « 5 mm », « 12,5 mm ».
 const formatTolerance = (m: number) => {
     const mm = Math.round(m * 10000) / 10;
-    return `${(Number.isInteger(mm) ? String(mm) : mm.toFixed(1)).replace('.', ',')} mm`;
+    return `${formatNumber(mm, Number.isInteger(mm) ? 0 : 1)} mm`;
 };
 
 const readStoredNumber = (key: string, fallback: number, isValid: (v: number) => boolean) => {
@@ -586,7 +603,7 @@ interface StepperOptions {
 // du visualisateur (Échap effacerait la zone).
 const createStepper = (opts: StepperOptions): HTMLDivElement => {
     let value = opts.value;
-    const format = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1)).replace('.', ',');
+    const format = (v: number) => formatNumber(v, Number.isInteger(v) ? 0 : 1);
     const clamp = (v: number) => Math.min(opts.max, Math.max(opts.min, Math.round(v / opts.step) * opts.step));
 
     const wrapper = document.createElement('div');
@@ -669,9 +686,9 @@ const createStepper = (opts: StepperOptions): HTMLDivElement => {
     };
 
     wrapper.append(
-        makeButton('−', -opts.step, `Diminuer : ${opts.label}`),
+        makeButton('−', -opts.step, tr('stepper.decrease', { label: opts.label })),
         box,
-        makeButton('+', opts.step, `Augmenter : ${opts.label}`)
+        makeButton('+', opts.step, tr('stepper.increase', { label: opts.label }))
     );
     return wrapper;
 };
@@ -1118,13 +1135,13 @@ class FlatnessTool {
         const n = this.currentPoints.length;
         let text: string;
         if (this.state === 'idle') {
-            text = 'Cliquez les sommets de la zone à analyser.';
+            text = tr('hint.idle');
         } else if (this.state === 'placing' && n < 3) {
-            text = `Cliquez les sommets suivants (encore ${3 - n} au moins).`;
+            text = tr('hint.more', { n: 3 - n });
         } else if (this.state === 'placing') {
-            text = 'Cliquez le premier sommet ou Entrée pour fermer la zone.';
+            text = tr('hint.close');
         } else {
-            text = 'Glissez un sommet pour ajuster la zone · Échap pour effacer.';
+            text = tr('hint.closed');
         }
 
         this.hint.textContent = '';
@@ -1141,9 +1158,9 @@ class FlatnessTool {
         };
 
         if (this.state === 'placing') {
-            if (n >= 3) addButton('Fermer la zone', true, () => this.closePolygon());
-            addButton('Annuler le point', false, () => this.undoLastPoint());
-            addButton('Effacer', false, () => this.clearAll());
+            if (n >= 3) addButton(tr('hint.close-button'), true, () => this.closePolygon());
+            addButton(tr('hint.undo'), false, () => this.undoLastPoint());
+            addButton(tr('hint.clear'), false, () => this.clearAll());
         }
     }
 
@@ -2200,7 +2217,7 @@ class FlatnessTool {
         body.appendChild(this.createMap());
 
         // Carte plaquée sur la zone dans la vue 3D
-        const onView = createSwitch('Afficher sur la vue', this.showOnView, (enabled) => {
+        const onView = createSwitch(tr('on-view'), this.showOnView, (enabled) => {
             this.showOnView = enabled;
             storeText(VIEW_MAP_STORAGE_KEY, enabled ? '1' : '0');
             this.global.app.renderNextFrame = true;
@@ -2260,21 +2277,21 @@ class FlatnessTool {
 
         const title = document.createElement('div');
         title.className = 'tool-title';
-        title.textContent = 'Planéité';
+        title.textContent = tr('title');
 
         const actions = document.createElement('div');
         actions.className = 'tool-header-actions';
 
         const reset = document.createElement('button');
         reset.className = 'tool-btn';
-        reset.textContent = 'Nouvelle zone';
+        reset.textContent = tr('new-zone');
         reset.addEventListener('click', () => this.clearAll());
 
         // Réduire / agrandir : le panneau garde l'en-tête et le verdict.
         const collapse = document.createElement('button');
         collapse.className = 'tool-icon-btn';
         const updateCollapse = () => {
-            collapse.title = this.collapsed ? 'Agrandir le panneau' : 'Réduire le panneau';
+            collapse.title = tr(this.collapsed ? 'expand' : 'collapse');
             collapse.setAttribute('aria-label', collapse.title);
             collapse.setAttribute('aria-expanded', String(!this.collapsed));
             collapse.innerHTML = this.collapsed ?
@@ -2310,25 +2327,25 @@ class FlatnessTool {
         const text = document.createElement('span');
         if (rule?.status === 'ok') {
             const ok = rule.worst <= this.tolerance;
-            const where = this.ruleLength === 0 ? 'sur la zone' : `sous ${this.ruleLabel(this.ruleLength)}`;
+            const where = this.ruleLength === 0 ? tr('banner.on-zone') : tr('banner.under', { length: this.ruleLabel(this.ruleLength) });
             banner.dataset.state = ok ? 'ok' : 'ko';
-            text.textContent = `${ok ? 'Conforme' : 'Hors tolérance'} · flèche ${formatLength(rule.worst)} ${where}`;
+            text.textContent = tr('banner.rule', { verdict: tr(ok ? 'verdict.ok' : 'verdict.ko'), gap: formatLength(rule.worst), where });
         } else {
             banner.dataset.state = 'na';
-            text.textContent = `Règle non calculée : ${this.ruleStatusText()}`;
+            text.textContent = tr('banner.no-rule', { reason: this.ruleStatusText() });
         }
         main.append(dot, text);
 
         const sub = document.createElement('div');
         sub.className = 'flatness-banner-sub';
         const parts = [
-            `tolérance ${formatTolerance(this.tolerance)}`,
-            `creux ${formatLength(stats.hollow, true)}`,
-            `bosse ${formatLength(stats.bump, true)}`
+            tr('banner.tolerance', { value: formatTolerance(this.tolerance) }),
+            tr('banner.hollow', { value: formatLength(stats.hollow, true) }),
+            tr('banner.bump', { value: formatLength(stats.bump, true) })
         ];
-        if (rule?.status === 'ok' && this.tolerance < rule.noiseFloor) parts.push('peu fiable (bruit)');
-        if (this.lod?.status === 'loading') parts.push('chargement du niveau de détail le plus fin…');
-        else if (this.lod?.status === 'too-large' || this.lod?.status === 'failed') parts.push('niveau de détail affiché');
+        if (rule?.status === 'ok' && this.tolerance < rule.noiseFloor) parts.push(tr('banner.noisy'));
+        if (this.lod?.status === 'loading') parts.push(tr('banner.lod-loading'));
+        else if (this.lod?.status === 'too-large' || this.lod?.status === 'failed') parts.push(tr('banner.lod-displayed'));
         // Une ligne qui ne se coupe qu'entre deux éléments
         parts.forEach((part, i) => {
             if (i > 0) sub.append(' · ');
@@ -2342,9 +2359,9 @@ class FlatnessTool {
 
     private ruleStatusText(): string {
         switch (this.rule?.status) {
-            case 'zone-too-small': return 'zone plus courte que la règle';
-            case 'cells-too-coarse': return 'relevé trop peu dense';
-            default: return 'pas assez de points sous la règle';
+            case 'zone-too-small': return tr('rule-status.zone-too-small');
+            case 'cells-too-coarse': return tr('rule-status.cells-too-coarse');
+            default: return tr('rule-status.no-data');
         }
     }
 
@@ -2360,7 +2377,7 @@ class FlatnessTool {
         const labels = document.createElement('div');
         labels.className = 'flatness-legend-labels';
         const scale = formatLength(this.colorScale);
-        for (const text of [`creux −${scale}`, '0', `+${scale} bosse`]) {
+        for (const text of [tr('legend.hollow', { scale }), '0', tr('legend.bump', { scale })]) {
             const span = document.createElement('span');
             span.textContent = text;
             labels.appendChild(span);
@@ -2387,10 +2404,10 @@ class FlatnessTool {
         content.setAttribute('role', 'tabpanel');
 
         const tabs: { id: FlatnessTab; label: string }[] = [
-            { id: 'deviations', label: 'Écarts' },
-            { id: 'rule', label: 'Règle' },
-            { id: 'settings', label: 'Réglages' },
-            { id: 'export', label: 'Export' }
+            { id: 'deviations', label: tr('tab.deviations') },
+            { id: 'rule', label: tr('tab.rule') },
+            { id: 'settings', label: tr('tab.settings') },
+            { id: 'export', label: tr('tab.export') }
         ];
         const buttons: HTMLButtonElement[] = [];
         const render = () => {
@@ -2430,39 +2447,38 @@ class FlatnessTool {
         const geo = this.gridGeom;
         const tab = document.createElement('div');
 
-        tab.appendChild(createRow('Creux max', formatLength(stats.hollow, true), 'hollow'));
-        tab.appendChild(createRow('Bosse max', formatLength(stats.bump, true), 'bump'));
-        tab.appendChild(createRow('Amplitude', formatLength(stats.bump - stats.hollow)));
-        tab.appendChild(createRow('Écart type', formatLength(stats.rms)));
-        tab.appendChild(createRow('Surface', `${stats.area.toFixed(2).replace('.', ',')} m²`));
-        tab.appendChild(createRow('Taille des cases', `${formatLength(geo.du)} × ${formatLength(geo.dv)}`));
+        tab.appendChild(createRow(tr('hollow-max'), formatLength(stats.hollow, true), 'hollow'));
+        tab.appendChild(createRow(tr('bump-max'), formatLength(stats.bump, true), 'bump'));
+        tab.appendChild(createRow(tr('amplitude'), formatLength(stats.bump - stats.hollow)));
+        tab.appendChild(createRow(tr('rms'), formatLength(stats.rms)));
+        tab.appendChild(createRow(tr('area'), `${formatNumber(stats.area, 2)} m²`));
+        tab.appendChild(createRow(tr('cell-size'), `${formatLength(geo.du)} × ${formatLength(geo.dv)}`));
         for (const row of [this.slopeRow(), this.levelRow()]) {
             if (row) tab.appendChild(createRow(row[0], row[1]));
         }
         if (stats.emptyPct >= 0.5) {
-            const estimated = this.interpolationEnabled ? ' (hachurée)' : '';
-            tab.appendChild(createRow(`Zone sans points${estimated}`, `${Math.round(stats.emptyPct)} %`));
+            tab.appendChild(createRow(tr(this.interpolationEnabled ? 'empty-hatched' : 'empty'), `${Math.round(stats.emptyPct)} %`));
         }
 
         const info = document.createElement('div');
         info.className = 'tool-info';
         const total = this.rawSplatCount + this.excludedSplatCount;
         const lines = [`${this.deviationsTitle()}.`];
-        lines.push(`${this.rawSplatCount.toLocaleString('fr-FR')} points analysés`);
+        lines.push(tr('info.points', { n: formatCount(this.rawSplatCount) }));
         if (this.excludedSplatCount > 0) {
             const pct = Math.round(this.excludedSplatCount / total * 100);
-            lines.push(`${this.excludedSplatCount.toLocaleString('fr-FR')} hors épaisseur ignorés (${pct} %)`);
+            lines.push(tr('info.excluded', { n: formatCount(this.excludedSplatCount), pct }));
         }
         if (this.hiddenSplatCount > 0) {
-            lines.push(`${this.hiddenSplatCount.toLocaleString('fr-FR')} splats derrière la surface écartés (reflets)`);
+            lines.push(tr('info.hidden', { n: formatCount(this.hiddenSplatCount) }));
         }
         if (stats.spikeCells > 0) {
-            lines.push(`${stats.spikeCells.toLocaleString('fr-FR')} cases isolées écartées (points flottants)`);
+            lines.push(tr('info.spikes', { n: formatCount(stats.spikeCells) }));
         }
-        lines.push(`Bruit du relevé : ±${formatLength(stats.noise)}`);
+        lines.push(tr('info.noise', { value: formatLength(stats.noise) }));
         const lod = this.lodText();
-        if (lod) lines.push(`Niveau de détail : ${lod}`);
-        if (this.interpolationEnabled && stats.emptyPct >= 0.5) lines.push('Hachures : zones sans points, valeurs estimées');
+        if (lod) lines.push(tr('info.lod', { value: lod }));
+        if (this.interpolationEnabled && stats.emptyPct >= 0.5) lines.push(tr('info.hatching'));
         for (const line of lines) {
             const div = document.createElement('div');
             div.textContent = line;
@@ -2471,7 +2487,7 @@ class FlatnessTool {
         tab.appendChild(info);
 
         if (this.colorScale < stats.noise) {
-            tab.appendChild(createNote('Échelle plus fine que le bruit du relevé : la carte montre surtout le bruit.', true));
+            tab.appendChild(createNote(tr('warn.scale-noise'), true));
         }
         const lodWarning = this.lodWarning();
         if (lodWarning) tab.appendChild(createNote(lodWarning, this.lod.status !== 'loading' && this.lod.status !== 'finer'));
@@ -2483,10 +2499,10 @@ class FlatnessTool {
 
         const lengths = RULE_LENGTHS.map(length => ({
             value: length,
-            label: length === 0 ? 'Zone' : this.ruleLabel(length),
-            title: length === 0 ? 'La règle traverse la zone d\'un bord à l\'autre (affaissement d\'un pan)' : undefined
+            label: length === 0 ? tr('rule.zone') : this.ruleLabel(length),
+            title: length === 0 ? tr('rule.zone-title') : undefined
         }));
-        tab.appendChild(createField('Longueur de la règle', createSegmented(lengths, this.ruleLength, (length) => {
+        tab.appendChild(createField(tr('rule.length'), createSegmented(lengths, this.ruleLength, (length) => {
             this.ruleLength = length;
             storeNumber(RULE_LENGTH_STORAGE_KEY, length);
             this.computeRule();
@@ -2495,13 +2511,13 @@ class FlatnessTool {
         })));
 
         // Tolérance : met à jour le verdict sans reconstruire le panneau.
-        tab.appendChild(createField('Tolérance (jour maximal sous la règle)', createStepper({
+        tab.appendChild(createField(tr('rule.tolerance'), createStepper({
             value: Math.round(this.tolerance * 10000) / 10,
             min: 0.5,
             max: 100,
             step: 0.5,
             unit: 'mm',
-            label: 'Tolérance en millimètres',
+            label: tr('rule.tolerance-aria'),
             onChange: (mm) => {
                 this.tolerance = mm / 1000;
                 storeNumber(TOLERANCE_STORAGE_KEY, this.tolerance);
@@ -2526,26 +2542,26 @@ class FlatnessTool {
         const lengthText = this.ruleLabel(this.ruleLength);
         const wholeZone = this.ruleLength === 0;
         if (!rule || rule.status === 'no-data') {
-            el.appendChild(createNote('Pas assez de points mesurés sous la règle pour conclure.'));
+            el.appendChild(createNote(tr('rule.no-data')));
             return;
         }
         if (rule.status === 'zone-too-small') {
-            el.appendChild(createNote(`La zone est plus courte que la règle (${lengthText}) dans toutes les directions.`));
+            el.appendChild(createNote(tr('rule.too-small', { length: lengthText })));
             return;
         }
         if (rule.status === 'cells-too-coarse') {
-            el.appendChild(createNote(`Relevé trop peu dense pour cette règle (${lengthText}) : le nuage ne permet que des cases de ${formatLength(rule.cellSize)}, il en faut ${RULE_MIN_SAMPLES} au moins sous la règle.`));
+            el.appendChild(createNote(tr('rule.too-coarse', { length: lengthText, cell: formatLength(rule.cellSize), n: RULE_MIN_SAMPLES })));
             return;
         }
         if (rule.status !== 'ok') return;
 
-        el.appendChild(createRow(wholeZone ? 'Flèche max sur la zone' : `Flèche max sous ${lengthText}`, formatLength(rule.worst)));
-        el.appendChild(createRow('Positions hors tolérance', `${Math.round(this.exceedPct(rule.fleches))} %`));
-        el.appendChild(createRow('Flèche due au seul bruit', `≈ ${formatLength(rule.noiseFloor)}`));
-        const how = wholeZone ? 'règle d\'un bord à l\'autre' : 'règle promenée';
-        el.appendChild(createNote(`Trait blanc : position la plus défavorable (${how}, 8 directions, cases de ${formatLength(rule.cellSize)}).`));
+        el.appendChild(createRow(wholeZone ? tr('rule.worst-zone') : tr('rule.worst-under', { length: lengthText }), formatLength(rule.worst)));
+        el.appendChild(createRow(tr('rule.exceed'), `${Math.round(this.exceedPct(rule.fleches))} %`));
+        el.appendChild(createRow(tr('rule.noise-floor'), `≈ ${formatLength(rule.noiseFloor)}`));
+        const how = tr(wholeZone ? 'rule.how-zone' : 'rule.how-moved');
+        el.appendChild(createNote(tr('rule.trace', { how, cell: formatLength(rule.cellSize) })));
         if (this.tolerance < rule.noiseFloor) {
-            el.appendChild(createNote(`Tolérance plus fine que la flèche que produit le bruit du relevé (≈ ${formatLength(rule.noiseFloor)}) : verdict peu fiable.`, true));
+            el.appendChild(createNote(tr('rule.warn-noise', { value: formatLength(rule.noiseFloor) }), true));
         }
     }
 
@@ -2553,36 +2569,31 @@ class FlatnessTool {
         const tab = document.createElement('div');
 
         // Plan de référence : seuls les choix qui ont un sens pour la zone.
-        const titles: Record<ReferenceMode, [string, string]> = {
-            mean: ['Plan moyen', 'Planéité : écarts au plan qui épouse au mieux la surface'],
-            horizontal: ['Horizontal', 'Niveau : écarts à un plan horizontal passant par la hauteur médiane de la zone'],
-            vertical: ['Vertical', 'Aplomb : écarts à un plan vertical passant par la position médiane de la zone']
-        };
         const refs = this.availableReferences();
-        const refField = createField('Plan de référence', refs.length > 1 ?
-            createSegmented(refs.map(mode => ({ value: mode, label: titles[mode][0], title: titles[mode][1] })), this.activeReference(), (mode) => {
+        const refField = createField(tr('reference.label'), refs.length > 1 ?
+            createSegmented(refs.map(mode => ({ value: mode, label: tr(`reference.${mode}`), title: tr(`reference.${mode}-title`) })), this.activeReference(), (mode) => {
                 this.reference = mode;
                 this.applyReference();
                 this.computeDeviations();
                 this.showPanel();
                 this.global.app.renderNextFrame = true;
             }) :
-            createNote('Plan moyen : surface ni horizontale ni verticale (à plus de 10°).'));
+            createNote(tr('reference.only-mean')));
         const slope = this.slopeRow();
-        if (slope) refField.appendChild(createNote(`${slope[0]} : ${slope[1]}`));
+        if (slope) refField.appendChild(createNote(tr('note', { label: slope[0], value: slope[1] })));
         tab.appendChild(refField);
 
         // Échelle des couleurs : automatique, valeurs prédéfinies, puis curseur
         // logarithmique de 2 mm à 30 cm pour un réglage fin.
         const presetActive = SCALE_PRESETS.find(p => Math.abs(p - this.colorScale) < 1e-6);
         const scaleOptions = [
-            { value: -1, label: 'Auto', title: 'Suit les écarts mesurés (98 % couverts)' },
+            { value: -1, label: tr('scale.auto'), title: tr('scale.auto-title') },
             ...SCALE_PRESETS.map(p => ({ value: p, label: p < 0.01 ? `${Math.round(p * 1000)} mm` : `${Math.round(p * 100)} cm` }))
         ];
         let current: number | null = null;
         if (!this.colorScaleManual) current = -1;
         else if (presetActive !== undefined) current = presetActive;
-        const scaleField = createField('Échelle des couleurs (±)', createSegmented(scaleOptions, current, (value) => {
+        const scaleField = createField(tr('scale.label'), createSegmented(scaleOptions, current, (value) => {
             this.colorScaleManual = value >= 0;
             if (value >= 0) {
                 this.colorScale = value;
@@ -2615,7 +2626,7 @@ class FlatnessTool {
         }));
         tab.appendChild(scaleField);
 
-        const bandField = createField('Épaisseur analysée autour du plan moyen', createRange({
+        const bandField = createField(tr('band.label'), createRange({
             min: MIN_BAND_CM,
             max: MAX_BAND_CM,
             step: 1,
@@ -2630,35 +2641,35 @@ class FlatnessTool {
                 this.global.app.renderNextFrame = true;
             }
         }));
-        bandField.title = 'Les splats plus éloignés du plan moyen sont ignorés (objets posés, charpente, végétation…)';
+        bandField.title = tr('band.title');
         tab.appendChild(bandField);
 
         // Lissage des tuiles (ou d'une tôle ondulée)
-        const waves = WAVE_WIDTHS.map(width => ({ value: width, label: width === 0 ? 'Non' : `${Math.round(width * 100)} cm` }));
-        const waveField = createField('Lisser les tuiles', createSegmented(waves, this.waveWidth, (width) => {
+        const waves = WAVE_WIDTHS.map(width => ({ value: width, label: width === 0 ? tr('wave.none') : `${Math.round(width * 100)} cm` }));
+        const waveField = createField(tr('wave.label'), createSegmented(waves, this.waveWidth, (width) => {
             this.waveWidth = width;
             this.computeDeviations();
             this.showPanel();
             this.global.app.renderNextFrame = true;
         }));
-        waveField.title = 'Efface l\'ondulation des tuiles ou d\'une tôle ondulée pour ne garder que la forme du pan. Choisissez la plus grande dimension visible d\'une tuile, souvent sa longueur (30 à 40 cm) : les recouvrements ondulent aussi.';
+        waveField.title = tr('wave.title');
         if (this.waveWidth > 0 && this.ruleLength !== 0) {
-            waveField.appendChild(createNote('Pour mesurer l\'affaissement d\'un pan, choisissez la règle « Zone » (onglet Règle).'));
+            waveField.appendChild(createNote(tr('wave.note-zone')));
         } else if (this.waveWidth === 0) {
-            waveField.appendChild(createNote('Réglez sur la plus grande dimension visible d\'une tuile (souvent 30 à 40 cm).'));
+            waveField.appendChild(createNote(tr('wave.note-size')));
         }
         tab.appendChild(waveField);
 
-        const hidden = createSwitch('Ignorer les reflets', this.hiddenFilterEnabled, (enabled) => {
+        const hidden = createSwitch(tr('hidden.label'), this.hiddenFilterEnabled, (enabled) => {
             this.hiddenFilterEnabled = enabled;
             this.computeDeviations();
             this.showPanel();
             this.global.app.renderNextFrame = true;
         });
-        hidden.title = 'Un sol vitrifié, un carrelage brillant ou une vitre créent des splats fantômes derrière la surface (le reflet). Ils sont écartés : seule la couche visible depuis l\'observateur est mesurée.';
+        hidden.title = tr('hidden.title');
         tab.appendChild(hidden);
 
-        tab.appendChild(createSwitch('Combler les trous', this.interpolationEnabled, (enabled) => {
+        tab.appendChild(createSwitch(tr('fill.label'), this.interpolationEnabled, (enabled) => {
             this.interpolationEnabled = enabled;
             this.postProcessGrid();
             this.showPanel();
@@ -2679,9 +2690,9 @@ class FlatnessTool {
             item.append(button, createNote(description));
             tab.appendChild(item);
         };
-        addItem('Image PNG', 'Carte, légende, échelle et résultats sur une image, pour un rapport.', () => this.exportPng());
-        addItem('Tableau CSV', 'Une ligne par case : position dans le repère affiché et écart en mm, pour Excel.', () => this.exportCsv());
-        addItem('Copier le résumé', 'Résultats dans le presse-papier, à coller dans Excel ou Word.', button => this.copySummary(button));
+        addItem(tr('export.png'), tr('export.png-note'), () => this.exportPng());
+        addItem(tr('export.csv'), tr('export.csv-note'), () => this.exportCsv());
+        addItem(tr('export.copy'), tr('export.copy-note'), button => this.copySummary(button));
         return tab;
     }
 
@@ -2766,26 +2777,23 @@ class FlatnessTool {
     }
 
     private ruleLabel(length: number): string {
-        if (length === 0) return 'toute la zone';
+        if (length === 0) return tr('rule.whole-zone');
         return length < 1 ? `${Math.round(length * 100)} cm` : `${length} m`;
     }
 
     // Plan de référence en toutes lettres : « plan moyen », « plan horizontal ».
     private referenceName(): string {
-        switch (this.activeReference()) {
-            case 'horizontal': return 'plan horizontal';
-            case 'vertical': return 'plan vertical';
-            default: return 'plan moyen';
-        }
+        return tr(`reference.name-${this.activeReference()}`);
     }
 
     // Titre des écarts : « Écarts au plan moyen (tuiles lissées) ».
     private deviationsTitle(): string {
-        return `Écarts au ${this.referenceName()}${this.waveWidth > 0 ? ' (tuiles lissées)' : ''}`;
+        const title = tr(`deviations.title-${this.activeReference()}`);
+        return this.waveWidth > 0 ? tr('deviations.smoothed', { title }) : title;
     }
 
     private bumpText(): string {
-        return this.bumpTowards === 'up' ? 'Bosse = vers le haut' : 'Bosse = vers l\'observateur';
+        return tr(this.bumpTowards === 'up' ? 'bump.up' : 'bump.viewer');
     }
 
     // Pente du plan moyen (sol, toiture) ou son faux aplomb (mur) :
@@ -2793,17 +2801,17 @@ class FlatnessTool {
     private slopeRow(): [string, string] | null {
         const slope = this.fittedSlope();
         if (!slope) return null;
-        const num = (v: number, digits: number) => v.toFixed(digits).replace('.', ',');
+        const num = formatNumber;
         const pct = slope.ratio * 100;
         const mmPerM = slope.ratio * 1000;
         const value = slope.ratio < 0.2 ?
             `${num(pct, pct < 1 ? 2 : 1)} % · ${num(mmPerM, mmPerM < 10 ? 1 : 0)} mm/m` :
             `${num(slope.angle * 180 / Math.PI, 1)}° · ${num(pct, 0)} %`;
-        if (slope.kind === 'slope') return ['Pente du plan moyen', value];
+        if (slope.kind === 'slope') return [tr('slope.slope'), value];
         // Sens du faux aplomb, sauf pour un mur d'aplomb au demi-millimètre par mètre près
         let lean = '';
-        if (mmPerM >= 0.5) lean = slope.lean > 0 ? ', haut en arrière' : ', haut vers l\'observateur';
-        return ['Faux aplomb du plan moyen', value + lean];
+        if (mmPerM >= 0.5) lean = tr(slope.lean > 0 ? 'slope.lean-back' : 'slope.lean-viewer');
+        return [tr('slope.plumb'), value + lean];
     }
 
     // Niveau de détail analysé d'un modèle LOD (0 = le plus fin).
@@ -2811,18 +2819,19 @@ class FlatnessTool {
         const lod = this.lod;
         if (!lod) return null;
         const { min, max, levels } = lod.usage;
-        const range = `${min === max ? `niveau ${min}` : `niveaux ${min} à ${max}`} sur 0 à ${levels - 1}`;
-        if (lod.status === 'finest') return `le plus fin (${range})`;
-        if (lod.status === 'finer') return `le plus fin chargeable pour cette zone (${range}, 0 = le plus fin)`;
-        return `affiché (${range}, 0 = le plus fin)`;
+        const used = min === max ? tr('lod.level', { level: min }) : tr('lod.levels', { min, max });
+        const range = tr('lod.range', { levels: used, last: levels - 1 });
+        if (lod.status === 'finest') return tr('lod.finest', { range });
+        if (lod.status === 'finer') return tr('lod.finer', { range });
+        return tr('lod.displayed', { range });
     }
 
     private lodWarning(): string | null {
         switch (this.lod?.status) {
-            case 'loading': return 'Mesure provisoire sur le niveau de détail affiché : chargement du plus fin en cours.';
-            case 'finer': return 'Zone trop grande pour le niveau de détail 0 : mesure sur le plus fin qui a pu être chargé. Une zone plus petite sera plus précise.';
-            case 'too-large': return 'Zone trop grande pour charger le niveau de détail le plus fin : mesure sur le niveau affiché. Rapprochez-vous pour plus de précision.';
-            case 'failed': return 'Niveau de détail le plus fin indisponible : mesure sur le niveau affiché. Rapprochez-vous pour plus de précision.';
+            case 'loading': return tr('lod.warn-loading');
+            case 'finer': return tr('lod.warn-finer');
+            case 'too-large': return tr('lod.warn-too-large');
+            case 'failed': return tr('lod.warn-failed');
             default: return null;
         }
     }
@@ -2832,7 +2841,7 @@ class FlatnessTool {
         if (this.activeReference() !== 'horizontal' || !this.planeOrigin) return null;
         const coords = this.global.coords;
         const level = coords.toDisplay(this.planeOrigin);
-        return ['Niveau de référence (médiane)', formatCoordsInline([level[2], 0, 0], coords.frameName, [coords.axisNames[2]])];
+        return [tr('level'), formatCoordsInline([level[2], 0, 0], coords.frameName, [coords.axisNames[2]])];
     }
 
     // ── Exports ──
@@ -2850,58 +2859,58 @@ class FlatnessTool {
         const center = coords.toDisplay(this.toWorld({ u: cu, v: cv, h: 0 }));
 
         const zone: [string, string][] = [
-            ['Scène', sceneName()],
-            ['Date', new Date().toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })],
-            ['Centre de la zone', formatCoordsInline(center, coords.frameName, coords.axisNames)],
-            ['Surface', `${stats.area.toFixed(2).replace('.', ',')} m²`],
-            ['Plan de référence', this.referenceName()],
-            ['Sens des écarts', this.bumpTowards === 'up' ? '+ = bosse vers le haut' : '+ = bosse vers l\'observateur']
+            [tr('summary.scene'), sceneName()],
+            [tr('summary.date'), new Date().toLocaleString(getLocale(), { dateStyle: 'short', timeStyle: 'short' })],
+            [tr('summary.center'), formatCoordsInline(center, coords.frameName, coords.axisNames)],
+            [tr('area'), `${formatNumber(stats.area, 2)} m²`],
+            [tr('reference.label'), this.referenceName()],
+            [tr('summary.direction'), tr(this.bumpTowards === 'up' ? 'summary.direction-up' : 'summary.direction-viewer')]
         ];
         for (const row of [this.slopeRow(), this.levelRow()]) {
             if (row) zone.push(row);
         }
 
         const deviations: [string, string][] = [
-            ['Creux max', formatLength(stats.hollow, true)],
-            ['Bosse max', formatLength(stats.bump, true)],
-            ['Amplitude', formatLength(stats.bump - stats.hollow)],
-            ['Écart type', formatLength(stats.rms)],
-            ['Zone sans points', `${Math.round(stats.emptyPct)} %`]
+            [tr('hollow-max'), formatLength(stats.hollow, true)],
+            [tr('bump-max'), formatLength(stats.bump, true)],
+            [tr('amplitude'), formatLength(stats.bump - stats.hollow)],
+            [tr('rms'), formatLength(stats.rms)],
+            [tr('empty'), `${Math.round(stats.emptyPct)} %`]
         ];
 
         const ruleRows: [string, string][] = [
-            ['Règle', this.ruleLabel(this.ruleLength)],
-            ['Tolérance', formatTolerance(this.tolerance)]
+            [tr('summary.rule'), this.ruleLabel(this.ruleLength)],
+            [tr('summary.tolerance'), formatTolerance(this.tolerance)]
         ];
         if (rule?.status === 'ok') {
             ruleRows.push(
-                ['Verdict', rule.worst <= this.tolerance ? 'Conforme' : 'Hors tolérance'],
-                ['Flèche max', formatLength(rule.worst)],
-                ['Positions hors tolérance', `${Math.round(this.exceedPct(rule.fleches))} %`],
-                ['Flèche due au seul bruit', `≈ ${formatLength(rule.noiseFloor)}`]
+                [tr('summary.verdict'), tr(rule.worst <= this.tolerance ? 'verdict.ok' : 'verdict.ko')],
+                [tr('summary.worst'), formatLength(rule.worst)],
+                [tr('rule.exceed'), `${Math.round(this.exceedPct(rule.fleches))} %`],
+                [tr('rule.noise-floor'), `≈ ${formatLength(rule.noiseFloor)}`]
             );
         } else {
-            ruleRows.push(['Verdict', 'non calculé (voir le panneau)']);
+            ruleRows.push([tr('summary.verdict'), tr('summary.not-computed')]);
         }
 
         const settings: [string, string][] = [
-            ['Épaisseur analysée', `± ${formatLength(this.bandHalfWidth)}`],
-            ['Lissage des tuiles', this.waveWidth > 0 ? formatLength(this.waveWidth) : 'non'],
-            ['Taille des cases', `${formatLength(geo.du)} × ${formatLength(geo.dv)}`],
-            ['Points analysés', this.rawSplatCount.toLocaleString('fr-FR')],
-            ['Points hors épaisseur ignorés', this.excludedSplatCount.toLocaleString('fr-FR')],
-            ['Reflets écartés (derrière la surface)', this.hiddenFilterEnabled ? this.hiddenSplatCount.toLocaleString('fr-FR') : 'filtre désactivé'],
-            ['Cases isolées écartées', stats.spikeCells.toLocaleString('fr-FR')],
-            ['Bruit du relevé', `± ${formatLength(stats.noise)}`]
+            [tr('summary.band'), `± ${formatLength(this.bandHalfWidth)}`],
+            [tr('summary.wave'), this.waveWidth > 0 ? formatLength(this.waveWidth) : tr('summary.no')],
+            [tr('cell-size'), `${formatLength(geo.du)} × ${formatLength(geo.dv)}`],
+            [tr('summary.points'), formatCount(this.rawSplatCount)],
+            [tr('summary.excluded'), formatCount(this.excludedSplatCount)],
+            [tr('summary.hidden'), this.hiddenFilterEnabled ? formatCount(this.hiddenSplatCount) : tr('summary.hidden-off')],
+            [tr('summary.spikes'), formatCount(stats.spikeCells)],
+            [tr('summary.noise'), `± ${formatLength(stats.noise)}`]
         ];
         const lod = this.lodText();
-        if (lod) settings.push(['Niveau de détail', lod]);
+        if (lod) settings.push([tr('summary.lod'), lod]);
 
         return [
-            { title: 'Zone', rows: zone },
+            { title: tr('summary.zone'), rows: zone },
             { title: this.deviationsTitle(), rows: deviations },
-            { title: 'Règle', rows: ruleRows },
-            { title: 'Réglages et relevé', rows: settings }
+            { title: tr('summary.rule'), rows: ruleRows },
+            { title: tr('summary.settings'), rows: settings }
         ];
     }
 
@@ -2909,7 +2918,7 @@ class FlatnessTool {
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, '0');
         const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}h${pad(d.getMinutes())}`;
-        return `planeite-${slugify(sceneName()) || 'scene'}-${stamp}`;
+        return `${slugify(tr('export.file'))}-${slugify(sceneName()) || 'scene'}-${stamp}`;
     }
 
     // Image de rapport : carte à gauche avec légende et échelle, résultats à droite.
@@ -2954,7 +2963,7 @@ class FlatnessTool {
                         ctx.fillText(label, colX, y + 16);
                         ctx.font = font(15, 600);
                         ctx.fillStyle = '#18181b';
-                        if (label === 'Verdict') ctx.fillStyle = value === 'Conforme' ? '#4d7c0f' : '#b91c1c';
+                        if (label === tr('summary.verdict')) ctx.fillStyle = value === tr('verdict.ok') ? '#4d7c0f' : '#b91c1c';
                         ctx.textAlign = 'right';
                         ctx.fillText(value, colX + colW, y + 16 + (wrap ? 20 : 0));
                     }
@@ -2976,10 +2985,10 @@ class FlatnessTool {
         ctx.textAlign = 'left';
         ctx.fillStyle = '#18181b';
         ctx.font = font(26, 700);
-        ctx.fillText(`Planéité — ${sceneName()}`, margin, margin + 26);
+        ctx.fillText(tr('png.title', { scene: sceneName() }), margin, margin + 26);
         ctx.fillStyle = '#71717a';
         ctx.font = font(15);
-        ctx.fillText(`${new Date().toLocaleString('fr-FR', { dateStyle: 'long', timeStyle: 'short' })} · ${this.global.coords.frameName}`, margin, margin + 52);
+        ctx.fillText(`${new Date().toLocaleString(getLocale(), { dateStyle: 'long', timeStyle: 'short' })} · ${this.global.coords.frameName}`, margin, margin + 52);
 
         // Carte
         const map = document.createElement('canvas');
@@ -3003,20 +3012,20 @@ class FlatnessTool {
         ctx.fillStyle = '#52525b';
         const scale = formatLength(this.colorScale);
         ctx.textAlign = 'left';
-        ctx.fillText(`creux −${scale}`, margin, y);
+        ctx.fillText(tr('legend.hollow', { scale }), margin, y);
         ctx.textAlign = 'center';
         ctx.fillText('0', margin + barW / 2, y);
         ctx.textAlign = 'right';
-        ctx.fillText(`+${scale} bosse`, margin + barW, y);
+        ctx.fillText(tr('legend.bump', { scale }), margin + barW, y);
 
         ctx.textAlign = 'left';
         ctx.fillStyle = '#71717a';
         const notes = [
             `${this.deviationsTitle()}. ${this.bumpText()}.`,
-            'Carte vue depuis le point de vue du calcul. Trait blanc : position la plus défavorable de la règle.'
+            tr('png.view')
         ];
-        if (this.waveWidth > 0) notes.push(`Ondulation de ${formatLength(this.waveWidth)} lissée (tuiles).`);
-        if (this.interpolationEnabled && this.stats.emptyPct >= 0.5) notes.push('Hachures : zones sans points, valeurs estimées.');
+        if (this.waveWidth > 0) notes.push(tr('png.wave', { value: formatLength(this.waveWidth) }));
+        if (this.interpolationEnabled && this.stats.emptyPct >= 0.5) notes.push(tr('png.hatching'));
         for (const note of notes) {
             y += 20;
             ctx.fillText(note, margin, y);
@@ -3039,7 +3048,7 @@ class FlatnessTool {
         ctx.font = font(13);
         ctx.fillStyle = '#18181b';
         ctx.textAlign = 'center';
-        ctx.fillText(length < 1 ? `${Math.round(length * 100)} cm` : `${length} m`, sx + px / 2, sy + 18);
+        ctx.fillText(length < 1 ? `${Math.round(length * 100)} cm` : `${formatNumber(length, 0)} m`, sx + px / 2, sy + 18);
 
         drawColumn(true);
 
@@ -3049,8 +3058,8 @@ class FlatnessTool {
     }
 
     // Une ligne par case de la carte : position sur la surface dans le repère
-    // affiché (celui du panneau Point) et écart au plan. Séparateur « ; » et
-    // décimale de la langue de l'interface, pour Excel.
+    // affiché (celui du panneau Point) et écart au plan. Décimale et
+    // séparateur de la langue de l'interface, pour Excel.
     private exportCsv() {
         const data = this.gridData, geo = this.gridGeom;
         if (!data || !geo) return;
@@ -3061,8 +3070,8 @@ class FlatnessTool {
 
         const rows: string[][] = [[
             'i', 'j', 'u (m)', 'v (m)',
-            ...coords.axisNames.map(axis => `${axis} (m, ${coords.frameName})`),
-            'écart (mm)', 'donnée'
+            ...coords.axisNames.map(axis => tr('csv.axis', { axis, frame: coords.frameName })),
+            tr('csv.deviation'), tr('csv.data')
         ]];
         for (let j = 0; j < data.resY; j++) {
             for (let i = 0; i < data.resX; i++) {
@@ -3075,12 +3084,16 @@ class FlatnessTool {
                     String(i), String(j), num(u, 3), num(v, 3),
                     ...coordsForClipboard(p),
                     num(value * 1000, 1),
-                    data.measured[j][i] ? 'mesurée' : 'estimée'
+                    tr(data.measured[j][i] ? 'csv.measured' : 'csv.estimated')
                 ]);
             }
         }
 
-        const text = `\uFEFF${rows.map(r => r.join(';')).join('\r\n')}`;
+        // Séparateur « ; » avec la virgule décimale, « , » avec le point, comme
+        // l'attend Excel dans chaque langue.
+        const separator = decimal === ',' ? ';' : ',';
+        const field = (text: string) => (text.includes(separator) || text.includes('"') ? `"${text.replace(/"/g, '""')}"` : text);
+        const text = `\uFEFF${rows.map(r => r.map(field).join(separator)).join('\r\n')}`;
         downloadBlob(new Blob([text], { type: 'text/csv;charset=utf-8' }), `${this.exportBaseName()}.csv`);
     }
 
@@ -3092,7 +3105,7 @@ class FlatnessTool {
         }
         const caption = button.textContent;
         copyTable(rows).then((ok) => {
-            button.textContent = ok ? 'Copié ✓' : 'Copie impossible';
+            button.textContent = tr(ok ? 'export.copied' : 'export.copy-failed');
             setTimeout(() => {
                 button.textContent = caption;
             }, 1500);
@@ -3167,7 +3180,7 @@ class FlatnessTool {
         const probe = this.probe;
         const at = probe && this.valueAt(probe.u, probe.v);
         if (!at) return null;
-        return `${formatLength(at.value, true)} (${at.measured ? 'mesurée' : 'estimée'})`;
+        return tr(at.measured ? 'probe.measured' : 'probe.estimated', { value: formatLength(at.value, true) });
     }
 
     // Repère et valeur sur la carte du panneau.
@@ -3373,7 +3386,7 @@ class FlatnessTool {
         ctx.lineTo(gs.x, gs.y);
         ctx.stroke();
 
-        const text = `flèche ${formatLength(rule.worst)}`;
+        const text = tr('rule-gap', { value: formatLength(rule.worst) });
         ctx.font = '13px Arial';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
