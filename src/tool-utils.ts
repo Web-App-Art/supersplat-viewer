@@ -63,6 +63,33 @@ export function worldToScreen(camera: Entity, pos: Vec3): { x: number; y: number
     };
 }
 
+// ARTLIGHT (TKT-240) : rayon de la caméra passant par un point de l'écran
+// (pixels CSS depuis le coin du canvas, comme worldToScreen), avec la pose
+// courante de la caméra. Deux points de la droite pris à mi-profondeur :
+// valable en perspective comme en orthographique, quel que soit le sens de
+// la profondeur. Le point d'intersection doit être testé devant la caméra.
+const tmpInvViewProj = new Mat4();
+
+export function screenToRay(camera: Entity, x: number, y: number): { origin: Vec3; dir: Vec3 } | null {
+    const cam = camera.camera;
+    tmpView.copy(camera.getWorldTransform()).invert();
+    tmpViewProj.mul2(cam.projectionMatrix, tmpView);
+    tmpInvViewProj.copy(tmpViewProj).invert();
+
+    const { width, height } = cam.system.app.graphicsDevice.clientRect;
+    const { x: rx, y: ry, z: rw, w: rh } = cam.rect;
+    const nx = (x - rx * width) / (rw * width) * 2 - 1;
+    const ny = 1 - (y - (1 - ry - rh) * height) / (rh * height) * 2;
+    const unproject = (z: number) => {
+        tmpInvViewProj.transformVec4(tmpClip.set(nx, ny, z, 1), tmpClip);
+        return new Vec3(tmpClip.x / tmpClip.w, tmpClip.y / tmpClip.w, tmpClip.z / tmpClip.w);
+    };
+    const origin = unproject(0);
+    const dir = unproject(0.5).sub(origin);
+    if (dir.lengthSq() < 1e-20) return null;
+    return { origin, dir: dir.normalize() };
+}
+
 export function findPointNear(
     camera: Entity,
     points: Vec3[],

@@ -3,7 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, drawEdgeLabel, getSplatCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
+import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -190,6 +190,60 @@ const MAX_POINTS = 16;
 
 // Délai avant de relancer le calcul après le déplacement d'un sommet.
 const RECOMPUTE_DELAY = 150;
+
+// Carte sur la vue 3D : opacité du calque, opacité relative des zones sans
+// points (hachurées dans le panneau) et nombre de morceaux par côté. Chaque
+// morceau est dessiné en deux triangles à transformation affine : plus il y
+// en a, plus la perspective est juste.
+const VIEW_MAP_OPACITY = 0.7;
+const VIEW_ESTIMATED_ALPHA = 0.45;
+const VIEW_MAP_PATCHES = 16;
+const VIEW_MAP_STORAGE_KEY = 'artlight.flatness.onview';
+
+// Triangle d'image dessiné à l'écran : transformation affine qui envoie les
+// points `src` (pixels de l'image) sur `dst` (pixels CSS), limitée au
+// triangle élargi d'un demi-pixel pour ne pas laisser de jour entre voisins.
+const drawImageTriangle = (ctx: CanvasRenderingContext2D, image: HTMLCanvasElement, imageW: number, imageH: number,
+    src: { x: number; y: number }[], dst: { x: number; y: number }[], dpr: number) => {
+    const [s0, s1, s2] = src, [d0, d1, d2] = dst;
+    const area = (d1.x - d0.x) * (d2.y - d0.y) - (d2.x - d0.x) * (d1.y - d0.y);
+    const denom = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+    if (Math.abs(area) < 0.01 || Math.abs(denom) < 1e-12) return;
+
+    const solve = (k0: number, k1: number, k2: number) => [
+        (k0 * (s1.y - s2.y) + k1 * (s2.y - s0.y) + k2 * (s0.y - s1.y)) / denom,
+        (k0 * (s2.x - s1.x) + k1 * (s0.x - s2.x) + k2 * (s1.x - s0.x)) / denom,
+        (k0 * (s1.x * s2.y - s2.x * s1.y) + k1 * (s2.x * s0.y - s0.x * s2.y) + k2 * (s0.x * s1.y - s1.x * s0.y)) / denom
+    ];
+    const [a, c, e] = solve(d0.x, d1.x, d2.x);
+    const [b, d, f] = solve(d0.y, d1.y, d2.y);
+
+    const cx = (d0.x + d1.x + d2.x) / 3, cy = (d0.y + d1.y + d2.y) / 3;
+    const grow = (p: { x: number; y: number }): [number, number] => {
+        const dx = p.x - cx, dy = p.y - cy;
+        const len = Math.hypot(dx, dy) || 1;
+        return [p.x + dx / len * 0.6, p.y + dy / len * 0.6];
+    };
+
+    // Seule la partie utile de l'image, avec une case de marge
+    const x0 = Math.max(0, Math.floor(Math.min(s0.x, s1.x, s2.x)) - 1);
+    const y0 = Math.max(0, Math.floor(Math.min(s0.y, s1.y, s2.y)) - 1);
+    const x1 = Math.min(imageW, Math.ceil(Math.max(s0.x, s1.x, s2.x)) + 1);
+    const y1 = Math.min(imageH, Math.ceil(Math.max(s0.y, s1.y, s2.y)) + 1);
+    if (x1 <= x0 || y1 <= y0) return;
+
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.beginPath();
+    ctx.moveTo(...grow(d0));
+    ctx.lineTo(...grow(d1));
+    ctx.lineTo(...grow(d2));
+    ctx.closePath();
+    ctx.clip();
+    ctx.transform(a, b, c, d, e, f);
+    ctx.drawImage(image, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    ctx.restore();
+};
 
 interface Plane {
     origin: Vec3;
@@ -805,6 +859,30 @@ class FlatnessTool {
 
     private heatmapCanvas: HTMLCanvasElement | null = null;
 
+    // Carte plaquée sur la zone dans la vue 3D : calque plein écran, redessiné
+    // seulement quand la caméra ou la carte changent.
+    private showOnView = readStoredText(VIEW_MAP_STORAGE_KEY, '1', v => v === '0' || v === '1') === '1';
+
+    private mapCanvas: HTMLCanvasElement | null = null;
+
+    private viewMapKey = '';
+
+    // Image de la carte, une case par pixel, et la carte qu'elle représente.
+    private viewTexture: HTMLCanvasElement | null = null;
+
+    private viewTextureKey = '';
+
+    // Incrémenté à chaque nouvelle carte (postProcessGrid).
+    private mapVersion = 0;
+
+    // Valeur survolée, sur la vue ou sur la carte du panneau : position sur
+    // le plan de référence.
+    private probe: { u: number; v: number; from: 'view' | 'map' } | null = null;
+
+    private probeMarker: HTMLDivElement | null = null;
+
+    private pointerMoveHandler: ((event: PointerEvent) => void) | null = null;
+
     constructor(global: Global) {
         this.global = global;
         this.pointerHandler = new ToolPointerHandler(global, {
@@ -821,6 +899,12 @@ class FlatnessTool {
         this.overlay.id = 'flatnessMeasureOverlay';
         const ui = document.querySelector('#ui');
         ui.insertBefore(this.overlay, ui.firstChild);
+
+        // Sous le tracé de la zone et de la règle
+        this.mapCanvas = document.createElement('canvas');
+        this.mapCanvas.style.cssText = `position:fixed;top:0;left:0;pointer-events:none;opacity:${VIEW_MAP_OPACITY};`;
+        this.overlay.appendChild(this.mapCanvas);
+        this.viewMapKey = '';
 
         this.drawCanvas = document.createElement('canvas');
         this.drawCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;';
@@ -848,6 +932,16 @@ class FlatnessTool {
         };
         document.addEventListener('keydown', this.keyHandler);
 
+        // Valeur au survol de la zone dans la vue (souris seulement ; au
+        // doigt, un appui sur la zone l'affiche, voir handleClick).
+        this.pointerMoveHandler = (event: PointerEvent) => {
+            if (event.pointerType !== 'mouse' || this.probe?.from === 'map') return;
+            const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+            const onSurface = event.target === canvas && event.buttons === 0 && this.state === 'closed';
+            this.setProbe(onSurface ? this.probeAtScreen(event.clientX, event.clientY) : null);
+        };
+        document.addEventListener('pointermove', this.pointerMoveHandler);
+
         this.updateHandler = () => {
             this.syncFromPoints();
             this.render();
@@ -868,6 +962,11 @@ class FlatnessTool {
             this.keyHandler = null;
         }
 
+        if (this.pointerMoveHandler) {
+            document.removeEventListener('pointermove', this.pointerMoveHandler);
+            this.pointerMoveHandler = null;
+        }
+
         this.pointerHandler.deactivate();
         this.cancelRecompute();
         this.removePanel();
@@ -878,6 +977,8 @@ class FlatnessTool {
         }
 
         this.drawCanvas = null;
+        this.mapCanvas = null;
+        this.probe = null;
         this.hint = null;
         this.currentPoints = [];
         this.analyzedPoints = [];
@@ -896,6 +997,8 @@ class FlatnessTool {
             this.state = 'placing';
         } else if (this.state === 'closed') {
             this.pointerHandler.selectedIndex = -1;
+            // Au doigt, pas de survol : un appui sur la zone affiche la valeur.
+            this.setProbe(this.probeAtWorld(pos));
         } else if (this.state === 'placing') {
             // Snap to first point to close polygon (>= 3 points, within 20px)
             if (this.currentPoints.length >= 3) {
@@ -955,6 +1058,7 @@ class FlatnessTool {
         this.keptPoints = null;
         this.stats = null;
         this.rule = null;
+        this.probe = null;
         this.colorScaleManual = false;
         this.removePanel();
         this.pointerHandler.reset();
@@ -1154,14 +1258,26 @@ class FlatnessTool {
     // U = droite caméra projetée sur le plan (horizontale de la carte ≈ écran),
     // V = N × U, calculé avec la normale tournée vers la caméra pour que la
     // verticale de la carte descende comme l'écran, quel que soit le sens de N.
-    private planeBasis(normal: Vec3) {
+    // « Vers la caméra » : du plan vers sa position, et non selon sa direction
+    // de visée, qui est parallèle au sol quand on regarde à l'horizontale (la
+    // carte sortait alors retournée par rapport à la vue).
+    private planeBasis(normal: Vec3, origin: Vec3) {
         const view = this.view;
-        const N = normal.dot(view.forward) > 0 ? normal.clone().mulScalar(-1) : normal;
+        const toCamera = new Vec3().sub2(view.position, origin);
+        const N = normal.dot(toCamera) < 0 ? normal.clone().mulScalar(-1) : normal;
         const camRight = view.right.clone();
         const dotNR = camRight.dot(N);
         const U = new Vec3(camRight.x - dotNR * N.x, camRight.y - dotNR * N.y, camRight.z - dotNR * N.z);
         const uLen = U.length();
-        if (uLen < 1e-10) {
+        // Surface vue en enfilade (mur longé du regard) : la droite de la
+        // caméra est presque selon la normale, sa projection ne donne plus de
+        // direction fiable. On prend l'horizontale de la surface, dans le
+        // sens de la droite de la caméra.
+        const horizontal = new Vec3().cross(Vec3.UP, N);
+        if (uLen < 0.5 && horizontal.length() > 0.1) {
+            U.copy(horizontal.normalize());
+            if (U.dot(camRight) < 0) U.mulScalar(-1);
+        } else if (uLen < 1e-10) {
             // Camera looking straight at the plane normal — fallback
             const camUp = view.up.clone();
             const dotNU = camUp.dot(N);
@@ -1176,7 +1292,7 @@ class FlatnessTool {
     private setPlane(plane: Plane) {
         this.planeOrigin = plane.origin;
         this.planeNormal = plane.normal;
-        const { U, V } = this.planeBasis(plane.normal);
+        const { U, V } = this.planeBasis(plane.normal, plane.origin);
         this.planeU = U;
         this.planeV = V;
     }
@@ -1207,7 +1323,7 @@ class FlatnessTool {
         const { centers, numSplats, worldMatrix: m } = info;
         const O = footprint.origin;
         const N = footprint.normal;
-        const { U, V } = this.planeBasis(N);
+        const { U, V } = this.planeBasis(N, O);
         const polyUV = this.projectPolygon(O, U, V);
 
         let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
@@ -1736,6 +1852,7 @@ class FlatnessTool {
             (hole(j - 1, i) || hole(j + 1, i) || hole(j, i - 1) || hole(j, i + 1))));
 
         this.gridData = { grid, measured, hatched, resX, resY };
+        this.mapVersion++;
     }
 
     // ── Règle virtuelle ──
@@ -1994,8 +2111,17 @@ class FlatnessTool {
         this.heatmapCanvas.className = 'flatness-map';
         this.heatmapCanvas.width = Math.round(width);
         this.heatmapCanvas.height = Math.round(width / aspect);
-        body.appendChild(this.heatmapCanvas);
         this.drawHeatmap();
+        body.appendChild(this.createMap());
+
+        // Carte plaquée sur la zone dans la vue 3D
+        const onView = createSwitch('Afficher sur la vue', this.showOnView, (enabled) => {
+            this.showOnView = enabled;
+            storeText(VIEW_MAP_STORAGE_KEY, enabled ? '1' : '0');
+            this.global.app.renderNextFrame = true;
+        });
+        onView.classList.add('flatness-onview');
+        body.appendChild(onView);
 
         body.appendChild(this.createTabs());
         this.panel.appendChild(body);
@@ -2003,6 +2129,33 @@ class FlatnessTool {
         // Insert into overlay
         this.overlay.appendChild(this.panel);
         this.panel.scrollTop = scrollTop;
+        this.updateProbeMarker();
+    }
+
+    // Carte du panneau et repère de la valeur survolée. Le survol de la
+    // carte montre aussi le point dans la vue.
+    private createMap(): HTMLDivElement {
+        const wrap = document.createElement('div');
+        wrap.className = 'flatness-map-wrap';
+        const canvas = this.heatmapCanvas;
+        wrap.appendChild(canvas);
+
+        this.probeMarker = document.createElement('div');
+        this.probeMarker.className = 'flatness-probe';
+        this.probeMarker.hidden = true;
+        this.probeMarker.appendChild(document.createElement('span'));
+        wrap.appendChild(this.probeMarker);
+
+        canvas.addEventListener('pointermove', (event) => {
+            const geo = this.gridGeom, data = this.gridData;
+            if (!geo || !data) return;
+            const rect = canvas.getBoundingClientRect();
+            const u = geo.uMin + (event.clientX - rect.left) / rect.width * data.resX * geo.du;
+            const v = geo.vMin + (event.clientY - rect.top) / rect.height * data.resY * geo.dv;
+            this.setProbe(this.valueAt(u, v) ? { u, v, from: 'map' } : null);
+        });
+        canvas.addEventListener('pointerleave', () => this.setProbe(null));
+        return wrap;
     }
 
     private removePanel() {
@@ -2010,6 +2163,7 @@ class FlatnessTool {
             this.panel.remove();
             this.panel = null;
             this.heatmapCanvas = null;
+            this.probeMarker = null;
             this.banner = null;
             this.ruleResults = null;
         }
@@ -2369,7 +2523,7 @@ class FlatnessTool {
         }));
         tab.appendChild(scaleField);
 
-        const bandField = createField('Épaisseur analysée autour du plan', createRange({
+        const bandField = createField('Épaisseur analysée autour du plan moyen', createRange({
             min: MIN_BAND_CM,
             max: MAX_BAND_CM,
             step: 1,
@@ -2825,10 +2979,222 @@ class FlatnessTool {
         });
     }
 
+    // ── Carte sur la vue 3D et valeur survolée ──
+
+    // Point de la surface sous la position (u, v) du plan de référence : on
+    // descend selon la normale de référence jusqu'au plan moyen, qui épouse
+    // la surface (un plan horizontal peut s'en écarter de quelques cm sur un
+    // sol en pente).
+    private surfacePoint(u: number, v: number): Vec3 {
+        const p = this.toWorld({ u, v, h: 0 });
+        const fit = this.fittedPlane, N = this.planeNormal;
+        const cos = N.dot(fit.normal);
+        if (Math.abs(cos) > 1e-6) {
+            const t = new Vec3().sub2(fit.origin, p).dot(fit.normal) / cos;
+            p.add(N.clone().mulScalar(t));
+        }
+        return p;
+    }
+
+    // Position (u, v) sur le plan de référence d'un point du plan moyen.
+    private planePosition(p: Vec3): { u: number; v: number } {
+        const d = new Vec3().sub2(p, this.planeOrigin);
+        return { u: d.dot(this.planeU), v: d.dot(this.planeV) };
+    }
+
+    // Valeur de la carte en (u, v), null hors de la zone ou sans donnée.
+    private valueAt(u: number, v: number): { value: number; measured: boolean } | null {
+        const data = this.gridData, geo = this.gridGeom;
+        if (!data || !geo) return null;
+        const i = Math.floor((u - geo.uMin) / geo.du);
+        const j = Math.floor((v - geo.vMin) / geo.dv);
+        if (i < 0 || i >= data.resX || j < 0 || j >= data.resY) return null;
+        const value = data.grid[j][i];
+        return value === null ? null : { value, measured: data.measured[j][i] };
+    }
+
+    // Survol de la vue : intersection du rayon de la souris et du plan moyen.
+    private probeAtScreen(clientX: number, clientY: number): { u: number; v: number; from: 'view' } | null {
+        if (!this.gridData || !this.fittedPlane || this.recomputeTimer || this.pointerHandler.isDragging) return null;
+        const camera = this.global.camera;
+        const rect = (this.global.app.graphicsDevice.canvas as HTMLCanvasElement).getBoundingClientRect();
+        const ray = screenToRay(camera, clientX - rect.left, clientY - rect.top);
+        if (!ray) return null;
+        const fit = this.fittedPlane;
+        const denom = ray.dir.dot(fit.normal);
+        if (Math.abs(denom) < 1e-6) return null;
+        const t = new Vec3().sub2(fit.origin, ray.origin).dot(fit.normal) / denom;
+        const hit = ray.origin.clone().add(ray.dir.clone().mulScalar(t));
+        if (new Vec3().sub2(hit, camera.getPosition()).dot(camera.forward) <= 0) return null;
+        return this.probeAtWorld(hit);
+    }
+
+    private probeAtWorld(p: Vec3): { u: number; v: number; from: 'view' } | null {
+        if (!this.gridData || !this.planeOrigin) return null;
+        const { u, v } = this.planePosition(p);
+        return this.valueAt(u, v) ? { u, v, from: 'view' } : null;
+    }
+
+    private setProbe(probe: { u: number; v: number; from: 'view' | 'map' } | null) {
+        if (!probe && !this.probe) return;
+        this.probe = probe;
+        this.updateProbeMarker();
+        this.global.app.renderNextFrame = true;
+    }
+
+    // « −3,2 mm (mesurée) » ou « (estimée) » pour une zone sans points.
+    private probeText(): string | null {
+        const probe = this.probe;
+        const at = probe && this.valueAt(probe.u, probe.v);
+        if (!at) return null;
+        return `${formatLength(at.value, true)} (${at.measured ? 'mesurée' : 'estimée'})`;
+    }
+
+    // Repère et valeur sur la carte du panneau.
+    private updateProbeMarker() {
+        const marker = this.probeMarker, canvas = this.heatmapCanvas, geo = this.gridGeom, data = this.gridData;
+        if (!marker || !canvas || !geo || !data) return;
+        const text = this.probeText();
+        marker.hidden = !text;
+        if (!text) return;
+        const x = (this.probe.u - geo.uMin) / (geo.du * data.resX) * canvas.clientWidth;
+        const y = (this.probe.v - geo.vMin) / (geo.dv * data.resY) * canvas.clientHeight;
+        marker.style.left = `${canvas.offsetLeft + x}px`;
+        marker.style.top = `${canvas.offsetTop + y}px`;
+        marker.dataset.side = x > canvas.clientWidth / 2 ? 'left' : 'right';
+        (marker.firstElementChild as HTMLElement).textContent = text;
+    }
+
+    // Image de la carte pour la vue, une case par pixel : couleurs pleines
+    // pour les cases mesurées, atténuées pour les zones sans points.
+    private getViewTexture(): HTMLCanvasElement {
+        const key = `${this.mapVersion}:${this.colorScale}`;
+        if (this.viewTexture && this.viewTextureKey === key) return this.viewTexture;
+        const data = this.gridData;
+        const texture = this.viewTexture ?? document.createElement('canvas');
+        texture.width = data.resX;
+        texture.height = data.resY;
+        const ctx = texture.getContext('2d');
+        const image = ctx.createImageData(data.resX, data.resY);
+        const px = image.data;
+        for (let j = 0; j < data.resY; j++) {
+            for (let i = 0; i < data.resX; i++) {
+                const value = data.grid[j][i];
+                if (value === null) continue;
+                const c = this.deviationToColor(value);
+                const k = (j * data.resX + i) * 4;
+                px[k] = c.r;
+                px[k + 1] = c.g;
+                px[k + 2] = c.b;
+                px[k + 3] = data.hatched[j][i] ? Math.round(255 * VIEW_ESTIMATED_ALPHA) : 255;
+            }
+        }
+        ctx.putImageData(image, 0, 0);
+        this.viewTexture = texture;
+        this.viewTextureKey = key;
+        return texture;
+    }
+
+    private viewMapVisible(): boolean {
+        return this.showOnView && this.state === 'closed' && !!this.gridData && !!this.fittedPlane &&
+            !this.pointerHandler.isDragging && !this.recomputeTimer;
+    }
+
+    // Carte plaquée sur la zone : la grille est découpée en morceaux dont les
+    // coins sont projetés à l'écran. Redessinée seulement si la caméra, la
+    // taille de la fenêtre ou la carte ont changé.
+    private drawViewMap() {
+        const canvas = this.mapCanvas;
+        if (!canvas) return;
+
+        const visible = this.viewMapVisible();
+        const dpr = window.devicePixelRatio || 1;
+        const width = window.innerWidth, height = window.innerHeight;
+        const camera = this.global.camera;
+        const key = visible ?
+            [this.mapVersion, this.colorScale, width, height, dpr,
+                ...camera.getWorldTransform().data, ...camera.camera.projectionMatrix.data].join(',') :
+            'hidden';
+        if (key === this.viewMapKey) return;
+        this.viewMapKey = key;
+
+        if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!visible) return;
+
+        const data = this.gridData, geo = this.gridGeom;
+        const texture = this.getViewTexture();
+        const P = Math.min(VIEW_MAP_PATCHES, data.resX);
+        const Q = Math.min(VIEW_MAP_PATCHES, data.resY);
+
+        // Coins des morceaux à l'écran (null : derrière la caméra)
+        const corners: ({ x: number; y: number } | null)[] = [];
+        for (let j = 0; j <= Q; j++) {
+            for (let i = 0; i <= P; i++) {
+                const u = geo.uMin + i / P * data.resX * geo.du;
+                const v = geo.vMin + j / Q * data.resY * geo.dv;
+                const s = worldToScreen(camera, this.surfacePoint(u, v));
+                corners.push(s.behind ? null : s);
+            }
+        }
+
+        ctx.imageSmoothingEnabled = false;
+        for (let j = 0; j < Q; j++) {
+            for (let i = 0; i < P; i++) {
+                const c00 = corners[j * (P + 1) + i], c10 = corners[j * (P + 1) + i + 1];
+                const c01 = corners[(j + 1) * (P + 1) + i], c11 = corners[(j + 1) * (P + 1) + i + 1];
+                if (!c00 || !c10 || !c01 || !c11) continue;
+                const t00 = { x: i / P * data.resX, y: j / Q * data.resY };
+                const t10 = { x: (i + 1) / P * data.resX, y: t00.y };
+                const t01 = { x: t00.x, y: (j + 1) / Q * data.resY };
+                const t11 = { x: t10.x, y: t01.y };
+                drawImageTriangle(ctx, texture, data.resX, data.resY, [t00, t10, t11], [c00, c10, c11], dpr);
+                drawImageTriangle(ctx, texture, data.resX, data.resY, [t00, t11, t01], [c00, c11, c01], dpr);
+            }
+        }
+    }
+
+    // Valeur survolée dans la vue : un repère sur la surface et son étiquette.
+    private drawProbe(ctx: CanvasRenderingContext2D) {
+        const text = this.probeText();
+        if (!text || this.recomputeTimer || this.pointerHandler.isDragging) return;
+        const s = worldToScreen(this.global.camera, this.surfacePoint(this.probe.u, this.probe.v));
+        if (s.behind) return;
+
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.font = '13px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const w = ctx.measureText(text).width;
+        const x = s.x + 12, y = s.y - 16;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.beginPath();
+        ctx.roundRect(x - 6, y - 10, w + 12, 20, 4);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(text, x, y);
+    }
+
     // ── Render loop (overlay canvas) ──
 
     private render() {
         if (!this.drawCanvas) return;
+
+        this.drawViewMap();
 
         const dpr = window.devicePixelRatio || 1;
         const width = window.innerWidth;
@@ -2851,6 +3217,7 @@ class FlatnessTool {
 
         if (this.state === 'closed') {
             this.drawRule(ctx);
+            this.drawProbe(ctx);
         }
     }
 
@@ -2906,8 +3273,8 @@ class FlatnessTool {
         const allVisible = screenPoints.every(s => !s.behind);
         if (!allVisible) return;
 
-        // Draw filled polygon
-        if (closed && screenPoints.length >= 3) {
+        // Draw filled polygon (sauf sous la carte plaquée sur la vue)
+        if (closed && screenPoints.length >= 3 && !this.viewMapVisible()) {
             ctx.beginPath();
             ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
             for (let i = 1; i < screenPoints.length; i++) {
