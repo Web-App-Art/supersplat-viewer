@@ -1,4 +1,4 @@
-import { Mat4, Vec3, Vec4 } from 'playcanvas';
+import { BoundingBox, Mat4, Vec3, Vec4 } from 'playcanvas';
 import type { Entity, GSplatComponent } from 'playcanvas';
 
 import type { Global, State } from './types';
@@ -141,10 +141,19 @@ export function drawEdgeLabel(
     ctx.fillText(text, mx, my);
 }
 
+// Niveaux de détail lus sur un modèle LOD : 0 est le plus fin, levels − 1
+// le plus grossier.
+export type LodUsage = {
+    min: number;
+    max: number;
+    levels: number;
+};
+
 export type SplatCenters = {
     centers: Float32Array;              // positions locales, xyz entrelacés
     numSplats: number;
     worldMatrix: Float32Array;          // local → monde (colonnes, format PlayCanvas)
+    lod?: LodUsage;                     // modèle LOD seulement (TKT-240)
 };
 
 // Centres des splats de la scène, partagés par les outils qui analysent le
@@ -183,6 +192,7 @@ export function getSplatCenters(global: Global): SplatCenters | null {
         const camerasData = mainCameraData ? [mainCameraData] : [...director.camerasMap.values()];
         const chunks: Float32Array[] = [];
         let totalSplats = 0;
+        const lod: LodUsage = { min: Infinity, max: -1, levels: 0 };
 
         for (const cameraData of camerasData) {
             for (const layerData of cameraData.layersMap.values()) {
@@ -191,9 +201,14 @@ export function getSplatCenters(global: Global): SplatCenters | null {
                 if (!octreeInstances) continue;
 
                 for (const octreeInstance of octreeInstances.values()) {
+                    lod.levels = Math.max(lod.levels, octreeInstance.octree?.lodLevels ?? 0);
                     for (const placement of octreeInstance.activePlacements) {
                         const placementCenters = placement.resource?.centers as Float32Array;
                         if (!placementCenters || placementCenters.length === 0) continue;
+                        if (typeof placement.lodIndex === 'number') {
+                            lod.min = Math.min(lod.min, placement.lodIndex);
+                            lod.max = Math.max(lod.max, placement.lodIndex);
+                        }
 
                         const intervals = placement.intervals as Map<number, { x: number; y: number }> | undefined;
                         if (!intervals || intervals.size === 0) {
@@ -225,12 +240,181 @@ export function getSplatCenters(global: Global): SplatCenters | null {
             return {
                 centers: merged,
                 numSplats: totalSplats,
-                worldMatrix
+                worldMatrix,
+                lod: lod.levels > 0 && lod.max >= 0 ? lod : undefined
             };
         }
     }
 
     return null;
+}
+
+// ARTLIGHT (TKT-240) : niveau de détail le plus fin d'un modèle LOD sur une
+// zone, quelle que soit la distance de la caméra.
+//
+// L'octree d'un lod-meta.json range le modèle en nœuds ; chaque nœud a, par
+// niveau (0 = le plus fin), une plage [offset, offset + count[ de splats dans
+// un fichier qui ne contient que ce niveau. On prend une référence sur les
+// fichiers du niveau choisi qui couvrent la zone (le rendu, lui, n'est pas
+// touché), on attend leur chargement, on copie les plages utiles et on rend
+// les références. Champs internes du moteur (PlayCanvas 2.20) : tout est
+// vérifié, et l'appelant retombe sur le niveau affiché s'ils manquent.
+//
+// Au plus 16 fichiers (environ 3,5 Mo chacun sur Callian) : une zone de 3 m
+// sur une façade dense touche 15 fichiers du niveau 0. Au-delà, on prend le
+// niveau suivant, s'il reste plus fin que celui qui est affiché.
+
+const FINEST_MAX_FILES = 16;
+const FINEST_TIMEOUT = 60000;
+const FINEST_POLL = 50;
+
+// Octree du modèle affiché et entité qui le porte, null pour un modèle simple.
+const findOctree = (global: Global): { entity: Entity; octree: any } | null => {
+    const entity = global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+    const octree = (entity as any)?.gsplat?.resource?.octree;
+    if (!octree || !Array.isArray(octree.nodes) || !octree.nodeBoundsMinMax) return null;
+    return { entity, octree };
+};
+
+// Nœuds de l'octree dont la boîte (repère local du modèle) touche `box` (monde).
+const nodesInBox = (entity: Entity, octree: any, box: BoundingBox): number[] => {
+    const local = new BoundingBox();
+    local.setFromTransformedAabb(box, new Mat4().copy(entity.getWorldTransform()).invert());
+    const mn = local.getMin(), mx = local.getMax();
+    const b = octree.nodeBoundsMinMax as Float32Array;
+    const out: number[] = [];
+    for (let i = 0; i < octree.nodes.length; i++) {
+        const k = i * 6;
+        if (b[k] <= mx.x && b[k + 3] >= mn.x && b[k + 1] <= mx.y && b[k + 4] >= mn.y && b[k + 2] <= mx.z && b[k + 5] >= mn.z) {
+            out.push(i);
+        }
+    }
+    return out;
+};
+
+/**
+ * Niveaux de détail affichés sur la zone `box` (monde) d'un modèle LOD.
+ *
+ * @param {Global} global - Contexte du visualisateur.
+ * @param {BoundingBox} box - Zone, repère monde.
+ * @returns {LodUsage | null} null pour un modèle simple ou si l'octree n'est pas lisible.
+ */
+export function displayedLodInBox(global: Global, box: BoundingBox): LodUsage | null {
+    const found = findOctree(global);
+    if (!found) return null;
+    const { entity, octree } = found;
+    const director = (global.app as any).renderer?.gsplatDirector;
+    const cameraData = director?.camerasMap?.get(global.camera.camera?.camera);
+    let instance: any = null;
+    for (const layerData of cameraData?.layersMap?.values() ?? []) {
+        const instances = layerData.gsplatManager?.world?._octreeInstances ?? layerData.gsplatManager?.octreeInstances;
+        for (const candidate of instances?.values() ?? []) {
+            if (candidate.octree === octree) instance = candidate;
+        }
+    }
+    if (!instance?.nodeInfos) return null;
+
+    const usage: LodUsage = { min: Infinity, max: -1, levels: octree.lodLevels };
+    for (const n of nodesInBox(entity, octree, box)) {
+        const lod = instance.nodeInfos[n]?.currentLod;
+        if (typeof lod !== 'number' || lod < 0) continue;
+        usage.min = Math.min(usage.min, lod);
+        usage.max = Math.max(usage.max, lod);
+    }
+    return usage.max >= 0 ? usage : null;
+}
+
+export type FinestResult =
+    | { status: 'ok'; data: SplatCenters }
+    | { status: 'unsupported' | 'too-large' | 'failed' };
+
+/**
+ * Centres des splats du niveau de détail le plus fin possible sur la zone
+ * `box` (monde) : les splats des nœuds qui touchent la zone, pas au-delà.
+ *
+ * @param {Global} global - Contexte du visualisateur.
+ * @param {BoundingBox} box - Zone, repère monde.
+ * @param {number} coarsest - Niveau affiché : un niveau aussi grossier n'apporte rien.
+ * @returns {Promise<FinestResult>} Centres, ou la raison de l'échec.
+ */
+export async function loadFinestCenters(global: Global, box: BoundingBox, coarsest: number): Promise<FinestResult> {
+    const found = findOctree(global);
+    if (!found) return { status: 'unsupported' };
+    const { entity, octree } = found;
+    if (typeof octree.incRefCount !== 'function' || typeof octree.decRefCount !== 'function' ||
+        typeof octree.ensureFileResource !== 'function' || typeof octree.getFileResource !== 'function') {
+        return { status: 'unsupported' };
+    }
+
+    // Plages de splats à lire, par fichier : pour chaque nœud, son premier
+    // niveau disponible à partir de `level`.
+    const nodes = nodesInBox(entity, octree, box);
+    const collect = (level: number) => {
+        const ranges = new Map<number, [number, number][]>();
+        const usage: LodUsage = { min: Infinity, max: -1, levels: octree.lodLevels };
+        for (const n of nodes) {
+            const lods = octree.nodes[n].lods as { fileIndex: number; offset: number; count: number }[];
+            let l = level;
+            while (l < lods.length && !(lods[l].fileIndex >= 0 && lods[l].count > 0)) l++;
+            if (l >= lods.length) continue;
+            const { fileIndex, offset, count } = lods[l];
+            if (!ranges.has(fileIndex)) ranges.set(fileIndex, []);
+            ranges.get(fileIndex).push([offset, count]);
+            usage.min = Math.min(usage.min, l);
+            usage.max = Math.max(usage.max, l);
+        }
+        return { ranges, usage };
+    };
+    let level = 0;
+    let { ranges, usage } = collect(0);
+    while (ranges.size > FINEST_MAX_FILES && level + 1 < coarsest) {
+        ({ ranges, usage } = collect(++level));
+    }
+    if (ranges.size === 0) return { status: 'failed' };
+    if (ranges.size > FINEST_MAX_FILES) return { status: 'too-large' };
+
+    const files = [...ranges.keys()];
+    files.forEach(fi => octree.incRefCount(fi));
+    try {
+        const start = performance.now();
+        for (;;) {
+            files.forEach(fi => octree.ensureFileResource(fi));
+            if (files.every(fi => octree.getFileResource(fi)?.centers?.length > 0)) break;
+            const failed = files.some(fi => octree.assetLoader?.hasFailed?.(octree.files[fi]?.url));
+            if (octree.destroyed || failed || performance.now() - start > FINEST_TIMEOUT) return { status: 'failed' };
+            // Attente volontairement séquentielle : on sonde le chargement.
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((resolve) => {
+                setTimeout(resolve, FINEST_POLL);
+            });
+        }
+
+        let total = 0;
+        ranges.forEach(list => list.forEach(([, count]) => {
+            total += count;
+        }));
+        const centers = new Float32Array(total * 3);
+        let write = 0;
+        for (const [fi, list] of ranges) {
+            const source = octree.getFileResource(fi).centers as Float32Array;
+            for (const [offset, count] of list) {
+                centers.set(source.subarray(offset * 3, (offset + count) * 3), write);
+                write += count * 3;
+            }
+        }
+        return {
+            status: 'ok',
+            data: {
+                centers,
+                numSplats: total,
+                worldMatrix: (entity.getWorldTransform().data as Float32Array).slice(),
+                lod: usage
+            }
+        };
+    } finally {
+        // Délai de grâce du moteur : le rendu peut reprendre ces fichiers
+        files.forEach(fi => octree.decRefCount(fi, global.app.scene.gsplat?.cooldownTicks ?? 100));
+    }
 }
 
 // ARTLIGHT (TKT-225) : copie un tableau de valeurs dans le presse-papier.

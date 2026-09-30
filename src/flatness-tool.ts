@@ -1,9 +1,10 @@
-import { Vec3 } from 'playcanvas';
+import { BoundingBox, Vec3 } from 'playcanvas';
 
 import { coordsForClipboard, formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import { ToolPointerHandler } from './tool-pointer-handler';
-import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
+import { worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable, ACCENT_COLOR, accentRgba } from './tool-utils';
+import type { LodUsage, SplatCenters } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -190,6 +191,9 @@ const MAX_POINTS = 16;
 
 // Délai avant de relancer le calcul après le déplacement d'un sommet.
 const RECOMPUTE_DELAY = 150;
+
+// Modèles LOD : marge autour de la zone pour le chargement du niveau fin.
+const FINEST_MARGIN = 0.25;
 
 // Carte sur la vue 3D : opacité du calque, opacité relative des zones sans
 // points (hachurées dans le panneau) et nombre de morceaux par côté. Chaque
@@ -764,6 +768,17 @@ class FlatnessTool {
 
     private view: ViewSnapshot | null = null;
 
+    // Modèle LOD : niveaux de détail analysés. 'finer' : zone trop grande
+    // pour le niveau 0, on a chargé le plus fin possible ; 'loading' : mesure
+    // provisoire sur le niveau affiché, un plus fin est en cours de
+    // chargement ; 'too-large', 'failed' : on en reste au niveau affiché.
+    private lod: { usage: LodUsage; status: 'finest' | 'finer' | 'loading' | 'too-large' | 'failed' } | null = null;
+
+    // Niveau le plus fin chargé, et la zone qu'il couvre.
+    private finest: { box: BoundingBox; data: SplatCenters } | null = null;
+
+    private finestRequest = 0;
+
     // Plan moyen ajusté sur le nuage, normale orientée côté bosse.
     private fittedPlane: Plane | null = null;
 
@@ -979,6 +994,9 @@ class FlatnessTool {
         this.drawCanvas = null;
         this.mapCanvas = null;
         this.probe = null;
+        this.lod = null;
+        this.finest = null;
+        this.finestRequest++;
         this.hint = null;
         this.currentPoints = [];
         this.analyzedPoints = [];
@@ -1043,6 +1061,9 @@ class FlatnessTool {
         this.state = 'idle';
         this.view = null;
         this.fittedPlane = null;
+        this.lod = null;
+        this.finest = null;
+        this.finestRequest++;
         this.planeOrigin = null;
         this.planeNormal = null;
         this.planeU = null;
@@ -1153,7 +1174,9 @@ class FlatnessTool {
         const footprint = this.computeFootprintPlane();
         if (!footprint) return;
 
-        this.candidates = this.gatherCandidates(footprint);
+        const info = this.splatCenters();
+        if (!info) return;
+        this.candidates = this.gatherCandidates(footprint, info);
         if (!this.candidates) return;
 
         const plane = this.fitReferencePlane(this.candidates, footprint) ?? footprint;
@@ -1161,6 +1184,64 @@ class FlatnessTool {
         this.fittedPlane = plane;
         this.applyReference();
         this.computeDeviations();
+    }
+
+    // Boîte (monde) des splats que l'analyse peut retenir : les sommets et la
+    // bande de recherche autour.
+    private zoneBox(): BoundingBox {
+        const min = new Vec3(Infinity, Infinity, Infinity), max = new Vec3(-Infinity, -Infinity, -Infinity);
+        for (const p of this.currentPoints) {
+            min.min(p);
+            max.max(p);
+        }
+        const box = new BoundingBox();
+        box.setMinMax(min.subScalar(SEARCH_BAND), max.addScalar(SEARCH_BAND));
+        return box;
+    }
+
+    // Splats à analyser. Modèle LOD : le niveau le plus fin s'il est chargé
+    // pour la zone ; sinon le niveau affiché, qui dépend de la distance de la
+    // caméra, et on lance le chargement du plus fin.
+    private splatCenters(): SplatCenters | null {
+        const box = this.zoneBox();
+        const finest = this.finest;
+        if (finest && finest.box.containsPoint(box.getMin()) && finest.box.containsPoint(box.getMax())) {
+            this.lod = { usage: finest.data.lod, status: finest.data.lod.min === 0 ? 'finest' : 'finer' };
+            return finest.data;
+        }
+
+        const info = getSplatCenters(this.global);
+        if (!info?.lod) {
+            this.lod = null;
+            return info;
+        }
+        const usage = displayedLodInBox(this.global, box) ?? info.lod;
+        if (usage.max === 0) {
+            this.lod = { usage, status: 'finest' };
+        } else {
+            this.lod = { usage, status: 'loading' };
+            this.requestFinest(box, usage);
+        }
+        return info;
+    }
+
+    // Charge le niveau le plus fin possible sur la zone (élargie de 25 cm :
+    // un sommet ajusté de peu ne relance pas le chargement), puis refait
+    // l'analyse.
+    private requestFinest(box: BoundingBox, displayed: LodUsage) {
+        const request = ++this.finestRequest;
+        const padded = new BoundingBox(box.center.clone(), box.halfExtents.clone().addScalar(FINEST_MARGIN));
+        loadFinestCenters(this.global, padded, displayed.min).then((result) => {
+            if (request !== this.finestRequest || this.state !== 'closed') return;
+            if (result.status === 'ok') {
+                this.finest = { box: padded, data: result.data };
+                this.analyze();
+            } else if (this.lod) {
+                this.lod.status = result.status === 'too-large' ? 'too-large' : 'failed';
+            }
+            this.showPanel();
+            this.global.app.renderNextFrame = true;
+        });
     }
 
     // Plans de référence qui ont un sens pour la zone, selon l'orientation du
@@ -1316,10 +1397,7 @@ class FlatnessTool {
 
     // Splats de la zone (polygone projeté sur le plan des sommets) à moins de
     // SEARCH_BAND de ce plan, en coordonnées monde.
-    private gatherCandidates(footprint: Plane): Float64Array | null {
-        const info = getSplatCenters(this.global);
-        if (!info) return null;
-
+    private gatherCandidates(footprint: Plane, info: SplatCenters): Float64Array | null {
         const { centers, numSplats, worldMatrix: m } = info;
         const O = footprint.origin;
         const N = footprint.normal;
@@ -2242,6 +2320,8 @@ class FlatnessTool {
             `bosse ${formatLength(stats.bump, true)}`
         ];
         if (rule?.status === 'ok' && this.tolerance < rule.noiseFloor) parts.push('peu fiable (bruit)');
+        if (this.lod?.status === 'loading') parts.push('chargement du niveau de détail le plus fin…');
+        else if (this.lod?.status === 'too-large' || this.lod?.status === 'failed') parts.push('niveau de détail affiché');
         // Une ligne qui ne se coupe qu'entre deux éléments
         parts.forEach((part, i) => {
             if (i > 0) sub.append(' · ');
@@ -2372,6 +2452,8 @@ class FlatnessTool {
             lines.push(`${stats.spikeCells.toLocaleString('fr-FR')} cases isolées écartées (points flottants)`);
         }
         lines.push(`Bruit du relevé : ±${formatLength(stats.noise)}`);
+        const lod = this.lodText();
+        if (lod) lines.push(`Niveau de détail : ${lod}`);
         if (this.interpolationEnabled && stats.emptyPct >= 0.5) lines.push('Hachures : zones sans points, valeurs estimées');
         for (const line of lines) {
             const div = document.createElement('div');
@@ -2383,6 +2465,8 @@ class FlatnessTool {
         if (this.colorScale < stats.noise) {
             tab.appendChild(createNote('Échelle plus fine que le bruit du relevé : la carte montre surtout le bruit.', true));
         }
+        const lodWarning = this.lodWarning();
+        if (lodWarning) tab.appendChild(createNote(lodWarning, this.lod.status !== 'loading' && this.lod.status !== 'finer'));
         return tab;
     }
 
@@ -2707,6 +2791,27 @@ class FlatnessTool {
         return ['Faux aplomb du plan moyen', value + lean];
     }
 
+    // Niveau de détail analysé d'un modèle LOD (0 = le plus fin).
+    private lodText(): string | null {
+        const lod = this.lod;
+        if (!lod) return null;
+        const { min, max, levels } = lod.usage;
+        const range = `${min === max ? `niveau ${min}` : `niveaux ${min} à ${max}`} sur 0 à ${levels - 1}`;
+        if (lod.status === 'finest') return `le plus fin (${range})`;
+        if (lod.status === 'finer') return `le plus fin chargeable pour cette zone (${range}, 0 = le plus fin)`;
+        return `affiché (${range}, 0 = le plus fin)`;
+    }
+
+    private lodWarning(): string | null {
+        switch (this.lod?.status) {
+            case 'loading': return 'Mesure provisoire sur le niveau de détail affiché : chargement du plus fin en cours.';
+            case 'finer': return 'Zone trop grande pour le niveau de détail 0 : mesure sur le plus fin qui a pu être chargé. Une zone plus petite sera plus précise.';
+            case 'too-large': return 'Zone trop grande pour charger le niveau de détail le plus fin : mesure sur le niveau affiché. Rapprochez-vous pour plus de précision.';
+            case 'failed': return 'Niveau de détail le plus fin indisponible : mesure sur le niveau affiché. Rapprochez-vous pour plus de précision.';
+            default: return null;
+        }
+    }
+
     // Hauteur du plan horizontal de référence dans le repère affiché.
     private levelRow(): [string, string] | null {
         if (this.activeReference() !== 'horizontal' || !this.planeOrigin) return null;
@@ -2774,6 +2879,8 @@ class FlatnessTool {
             ['Cases isolées écartées', stats.spikeCells.toLocaleString('fr-FR')],
             ['Bruit du relevé', `± ${formatLength(stats.noise)}`]
         ];
+        const lod = this.lodText();
+        if (lod) settings.push(['Niveau de détail', lod]);
 
         return [
             { title: 'Zone', rows: zone },
