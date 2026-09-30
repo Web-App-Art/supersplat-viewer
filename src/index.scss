@@ -962,6 +962,532 @@ button {
     z-index: 10;
 }
 
+// ARTLIGHT (TKT-236) : panneau de l'outil planéité et composants de panneau
+// d'outil réutilisables (en-tête, onglets, boutons côte à côte, compteur,
+// curseur, interrupteur, lignes de résultat).
+
+$tool-panel-bkg: rgba(24, 24, 27, 0.92);
+$tool-border: rgba(255, 255, 255, 0.12);
+$tool-text: #e4e4e7;
+$tool-text-strong: #fafafa;
+$tool-text-muted: #a1a1aa;
+$tool-text-faint: #71717a;
+$tool-accent: #84cc16;
+$tool-control-bkg: rgba(255, 255, 255, 0.08);
+$tool-control-bkg-hover: rgba(255, 255, 255, 0.14);
+$tool-ok: #bef264;
+$tool-ko: #fca5a5;
+$tool-warning: #fbbf24;
+
+#flatnessHint {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 32px);
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px 8px 6px 14px;
+    background: $tool-panel-bkg;
+    border: 1px solid $tool-border;
+    border-radius: 8px;
+    color: $tool-text;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    z-index: 1000;
+    pointer-events: auto;
+}
+
+#flatnessPanel {
+    position: fixed;
+    top: 80px;
+    right: 16px;
+    width: min(320px, calc(100vw - 32px));
+    max-height: calc(100vh - 96px);
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 14px 16px 16px;
+    background: $tool-panel-bkg;
+    border: 1px solid $tool-border;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: $tool-text;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    z-index: 1000;
+    pointer-events: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+
+    &::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.35);
+        border-radius: 4px;
+    }
+
+    &.collapsed .flatness-body {
+        display: none;
+    }
+}
+
+.flatness-banner {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    font-variant-numeric: tabular-nums;
+
+    .flatness-banner-main {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: $tool-text-strong;
+    }
+
+    .flatness-dot {
+        flex: none;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: $tool-text-faint;
+    }
+
+    .flatness-banner-sub {
+        margin-top: 3px;
+        padding-left: 17px;
+        font-size: 11px;
+        color: $tool-text-muted;
+
+        span {
+            white-space: nowrap;
+        }
+    }
+
+    &[data-state="ok"] {
+        background: rgba(132, 204, 22, 0.12);
+
+        .flatness-dot {
+            background: $tool-accent;
+        }
+    }
+
+    &[data-state="ko"] {
+        background: rgba(239, 68, 68, 0.14);
+
+        .flatness-dot {
+            background: #ef4444;
+        }
+    }
+}
+
+.flatness-legend {
+    margin-top: 12px;
+
+    .flatness-gradient {
+        height: 12px;
+        border-radius: 3px;
+        margin-bottom: 4px;
+        background: linear-gradient(to right, #3b82f6 0%, #4ade80 50%, #ef4444 100%);
+    }
+
+    .flatness-legend-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: $tool-text-muted;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .flatness-legend-note {
+        margin-top: 2px;
+        font-size: 11px;
+        color: $tool-text-faint;
+        text-align: center;
+    }
+}
+
+.flatness-map {
+    // Annule la règle globale « canvas » (plein écran, position fixe),
+    // prévue pour le canvas 3D.
+    position: static;
+    opacity: 1;
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 10px auto 0;
+    border-radius: 6px;
+}
+
+.tool-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    .tool-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: $tool-text-strong;
+    }
+
+    .tool-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+}
+
+.tool-btn {
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.12);
+    color: $tool-text-strong;
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    &.primary {
+        background: $tool-accent;
+        color: #18181b;
+
+        &:hover {
+            background: #a3e635;
+        }
+    }
+
+    &.block {
+        width: 100%;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        text-align: left;
+    }
+}
+
+.tool-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    color: $tool-text-strong;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    svg {
+        width: 14px;
+        height: 14px;
+    }
+}
+
+.tool-tabs {
+    display: flex;
+    margin-top: 14px;
+    border-bottom: 1px solid $tool-border;
+
+    .tool-tab {
+        flex: 1;
+        padding: 7px 4px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        background: none;
+        color: $tool-text-muted;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+
+        &:hover {
+            color: $tool-text-strong;
+        }
+
+        &.active {
+            color: $tool-text-strong;
+            font-weight: 600;
+            border-bottom-color: $tool-accent;
+        }
+    }
+}
+
+.tool-tab-content {
+    padding-top: 10px;
+}
+
+.tool-field {
+    margin-top: 10px;
+
+    &:first-child {
+        margin-top: 0;
+    }
+
+    .tool-field-label {
+        margin-bottom: 5px;
+        font-size: 12px;
+        color: $tool-text-muted;
+    }
+}
+
+.tool-seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 7px;
+    background: $tool-control-bkg;
+
+    .tool-seg-btn {
+        flex: 1;
+        min-width: 0;
+        padding: 5px 2px;
+        border: none;
+        border-radius: 5px;
+        background: none;
+        color: $tool-text-muted;
+        font: inherit;
+        font-size: 12px;
+        white-space: nowrap;
+        cursor: pointer;
+
+        &:hover {
+            color: $tool-text-strong;
+            background: $tool-control-bkg-hover;
+        }
+
+        &.active {
+            background: $tool-accent;
+            color: #18181b;
+            font-weight: 600;
+        }
+    }
+}
+
+.tool-stepper {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+
+    .tool-stepper-btn {
+        flex: none;
+        width: 40px;
+        height: 34px;
+        border: none;
+        border-radius: 7px;
+        background: $tool-control-bkg;
+        color: $tool-text-strong;
+        font: inherit;
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+
+        &:hover {
+            background: $tool-control-bkg-hover;
+        }
+
+        &:active {
+            background: rgba(132, 204, 22, 0.35);
+        }
+    }
+
+    .tool-stepper-value {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        border-radius: 7px;
+        background: $tool-control-bkg;
+        color: $tool-text-muted;
+        font-size: 12px;
+
+        &:focus-within {
+            outline: 2px solid $tool-accent;
+        }
+
+        input {
+            width: 56px;
+            border: none;
+            background: none;
+            outline: none;
+            color: $tool-text-strong;
+            font: inherit;
+            font-size: 15px;
+            font-weight: 600;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+    }
+}
+
+.tool-seg + .tool-range-row {
+    margin-top: 8px;
+}
+
+.tool-range-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    .tool-range-value {
+        min-width: 58px;
+        color: $tool-text-strong;
+        font-size: 12px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.tool-range {
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    margin: 8px 0;
+    border-radius: 2px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: linear-gradient(to right, $tool-accent var(--fill, 0%), rgba(255, 255, 255, 0.15) var(--fill, 0%));
+    cursor: pointer;
+
+    &::-webkit-slider-thumb {
+        width: 16px;
+        height: 16px;
+        border: 2px solid $tool-accent;
+        border-radius: 50%;
+        background: $tool-text-strong;
+        -webkit-appearance: none;
+        appearance: none;
+    }
+
+    &::-moz-range-thumb {
+        width: 12px;
+        height: 12px;
+        border: 2px solid $tool-accent;
+        border-radius: 50%;
+        background: $tool-text-strong;
+    }
+}
+
+.tool-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    font-size: 12px;
+    color: $tool-text-muted;
+
+    .tool-switch {
+        position: relative;
+        width: 36px;
+        height: 20px;
+        padding: 0;
+        border: none;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.15);
+        cursor: pointer;
+        transition: background 0.2s;
+
+        &::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #fff;
+            transition: left 0.2s;
+        }
+
+        &[aria-checked="true"] {
+            background: $tool-accent;
+
+            &::after {
+                left: 18px;
+            }
+        }
+    }
+}
+
+.tool-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    font-variant-numeric: tabular-nums;
+
+    .tool-row-label {
+        color: $tool-text-muted;
+    }
+
+    .tool-row-value {
+        font-weight: 500;
+        color: $tool-text-strong;
+        text-align: right;
+
+        &.hollow {
+            color: #93c5fd;
+        }
+
+        &.bump {
+            color: $tool-ko;
+        }
+    }
+}
+
+.tool-note {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: $tool-text-muted;
+
+    &.warning {
+        color: $tool-warning;
+    }
+}
+
+.tool-info {
+    margin-top: 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: $tool-text-muted;
+}
+
+.tool-export-item {
+    margin-top: 8px;
+
+    &:first-child {
+        margin-top: 0;
+    }
+
+    .tool-note {
+        margin-top: 3px;
+    }
+}
+
 /* Volume (cubature) tool */
 
 #volumeMeasureOverlay {
