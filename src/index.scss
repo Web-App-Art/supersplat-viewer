@@ -205,6 +205,8 @@ button {
     }
 
     > #buttonsContainer {
+        // ARTLIGHT (TKT-242) : repère des barres Navigation et Outils
+        position: relative;
         display: flex;
         gap: 8px;
 
@@ -261,15 +263,53 @@ button {
                 color: $clr-accent;
             }
 
-            /* measure/flatness button: white icon on colored background when active */
-            &#measure.active,
-            &#areaMeasure.active,
-            &#flatnessMeasure.active,
-            &#section.active,
-            &#pointXYZ.active {
-                color: $clr-text;
-                background-color: $clr-accent;
+            // ARTLIGHT (TKT-242) : boutons Navigation et Outils. L'icône suit
+            // le mode de caméra ou l'outil ouvert ; le chevron se retourne
+            // quand la barre du menu est ouverte.
+            &.menuButton {
+                width: 46px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 2px;
+                padding-left: 4px;
                 border-radius: 4px;
+
+                > svg,
+                > .menuIcon > svg {
+                    display: block;
+                    margin: 0;
+                }
+
+                > .menuIcon {
+                    display: flex;
+                }
+
+                > .menuChevron {
+                    flex: none;
+                    fill: none;
+                    stroke: currentColor;
+                    stroke-width: 1.5;
+                    stroke-linecap: round;
+                    stroke-linejoin: round;
+                    opacity: 0.7;
+                    transition: transform 0.15s ease;
+                }
+
+                &.open {
+                    color: $clr-text-light;
+                    background-color: rgba(white, 0.12);
+
+                    > .menuChevron {
+                        transform: rotate(180deg);
+                    }
+                }
+
+                // un outil est ouvert : son icône sur fond vert
+                &.active {
+                    color: $clr-text;
+                    background-color: $clr-accent;
+                }
             }
 
             /* camera toggle styling */
@@ -312,6 +352,141 @@ button {
             }
         }
 
+        // ARTLIGHT (TKT-242) : barres Navigation et Outils, ouvertes au-dessus
+        // de la barre principale. ui.ts les centre sur leur bouton.
+        .subBar {
+            position: absolute;
+            bottom: calc(100% + 10px);
+            left: 0;
+            z-index: 20; // au-dessus des calques des outils (10)
+            box-sizing: border-box;
+            max-width: 100%;
+
+            display: flex;
+            flex-wrap: wrap;
+            align-items: stretch;
+            justify-content: center;
+            gap: 2px;
+            padding: 6px;
+
+            border-radius: 14px;
+            border: 1px solid rgba(white, 0.08);
+            color: $clr-text;
+            background-color: rgba($clr-bkg, 0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 8px 24px rgba(black, 0.25);
+
+            // pointe vers le bouton du menu
+            &::after {
+                content: '';
+                position: absolute;
+                top: 100%;
+                left: var(--caret-x, 50%);
+                transform: translateX(-50%);
+                border: 6px solid transparent;
+                border-top-color: rgba($clr-bkg, 0.8);
+                pointer-events: none;
+            }
+        }
+
+        .subBarGroup {
+            display: flex;
+            align-items: stretch;
+            gap: 2px;
+        }
+
+        .subBarDivider {
+            width: 1px;
+            margin: 6px 4px;
+            background-color: rgba(white, 0.1);
+        }
+
+        .subBarItem {
+            min-width: 64px;
+            padding: 6px 8px 5px;
+            margin: 0;
+            border: 0;
+            border-radius: 8px;
+
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+
+            font: inherit;
+            font-size: 11px;
+            white-space: nowrap;
+            cursor: pointer;
+            color: $clr-text;
+            background-color: transparent;
+            transition: background-color 150ms ease, color 150ms ease;
+
+            > svg {
+                display: block;
+                flex: none;
+
+                > g.fill {
+                    fill: currentColor;
+                }
+            }
+
+            &:hover {
+                color: $clr-text-light;
+                background-color: rgba(white, 0.08);
+            }
+
+            &.active {
+                color: $clr-text-light;
+                background-color: $clr-accent;
+            }
+        }
+
+        // ARTLIGHT (TKT-241) : libellé et nom du niveau, boutons 1 à 5 en dessous
+        #speedSetting {
+            min-width: 190px;
+            padding: 2px 8px;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+
+            > .speedLabel {
+                display: flex;
+                justify-content: space-between;
+                gap: 10px;
+                font-size: 11px;
+                white-space: nowrap;
+                color: $clr-text-dark;
+
+                > #speedName {
+                    color: $clr-text;
+                }
+            }
+
+            .tool-seg-btn {
+                padding: 5px 2px;
+                font-size: 12px;
+                font-variant-numeric: tabular-nums;
+            }
+        }
+
+        // téléphone : barres plus serrées, groupes séparés par l'espace seul
+        @media (max-width: 480px) {
+            .subBar {
+                gap: 6px 2px;
+            }
+
+            .subBarDivider {
+                display: none;
+            }
+
+            .subBarItem {
+                min-width: 50px;
+                padding: 6px 3px 5px;
+                font-size: 10px;
+            }
+        }
     }
 }
 
@@ -417,33 +592,6 @@ button {
         margin: 8px 0;
 
         background-color: rgba(white, 0.08);
-    }
-
-    // ARTLIGHT (TKT-241): libellé et nom du niveau, boutons 1 à 5 en dessous
-    > #speedSetting {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding-top: 4px;
-
-        > .speedLabel {
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 0 8px;
-            color: $clr-text-dark;
-
-            > #speedName {
-                color: $clr-text;
-            }
-        }
-
-        .tool-seg-btn {
-            padding: 7px 2px;
-            font-size: 13px;
-            font-variant-numeric: tabular-nums;
-        }
     }
 }
 
@@ -1044,7 +1192,9 @@ $tool-warning: #fbbf24;
     top: 80px;
     right: 16px;
     width: min(320px, calc(100vw - 32px));
-    max-height: calc(100vh - 96px);
+    // ARTLIGHT (TKT-242) : s'arrête au-dessus de la barre de boutons, devenue
+    // assez étroite pour disparaître entière sous le panneau.
+    max-height: calc(100vh - 80px - 76px);
     box-sizing: border-box;
     overflow-x: hidden;
     overflow-y: auto;

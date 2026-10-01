@@ -102,7 +102,8 @@ class VolumeTool {
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: pos => this.handleClick(pos),
             getDraggablePoints: () => (this.state === 'placed' ? this.handles : []),
-            onClear: () => this.clearAll()
+            onClear: () => this.clearAll(),
+            isEmpty: () => this.state === 'idle'
         });
     }
 

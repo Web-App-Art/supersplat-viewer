@@ -4,7 +4,7 @@ import type { Entity } from 'playcanvas';
 import { TAP_EPSILON } from './input/shared';
 import { localize } from './localization';
 import { Picker } from './picker';
-import { findPointNear } from './tool-utils';
+import { closeTools, findPointNear } from './tool-utils';
 import { TranslateGizmo } from './translate-gizmo';
 import type { GizmoAxis } from './translate-gizmo';
 import type { Global } from './types';
@@ -13,10 +13,19 @@ export interface ToolPointerCallbacks {
     onCanvasClick(pos: Vec3, clientX: number, clientY: number): void;
     getDraggablePoints(): Vec3[];
     onClear(): void;
+    // ARTLIGHT (TKT-242) : vrai quand il n'y a rien à effacer ; Échap ferme
+    // alors l'outil.
+    isEmpty(): boolean;
 }
 
 // Fenêtre pendant laquelle un Échap est attribué à la sortie de capture souris.
 const ESCAPE_AFTER_LOCK_EXIT_MS = 300;
+
+// ARTLIGHT (TKT-242) : un menu ou un panneau de l'interface ouvert prend
+// l'Échap (ui.ts le referme) ; l'outil ignore cet appui-là.
+const uiPopupOpen = () => !!document.querySelector(
+    '#buttonsContainer .subBar:not(.hidden), #settingsPanel:not(.hidden), #infoPanel:not(.hidden)'
+);
 
 // ARTLIGHT (TKT-224) : sans float32 blendable, le picking passe en 16F avec
 // une passe d'affinage. On le signale une fois par chargement de page, à la
@@ -276,8 +285,13 @@ class ToolPointerHandler {
         };
         document.addEventListener('pointerlockchange', this._onPointerLockChange);
 
+        // ARTLIGHT (TKT-242) : un premier Échap efface la mesure, le suivant
+        // ferme l'outil.
         this._keyHandler = (event: KeyboardEvent) => {
-            if (event.key === 'Escape' && !this.escapeUsedByNavigation()) {
+            if (event.key !== 'Escape' || this.escapeUsedByNavigation() || uiPopupOpen()) return;
+            if (this.callbacks.isEmpty()) {
+                closeTools(this.global.state);
+            } else {
                 this.callbacks.onClear();
             }
         };

@@ -245,7 +245,7 @@ const initUI = (global: Global) => {
         // 'enterFullscreen', 'exitFullscreen',
         'info', 'infoPanel', 'desktopTab', 'touchTab', 'desktopInfoPanel', 'touchInfoPanel',
         'timelineContainer', 'handle', 'time',
-        'buttonContainer',
+        'buttonsContainer',
         'play', 'pause',
         'settings', 'settingsPanel',
         'annotationsRow', 'annotationsOption', 'annotationsCheck',
@@ -260,8 +260,10 @@ const initUI = (global: Global) => {
         'reset', 'frame',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
-        'showCollision', 'desktopShowCollisionHelp',
+        'desktopShowCollisionHelp',
         // ARTLIGHT
+        'navMenu', 'navBar', 'toolsMenu', 'toolsMenuIcon', 'toolsBar',
+        'collisionRow', 'collisionCheck',
         'measure',
         'areaMeasure',
         'flatnessMeasure',
@@ -573,6 +575,69 @@ const initUI = (global: Global) => {
         dom.infoPanel.classList.add('hidden');
     });
 
+    // ARTLIGHT (TKT-242) : la barre principale ne garde que deux menus,
+    // Navigation et Outils, qui ouvrent chacun leur barre au-dessus. Un seul
+    // menu, ou le panneau Paramètres, ouvert à la fois ; un clic ailleurs ou
+    // Échap le referme.
+    type Menu = { button: HTMLElement, bar: HTMLElement };
+    const menus: Menu[] = [
+        { button: dom.navMenu, bar: dom.navBar },
+        { button: dom.toolsMenu, bar: dom.toolsBar }
+    ];
+    let openMenu: Menu | null = null;
+
+    // Centrée sur son bouton, sans déborder de la barre principale. La largeur
+    // est mesurée calée à gauche puis figée : décalée, la barre perdrait la
+    // fraction de pixel qui garde ses boutons sur une ligne.
+    const placeMenuBar = ({ button, bar }: Menu) => {
+        bar.style.left = '0px';
+        bar.style.width = '';
+        const width = Math.ceil(bar.getBoundingClientRect().width);
+        const container = dom.buttonsContainer.getBoundingClientRect();
+        const anchor = button.getBoundingClientRect();
+        const center = anchor.left + anchor.width / 2 - container.left;
+        const left = Math.max(0, Math.min(center - width / 2, container.width - width));
+        bar.style.width = `${width}px`;
+        bar.style.left = `${left}px`;
+        bar.style.setProperty('--caret-x', `${center - left}px`);
+    };
+
+    const closeMenus = () => {
+        if (!openMenu) return;
+        openMenu.bar.classList.add('hidden');
+        openMenu.button.classList.remove('open');
+        openMenu.button.setAttribute('aria-expanded', 'false');
+        openMenu = null;
+    };
+
+    const toggleMenu = (menu: Menu) => {
+        const wasOpen = openMenu === menu;
+        closeMenus();
+        if (wasOpen) return;
+        dom.settingsPanel.classList.add('hidden');
+        menu.bar.classList.remove('hidden');
+        menu.button.classList.add('open');
+        menu.button.setAttribute('aria-expanded', 'true');
+        placeMenuBar(menu);
+        openMenu = menu;
+    };
+
+    menus.forEach((menu) => {
+        menu.button.addEventListener('click', () => toggleMenu(menu));
+    });
+
+    // Clic hors du menu ouvert : scène, panneau d'outil ou autre bouton.
+    document.addEventListener('pointerdown', (event: PointerEvent) => {
+        const target = event.target as Node;
+        if (openMenu && !openMenu.bar.contains(target) && !openMenu.button.contains(target)) {
+            closeMenus();
+        }
+    }, true);
+
+    window.addEventListener('resize', () => {
+        if (openMenu) placeMenuBar(openMenu);
+    });
+
     events.on('inputEvent', (event) => {
         if (event === 'toggleHelp') {
             toggleHelp();
@@ -580,6 +645,7 @@ const initUI = (global: Global) => {
             // close info panel on cancel
             dom.infoPanel.classList.add('hidden');
             dom.settingsPanel.classList.add('hidden');
+            closeMenus(); // ARTLIGHT (TKT-242)
 
             // // close fullscreen on cancel
             // if (state.isFullscreen) {
@@ -587,6 +653,7 @@ const initUI = (global: Global) => {
             // }
         } else if (event === 'interrupt') {
             dom.settingsPanel.classList.add('hidden');
+            closeMenus();
         }
     });
 
@@ -613,6 +680,7 @@ const initUI = (global: Global) => {
         }
         dom.infoPanel.classList.add('hidden');
         dom.settingsPanel.classList.add('hidden');
+        closeMenus();
         dom.walkHint.classList.add('hidden');
         state.controlsHidden = true;
     };
@@ -628,7 +696,7 @@ const initUI = (global: Global) => {
         state.controlsHidden = false;
         uiTimeout = setTimeout(() => {
             uiTimeout = null;
-            if (!annotationVisible && !isToolActive(state)) {
+            if (!annotationVisible && !isToolActive(state) && !openMenu) {
                 state.controlsHidden = true;
             }
         }, 4000);
@@ -745,13 +813,21 @@ const initUI = (global: Global) => {
     });
 
     // Camera mode UI
+    // ARTLIGHT (TKT-242) : le bouton Navigation montre le mode en cours ; il
+    // garde le précédent pendant une animation de caméra.
+    const navIcons: Record<string, string> = { orbit: '#orbitIcon', fly: '#flyIcon', walk: '#walkIcon' };
     const updateCameraModeUI = () => {
         dom.orbitCamera.classList.toggle('active', state.cameraMode === 'orbit');
         dom.flyCamera.classList.toggle('active', state.cameraMode === 'fly');
         dom.fpsCamera.classList.toggle('active', state.cameraMode === 'walk');
+        const icon = navIcons[state.cameraMode];
+        if (icon) {
+            dom.navMenu.querySelectorAll('use').forEach(use => use.setAttribute('href', icon));
+        }
     };
 
     events.on('cameraMode:changed', updateCameraModeUI);
+    updateCameraModeUI();
 
     // Walk mode hint banner (shown once per session on first FPS entry)
     let walkHintShown = false;
@@ -790,17 +866,18 @@ const initUI = (global: Global) => {
     });
 
     // Collision overlay toggle + matching help-panel row (only visible when overlay is available)
+    // ARTLIGHT (TKT-242) : l'interrupteur est dans Paramètres, plus dans la barre.
     events.on('hasCollisionOverlay:changed', (value: boolean) => {
-        dom.showCollision.classList.toggle('hidden', !value);
+        dom.collisionRow.classList.toggle('hidden', !value);
         dom.desktopShowCollisionHelp.classList.toggle('hidden', !value);
     });
 
-    dom.showCollision.addEventListener('click', () => {
+    dom.collisionRow.addEventListener('click', () => {
         state.collisionOverlayEnabled = !state.collisionOverlayEnabled;
     });
 
     events.on('collisionOverlayEnabled:changed', (value: boolean) => {
-        dom.showCollision.classList.toggle('active', value);
+        dom.collisionCheck.classList.toggle('active', value);
     });
 
     // ARTLIGHT: outils de mesure, un seul ouvert à la fois. L'outil quitté se
@@ -817,8 +894,21 @@ const initUI = (global: Global) => {
         ['sectionMode', dom.section],
         ['floorplanMode', dom.floorplan]
     ];
+    // ARTLIGHT (TKT-242) : le bouton Outils prend l'icône de l'outil ouvert.
+    const toolsMenuIcon = dom.toolsMenuIcon.innerHTML;
+    const updateToolsMenu = () => {
+        const open = toolButtons.find(([mode]) => state[mode]);
+        dom.toolsMenu.classList.toggle('active', !!open);
+        if (open) {
+            dom.toolsMenuIcon.replaceChildren(open[1].querySelector('svg').cloneNode(true));
+        } else {
+            dom.toolsMenuIcon.innerHTML = toolsMenuIcon;
+        }
+    };
+
     for (const [mode, button] of toolButtons) {
         button.addEventListener('click', () => {
+            closeMenus();
             const open = !state[mode];
             if (open) {
                 for (const [other] of toolButtons) {
@@ -829,6 +919,7 @@ const initUI = (global: Global) => {
         });
         events.on(`${mode}:changed`, (value: boolean) => {
             button.classList.toggle('active', value);
+            updateToolsMenu();
         });
     }
 
@@ -847,10 +938,12 @@ const initUI = (global: Global) => {
     });
 
     dom.orbitCamera.addEventListener('click', () => {
+        closeMenus();
         state.cameraMode = 'orbit';
     });
 
     dom.flyCamera.addEventListener('click', () => {
+        closeMenus();
         state.cameraMode = 'fly';
     });
 
@@ -859,10 +952,12 @@ const initUI = (global: Global) => {
     });
 
     dom.reset.addEventListener('click', (event) => {
+        closeMenus();
         events.fire('inputEvent', 'reset', event);
     });
 
     dom.frame.addEventListener('click', (event) => {
+        closeMenus();
         events.fire('inputEvent', 'frame', event);
     });
 
@@ -882,22 +977,13 @@ const initUI = (global: Global) => {
 
     tooltip.register(dom.play, localize('tooltip.play'), 'top');
     tooltip.register(dom.pause, localize('tooltip.pause'), 'top');
-    tooltip.register(dom.orbitCamera, localize('tooltip.orbit-camera'), 'top');
-    tooltip.register(dom.flyCamera, localize('tooltip.fly-camera'), 'top');
-    tooltip.register(dom.fpsCamera, localize('tooltip.walk-mode'), 'top');
-    tooltip.register(dom.reset, localize('tooltip.reset-camera'), 'bottom');
-    tooltip.register(dom.frame, localize('tooltip.frame-scene'), 'bottom');
-    tooltip.register(dom.showCollision, localize('tooltip.show-collision'), 'top');
     // ARTLIGHT: le fork traduisait les libellés à la main ; l'amont porte
     // désormais une vraie i18n (9 langues), nos outils s'y rangent.
-    tooltip.register(dom.measure, localize('tooltip.artlight-measure'), 'top');
-    tooltip.register(dom.areaMeasure, localize('tooltip.artlight-area-measure'), 'top');
-    tooltip.register(dom.flatnessMeasure, localize('tooltip.artlight-flatness'), 'top');
-    tooltip.register(dom.volumeMeasure, localize('tooltip.artlight-volume'), 'top');
-    tooltip.register(dom.pointXYZ, localize('tooltip.artlight-point'), 'top');
-    tooltip.register(dom.section, localize('tooltip.artlight-section'), 'top');
+    // ARTLIGHT (TKT-242) : les boutons des barres Navigation et Outils portent
+    // leur libellé, sans infobulle.
+    tooltip.register(dom.navMenu, localize('tooltip.artlight-navigation'), 'top');
+    tooltip.register(dom.toolsMenu, localize('tooltip.artlight-tools'), 'top');
     tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
-    tooltip.register(dom.floorplan, localize('tooltip.artlight-floorplan'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');
     tooltip.register(dom.arMode, localize('tooltip.enter-ar'), 'top');

@@ -582,7 +582,8 @@ class SectionTool {
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: pos => this.handleClick(pos),
             getDraggablePoints: () => (this.state === 'done' ? this.handles : []),
-            onClear: () => this.clearAll()
+            onClear: () => this.clearAll(),
+            isEmpty: () => this.state === 'idle'
         });
     }
 

@@ -116,7 +116,8 @@ class PointTool {
             // modèle dessous au lieu de saisir le point.
             getDraggablePoints: () => (this.pickMode === 'point' ? this.points.map(p => p.pos) : []),
             // Échap annule d'abord une sélection du zéro en cours.
-            onClear: () => (this.pickMode === 'point' ? this.clearAll() : this.setPickMode('point'))
+            onClear: () => (this.pickMode === 'point' ? this.clearAll() : this.setPickMode('point')),
+            isEmpty: () => this.pickMode === 'point' && this.points.length === 0
         });
     }
 

@@ -18,6 +18,18 @@ export function isToolActive(state: State): boolean {
         state.sectionMode;
 }
 
+// ARTLIGHT (TKT-242) : ferme l'outil ouvert ; les clics redeviennent de la
+// navigation.
+export function closeTools(state: State) {
+    state.measureMode = false;
+    state.areaMeasureMode = false;
+    state.flatnessMeasureMode = false;
+    state.volumeMeasureMode = false;
+    state.pointMode = false;
+    state.floorplanMode = false;
+    state.sectionMode = false;
+}
+
 // ── Calculs sur le nuage, partagés par la planéité et la coupe ──
 
 export const median = (values: number[]) => {

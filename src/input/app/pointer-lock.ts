@@ -40,6 +40,18 @@ class PointerLockManager {
         }
     };
 
+    // ARTLIGHT (TKT-242) : Safari garde pour lui le premier Échap, qui ferme
+    // son bandeau « pointeur masqué » : la page ne reçoit pas l'appui et la
+    // souris reste capturée. Si le relâchement de la touche nous parvient
+    // pendant la capture, on rend la souris (et les boutons) nous-mêmes.
+    private _onKeyUp = (event: KeyboardEvent) => {
+        const state = this._global?.state;
+        if (event.key === 'Escape' && state && document.pointerLockElement === this._canvas &&
+            state.inputMode === 'desktop' && isCaptureMode(state.cameraMode) && state.gamingControls) {
+            state.gamingControls = false;
+        }
+    };
+
     private _onPointerLockError = () => {
         // Pointer lock request rejected (no user gesture, document hidden,
         // etc). Revert state so we don't end up stuck in walk mode without
@@ -133,6 +145,7 @@ class PointerLockManager {
         events.on('inputMode:changed', this._onInputModeChanged);
 
         canvas.addEventListener('pointerdown', this._onPointerDown);
+        window.addEventListener('keyup', this._onKeyUp);
         document.addEventListener('pointerlockchange', this._onPointerLockChange);
         document.addEventListener('pointerlockerror', this._onPointerLockError);
     }
@@ -145,6 +158,7 @@ class PointerLockManager {
             events.off('inputMode:changed', this._onInputModeChanged);
         }
         this._canvas?.removeEventListener('pointerdown', this._onPointerDown);
+        window.removeEventListener('keyup', this._onKeyUp);
         document.removeEventListener('pointerlockchange', this._onPointerLockChange);
         document.removeEventListener('pointerlockerror', this._onPointerLockError);
         this._canvas = null;

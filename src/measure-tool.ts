@@ -38,7 +38,8 @@ class MeasureTool {
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
             getDraggablePoints: () => this.measureState === 'complete' ? this.points : [],
-            onClear: () => this.clearAll()
+            onClear: () => this.clearAll(),
+            isEmpty: () => this.points.length === 0
         });
     }
 

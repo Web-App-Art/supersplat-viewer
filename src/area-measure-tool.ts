@@ -21,7 +21,8 @@ class AreaMeasureTool {
         this.pointerHandler = new ToolPointerHandler(global, {
             onCanvasClick: (pos, clientX, clientY) => this.handleClick(pos, clientX, clientY),
             getDraggablePoints: () => this.state === 'closed' ? this.currentPoints : [],
-            onClear: () => this.clearAll()
+            onClear: () => this.clearAll(),
+            isEmpty: () => this.currentPoints.length === 0
         });
     }
 
