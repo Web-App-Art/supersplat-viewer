@@ -532,6 +532,12 @@ class SectionTool {
 
     private keyHandler: ((event: KeyboardEvent) => void) | null = null;
 
+    // Repère changé dans le panneau Point (zéro, système, altitude NGF) :
+    // altitudes, graduations et textes du panneau sont refaits.
+    private coordsHandler = () => {
+        if (this.state === 'done') this.showPanel();
+    };
+
     constructor(global: Global) {
         this.global = global;
         this.highlight = new SplatSectionHighlight(global);
@@ -561,6 +567,7 @@ class SectionTool {
         this.updateHint();
 
         this.pointerHandler.activate();
+        this.global.events.on('coords:changed', this.coordsHandler);
 
         // Retour arrière retire A pendant la pose de B.
         this.keyHandler = (event: KeyboardEvent) => {
@@ -593,6 +600,7 @@ class SectionTool {
         }
 
         this.pointerHandler.deactivate();
+        this.global.events.off('coords:changed', this.coordsHandler);
         this.cancelRecompute();
         this.removePanel();
         this.highlight.clear();
