@@ -3,9 +3,11 @@ import { Mat4, Vec3 } from 'playcanvas';
 import { formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import { sectionDxf } from './section-dxf';
-import type { DrawingDimension, DrawingKind, SectionDrawing } from './section-dxf';
+import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-dxf';
 import { DARK_THEME, LIGHT_THEME, ProfileView, paintProfile, profileToScreen, scaleBarLength } from './section-profile';
-import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileWindow } from './section-profile';
+import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileRule, ProfileWindow } from './section-profile';
+import { computeRule, spanFrame, spanIsUpright } from './section-rule';
+import type { RuleOk, RuleResult } from './section-rule';
 import { traceSection } from './section-trace';
 import { SplatSectionHighlight } from './splat-highlight';
 import {
@@ -16,7 +18,7 @@ import {
 import { ToolPointerHandler } from './tool-pointer-handler';
 import {
     worldToScreen, screenToRay, getSplatCenters, displayedLodInBox, loadFinestCenters, orientedBoxAabb, median, subsample,
-    fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba
+    fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba, RULE_LENGTHS, RULE_MIN_SAMPLES, WAVE_WIDTHS
 } from './tool-utils';
 import type { FinestResult, LodUsage, OrientedBox, SplatCenters } from './tool-utils';
 import type { Global } from './types';
@@ -40,6 +42,11 @@ import type { Global } from './types';
 //
 // Première version (lot 1) : A et B seulement. Maxime a trouvé la pose de
 // deux points trop peu intuitive ; le mode reste en option.
+//
+// Règle et flèche (TKT-246) : sur un profil (coupe verticale ou entre deux
+// points), une règle posée sur les points hauts, de A à B ou entre deux
+// clics sur le profil ; flèche maximale entre deux appuis, portée, L/xxx.
+// Calcul : section-rule.ts.
 
 type SectionMode = 'vertical' | 'horizontal' | 'points';
 const SECTION_MODES: SectionMode[] = ['vertical', 'horizontal', 'points'];
@@ -153,6 +160,11 @@ const MASK_STORAGE_KEY = 'artlight.section.mask';
 const EXAGGERATION_STORAGE_KEY = 'artlight.section.exaggeration';
 const COLLAPSED_STORAGE_KEY = 'artlight.section.collapsed';
 const LARGE_STORAGE_KEY = 'artlight.section.large';
+// Règle : longueur, côté et tuiles sont mémorisés ; la règle elle-même est à
+// rallumer (en coupe verticale, elle prend les clics du profil).
+const RULE_LENGTH_STORAGE_KEY = 'artlight.section.rule-length';
+const RULE_SIDE_STORAGE_KEY = 'artlight.section.rule-side';
+const RULE_TILE_STORAGE_KEY = 'artlight.section.rule-tile';
 
 const tr = translator('artlight.section');
 
@@ -201,6 +213,7 @@ interface Section {
     wMin: number;
     wMax: number;
     points: Float32Array;       // s, t des points retenus
+    depth: Float32Array;        // leur écart au plan de coupe, selon sa normale (m)
     count: number;
     isolated: number;           // points isolés écartés
     // Entre deux points : A et B recalés sur le nuage
@@ -218,6 +231,12 @@ type LodStatus = 'finest' | 'finer' | 'loading' | 'too-large' | 'failed';
 
 // Première lettre en capitale : « Incliné à 35° ».
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Flèche, toujours en mm : « 12,3 mm ».
+const formatGap = (m: number) => `${formatNumber(m * 1000, 1)} mm`;
+
+// Longueur de règle : « 20 cm », « 2 m ».
+const formatRuleLength = (m: number) => (m < 1 ? `${Math.round(m * 100)} cm` : `${formatNumber(m, 0)} m`);
 
 // Composante horizontale d'un vecteur, normalisée (null si presque verticale).
 const horizontal = (v: Vec3, up: Vec3): Vec3 | null => {
@@ -507,6 +526,25 @@ class SectionTool {
     private measure: ProfileMeasure | null = null;
 
     private hover: ProfilePoint | null = null;
+
+    // Règle sur le profil (TKT-246). Portée posée par deux clics sur le
+    // profil ; entre deux points, de A à B tant qu'on n'en a pas posé une.
+    private ruleOn = false;
+
+    private ruleLength = readStoredNumber(RULE_LENGTH_STORAGE_KEY, 0, v => RULE_LENGTHS.includes(v));
+
+    private ruleSide: 1 | -1 = readStoredText(RULE_SIDE_STORAGE_KEY, '1', v => v === '1' || v === '-1') === '-1' ? -1 : 1;
+
+    private ruleTile = readStoredNumber(RULE_TILE_STORAGE_KEY, 0, v => WAVE_WIDTHS.includes(v));
+
+    private ruleSpan: [ProfilePoint, ProfilePoint] | null = null;
+
+    // Pose de la portée sur le profil, et son premier bout.
+    private rulePicking = false;
+
+    private rulePickFirst: ProfilePoint | null = null;
+
+    private rule: RuleResult | null = null;
 
     private overlay: HTMLDivElement | null = null;
 
@@ -870,6 +908,7 @@ class SectionTool {
         this.profileWindow = null;
         this.measure = null;
         this.hover = null;
+        this.resetRuleSpan();
     }
 
     private resetAnalysis() {
@@ -982,6 +1021,7 @@ class SectionTool {
         this.section = null;
         this.failure = null;
         this.lod = null;
+        this.rule = null;
         if (this.state !== 'done') return;
 
         const key = this.frameKey();
@@ -989,6 +1029,7 @@ class SectionTool {
             this.frame = null;
             this.measure = null;
             this.hover = null;
+            this.resetRuleSpan();
         }
         // Un chargement lancé pour une autre tranche est abandonné.
         this.finestRequest++;
@@ -1050,6 +1091,7 @@ class SectionTool {
 
         this.section = section;
         if (!section) this.failure = 'no-points';
+        this.updateRule();
         this.updateHighlight();
     }
 
@@ -1333,6 +1375,7 @@ class SectionTool {
         }) : [null, null];
 
         const st: number[] = [];
+        const dist: number[] = [];
         // Écarts candidats au recalage de A et de B, fenêtre étroite et large
         const near: number[][] = [[], [], [], []];
         for (let i = 0; i < numSplats; i++) {
@@ -1346,6 +1389,7 @@ class SectionTool {
                 if (w > limit || w < -limit) continue;
             }
             st.push(ex * Xl.x + ey * Xl.y + ez * Xl.z, ex * Yl.x + ey * Yl.y + ez * Yl.z);
+            dist.push(d);
             for (let k = 0; k < 2; k++) {
                 const snap = snaps[k];
                 if (!snap) continue;
@@ -1360,20 +1404,24 @@ class SectionTool {
         if (count === 0) return null;
 
         let points = Float32Array.from(st);
+        let depth = Float32Array.from(dist);
         let isolated = 0;
         if (this.filterIsolated) {
             const keep = keepDenseProfilePoints(points, count);
             const kept = new Float32Array(points.length);
+            const keptDepth = new Float32Array(count);
             let n = 0;
             for (let i = 0; i < count; i++) {
                 if (!keep[i]) continue;
                 kept[n * 2] = points[i * 2];
                 kept[n * 2 + 1] = points[i * 2 + 1];
+                keptDepth[n] = depth[i];
                 n++;
             }
             isolated = count - n;
             count = n;
             points = kept.subarray(0, n * 2);
+            depth = keptDepth.subarray(0, n);
             if (count === 0) return null;
         }
 
@@ -1439,7 +1487,7 @@ class SectionTool {
         fit.t0 -= padT;
         fit.t1 += padT;
 
-        return { frame, thickness: this.thickness, uMin, uMax, wMin, wMax, points, count, isolated, ends: sectionEnds, fit };
+        return { frame, thickness: this.thickness, uMin, uMax, wMin, wMax, points, depth, count, isolated, ends: sectionEnds, fit };
     }
 
     private dimensions(section: Section): Dimensions | null {
@@ -1453,6 +1501,246 @@ class SectionTool {
         const rise = d.dot(this.up);
         const length = d.length();
         return { length, rise, horizontal: Math.sqrt(Math.max(0, length * length - rise * rise)) };
+    }
+
+    // ── Règle sur le profil ──
+
+    // Un profil seulement : une vue en plan n'a ni dessus ni dessous.
+    private ruleAvailable(): boolean {
+        return this.mode !== 'horizontal';
+    }
+
+    // Portée de la règle : posée sur le profil, sinon de A à B ; aucune
+    // pendant qu'on en pose une autre (Annuler fait revenir la précédente).
+    private currentRuleSpan(): [ProfilePoint, ProfilePoint] | null {
+        if (this.rulePicking) return null;
+        if (this.ruleSpan) return this.ruleSpan;
+        const ends = this.section?.ends;
+        return this.mode === 'points' && ends ? [ends.a, ends.b] : null;
+    }
+
+    private updateRule() {
+        this.rule = null;
+        const section = this.section;
+        const span = this.currentRuleSpan();
+        if (!this.ruleOn || !this.ruleAvailable() || !section || !span) return;
+        this.rule = computeRule(section.points, section.count, {
+            span,
+            side: this.ruleSide,
+            length: this.ruleLength,
+            tile: this.ruleTile
+        }, section.depth);
+    }
+
+    private ruleOk(): RuleOk | null {
+        return this.ruleOn && this.rule?.status === 'ok' ? this.rule : null;
+    }
+
+    // Nouvelle coupe : la portée posée sur l'ancien profil ne vaut plus ; en
+    // coupe verticale, elle est à reposer.
+    private resetRuleSpan() {
+        this.ruleSpan = null;
+        this.rulePickFirst = null;
+        this.rulePicking = this.ruleOn && this.mode === 'vertical';
+        this.rule = null;
+    }
+
+    // Pose de la portée : clic sur le profil (accroché au point le plus
+    // proche). Le premier bout, puis le second ; la portée va de gauche à
+    // droite (de bas en haut si elle est presque verticale).
+    private pickRule = (p: ProfilePoint): boolean => {
+        if (!this.rulePicking || !this.ruleOn) return false;
+        const first = this.rulePickFirst;
+        if (!first) {
+            this.rulePickFirst = p;
+        } else if (Math.hypot(p.s - first.s, p.t - first.t) > 1e-3) {
+            const span: [ProfilePoint, ProfilePoint] = [first, p];
+            const upright = spanIsUpright(span);
+            if (upright ? p.t < first.t : p.s < first.s) span.reverse();
+            this.ruleSpan = span;
+            this.rulePickFirst = null;
+            this.rulePicking = false;
+            this.updateRule();
+        }
+        this.refreshRule();
+        return true;
+    };
+
+    private startRulePick() {
+        this.rulePicking = true;
+        this.rulePickFirst = null;
+        this.updateRule();
+        this.refreshRule();
+    }
+
+    // Annule la pose : la portée d'avant (ou A B) revient.
+    private cancelRulePick() {
+        this.rulePicking = false;
+        this.rulePickFirst = null;
+        this.updateRule();
+        this.refreshRule();
+    }
+
+    // Règle changée : profil, résultats, lecture, résumé et vue, sans
+    // refaire la coupe ni reconstruire le profil (cadrage, survol).
+    private refreshRule() {
+        this.profileView?.setRule(this.profileRule());
+        this.renderResults();
+        this.updateReadout();
+        if (this.summary) {
+            this.summary.textContent = this.summaryText();
+            this.summary.title = this.summary.textContent;
+        }
+        this.global.app.renderNextFrame = true;
+    }
+
+    // Règle à dessiner sur le profil.
+    private profileRule(): ProfileRule | null {
+        if (!this.ruleOn || !this.ruleAvailable()) return null;
+        const span = this.currentRuleSpan();
+        const rule = this.ruleOk();
+        return {
+            span,
+            pending: this.rulePicking ? this.rulePickFirst : null,
+            normal: rule?.normal ?? (span ? spanFrame(span, this.ruleSide)?.normal ?? null : null),
+            line: rule ? {
+                start: rule.start,
+                end: rule.end,
+                supports: rule.supports,
+                gapRule: rule.gapRule,
+                gapSurface: rule.gapSurface,
+                label: tr('rule.tag', { value: formatGap(rule.gap) })
+            } : null
+        };
+    }
+
+    // Rapport portée / flèche : « L/650 ».
+    private ruleRatio(rule: RuleOk): string {
+        return rule.gap > 1e-5 ? `L/${formatCount(Math.round(rule.reach / rule.gap))}` : '—';
+    }
+
+    // Position de la flèche sur le profil : depuis A, ou abscisse du profil
+    // (signée : le profil a son origine au point cliqué).
+    private rulePosition(rule: RuleOk): string {
+        const s = rule.gapSurface.s;
+        return this.mode === 'points' ? tr('rule.position-from-a', { s: formatLength(s) }) : tr('rule.position-profile', { s: formatLength(s, true) });
+    }
+
+    // Côtés de la règle (1, puis −1), selon l'orientation de la portée :
+    // dessus et dessous, ou gauche et droite pour un mur vu de profil.
+    private ruleSideKeys(): [string, string] {
+        const span = this.currentRuleSpan();
+        return span && spanIsUpright(span) ? ['left', 'right'] : ['above', 'below'];
+    }
+
+    // Réglages et résultats de la règle (colonne de gauche).
+    private renderRule(el: HTMLElement) {
+        if (!this.ruleAvailable() || !this.section) return;
+        const box = document.createElement('div');
+        box.className = 'section-rule';
+        const toggle = createSwitch(tr('rule.label'), this.ruleOn, (on) => {
+            this.ruleOn = on;
+            this.ruleSpan = null;
+            this.rulePickFirst = null;
+            this.rulePicking = on && this.mode === 'vertical';
+            this.updateRule();
+            this.refreshRule();
+        });
+        toggle.title = tr('rule.title');
+        box.appendChild(toggle);
+        el.appendChild(box);
+        if (!this.ruleOn) return;
+
+        // Portée : de A à B, ou posée sur le profil
+        const buttons = document.createElement('div');
+        buttons.className = 'section-buttons';
+        const addButton = (caption: string, title: string, onClick: () => void, disabled = false) => {
+            const button = document.createElement('button');
+            button.className = 'tool-btn';
+            button.disabled = disabled;
+            button.textContent = caption;
+            button.title = title;
+            button.addEventListener('click', onClick);
+            buttons.appendChild(button);
+        };
+        if (this.rulePicking) {
+            addButton(tr('rule.pick-cancel'), tr('rule.pick-cancel-title'), () => this.cancelRulePick());
+        } else {
+            if (this.mode === 'points') {
+                addButton(tr('rule.span-ab'), tr('rule.span-ab-title'), () => {
+                    this.ruleSpan = null;
+                    this.updateRule();
+                    this.refreshRule();
+                }, !this.ruleSpan);
+            }
+            addButton(tr(this.ruleSpan ? 'rule.span-repick' : 'rule.span-pick'), tr('rule.span-pick-title'), () => this.startRulePick());
+        }
+        const span = this.currentRuleSpan();
+        const spanField = createField(span ? tr('rule.span-length', { length: formatLength(Math.hypot(span[1].s - span[0].s, span[1].t - span[0].t)) }) : tr('rule.span'), buttons);
+        box.appendChild(spanField);
+
+        const update = () => {
+            this.updateRule();
+            this.refreshRule();
+        };
+        box.appendChild(createField(tr('rule.length'), createSegmented(RULE_LENGTHS.map(length => ({
+            value: length,
+            label: length === 0 ? tr('rule.length-span') : formatRuleLength(length),
+            title: length === 0 ? tr('rule.length-span-title') : tr('rule.length-title', { length: formatRuleLength(length) })
+        })), this.ruleLength, (length) => {
+            this.ruleLength = length;
+            storeNumber(RULE_LENGTH_STORAGE_KEY, length);
+            update();
+        })));
+        const [first, second] = this.ruleSideKeys();
+        box.appendChild(createField(tr('rule.side'), createSegmented<1 | -1>([
+            { value: 1, label: tr(`rule.side-${first}`), title: tr(`rule.side-${first}-title`) },
+            { value: -1, label: tr(`rule.side-${second}`), title: tr(`rule.side-${second}-title`) }
+        ], this.ruleSide, (side) => {
+            this.ruleSide = side;
+            storeText(RULE_SIDE_STORAGE_KEY, String(side));
+            update();
+        })));
+        const tiles = createField(tr('rule.tiles'), createSegmented(WAVE_WIDTHS.map(width => ({
+            value: width,
+            label: width === 0 ? tr('rule.tiles-none') : formatNumber(width * 100, 0)
+        })), this.ruleTile, (width) => {
+            this.ruleTile = width;
+            storeNumber(RULE_TILE_STORAGE_KEY, width);
+            update();
+        }));
+        tiles.title = tr('rule.tiles-title');
+        box.appendChild(tiles);
+
+        // Résultats
+        const results = document.createElement('div');
+        results.className = 'section-rule-results';
+        box.appendChild(results);
+        if (this.rulePicking) {
+            results.appendChild(createNote(tr(this.rulePickFirst ? 'rule.pick-second' : 'rule.pick-first')));
+            return;
+        }
+        const rule = this.rule;
+        if (!rule) return;
+        if (rule.status !== 'ok') {
+            results.appendChild(createNote(tr(`rule.status.${rule.status}`, {
+                length: formatRuleLength(this.ruleLength),
+                cell: formatLength(rule.cell),
+                n: RULE_MIN_SAMPLES
+            }), true));
+            return;
+        }
+        results.appendChild(createRow(this.ruleLength > 0 ? tr('rule.gap-under', { length: formatRuleLength(this.ruleLength) }) : tr('rule.gap'), formatGap(rule.gap)));
+        results.appendChild(createRow(tr('rule.position'), this.rulePosition(rule)));
+        results.appendChild(createRow(tr('rule.reach'), formatLength(rule.reach)));
+        results.appendChild(createRow(tr('rule.ratio'), this.ruleRatio(rule)));
+        results.appendChild(createRow(tr('rule.noise-floor'), `≈ ${formatGap(rule.noiseFloor)}`));
+        results.appendChild(createNote(tr('rule.how', {
+            cell: formatLength(rule.cell),
+            tiles: rule.tiles ? tr('rule.how-tiles', { width: formatLength(this.ruleTile) }) : ''
+        })));
+        if (this.ruleTile > 0 && !rule.tiles) results.appendChild(createNote(tr('rule.tiles-coarse', { cell: formatLength(rule.cell) }), true));
+        if (rule.gap < rule.noiseFloor) results.appendChild(createNote(tr('rule.warn-noise', { value: formatGap(rule.noiseFloor) }), true));
     }
 
     // ── Masquage et surbrillance dans la vue ──
@@ -1667,6 +1955,8 @@ class SectionTool {
             const [slopeLabel, slopeValue] = this.slopeRow(dim);
             parts.push(tr('summary-line.points', { length: formatLength(dim.length), rise: formatLength(dim.rise, true), slope: `${slopeLabel.toLowerCase()} ${slopeValue}` }));
         }
+        const rule = this.ruleOk();
+        if (rule) parts.push(tr('summary-line.rule', { value: formatGap(rule.gap), ratio: this.ruleRatio(rule) }));
         parts.push(tr('summary-line.thickness', { value: formatLength(section.thickness) }));
         parts.push(tr('summary-line.points-count', { n: formatCount(section.count) }));
         if (this.lod?.status === 'loading') parts.push(tr('summary-line.lod-loading'));
@@ -1746,8 +2036,10 @@ class SectionTool {
                 onWindow: (w) => {
                     this.profileWindow = w;
                 },
-                measureLabel: this.measureLabel
+                measureLabel: this.measureLabel,
+                onPick: this.pickRule
             });
+            this.profileView.setRule(this.profileRule());
             wrap.appendChild(this.profileView.canvas);
             main.appendChild(wrap);
             main.appendChild(this.createProfileBar());
@@ -2022,6 +2314,8 @@ class SectionTool {
             el.appendChild(createRow(tr('level'), this.heightText(this.planeOrigin())));
         }
 
+        this.renderRule(el);
+
         const info = document.createElement('div');
         info.className = 'tool-info';
         const lines = [tr('info.points', { n: formatCount(section.count), thickness: formatLength(section.thickness) })];
@@ -2096,6 +2390,19 @@ class SectionTool {
         const text = document.createElement('span');
         const m = this.measure;
         const parts = m && this.measureParts(m);
+        if (this.rulePicking && this.ruleOn) {
+            // Pose de la règle : la consigne, puis la position survolée
+            const step = tr(this.rulePickFirst ? 'rule.pick-second' : 'rule.pick-first');
+            text.textContent = this.hover ? `${step} · ${this.positionText(this.hover)}` : step;
+            text.className = 'rule';
+            el.appendChild(text);
+            const cancel = document.createElement('button');
+            cancel.className = 'tool-btn';
+            cancel.textContent = tr('rule.pick-cancel');
+            cancel.addEventListener('click', () => this.cancelRulePick());
+            el.appendChild(cancel);
+            return;
+        }
         if (this.hover) {
             text.textContent = this.positionText(this.hover);
         } else if (parts) {
@@ -2186,6 +2493,24 @@ class SectionTool {
             if (slope) rows.push([tr('slope'), slope]);
             out.push({ title: tr('summary.measure'), rows });
         }
+
+        const rule = this.ruleOk();
+        if (rule) {
+            const [first, second] = this.ruleSideKeys();
+            out.push({
+                title: tr('summary.rule'),
+                rows: [
+                    [this.ruleLength > 0 ? tr('rule.gap-under', { length: formatRuleLength(this.ruleLength) }) : tr('rule.gap'), formatGap(rule.gap)],
+                    [tr('rule.position'), this.rulePosition(rule)],
+                    [tr('rule.reach'), formatLength(rule.reach)],
+                    [tr('rule.ratio'), this.ruleRatio(rule)],
+                    [tr('rule.noise-floor'), `≈ ${formatGap(rule.noiseFloor)}`],
+                    [tr('rule.length'), this.ruleLength > 0 ? formatRuleLength(this.ruleLength) : tr('rule.length-span')],
+                    [tr('rule.side'), tr(`rule.side-${this.ruleSide > 0 ? first : second}`)],
+                    [tr('summary.rule-tiles'), rule.tiles ? formatLength(this.ruleTile) : tr('rule.tiles-none')]
+                ]
+            });
+        }
         return out;
     }
 
@@ -2213,7 +2538,17 @@ class SectionTool {
         const colW = (plotW - colGap * (columns - 1)) / columns;
         const top = margin + 76;
         const legendY = top + plotH + 16;
-        const tableY = legendY + 64;
+
+        // Légende sous le profil, puis les résultats
+        const notes = [tr('png.slice', { thickness: formatLength(section.thickness), plane: this.planeText(section.frame) })];
+        if (this.mode === 'horizontal') notes.push(tr('png.plan', { angle: formatNumber(this.azimuth(), 0) }));
+        else notes.push(exaggeration > 1 ? tr('png.exaggeration', { n: exaggeration }) : tr('png.no-exaggeration'));
+        const rule = this.ruleOk();
+        if (rule) {
+            notes.push(tr('png.rule'));
+            if (rule.gap < rule.noiseFloor) notes.push(tr('rule.warn-noise', { value: formatGap(rule.noiseFloor) }));
+        }
+        const tableY = legendY + 24 + Math.max(2, notes.length) * 20;
 
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -2284,7 +2619,8 @@ class SectionTool {
             exaggeration,
             theme,
             measure: this.measure,
-            measureLabel: this.measureLabel
+            measureLabel: this.measureLabel,
+            rule: this.ruleOk() ? { ...this.profileRule(), pending: null } : null
         });
         ctx.drawImage(plot, margin, top);
         ctx.strokeStyle = '#d4d4d8';
@@ -2296,9 +2632,6 @@ class SectionTool {
         ctx.fillStyle = '#52525b';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';
-        const notes = [tr('png.slice', { thickness: formatLength(section.thickness), plane: this.planeText(section.frame) })];
-        if (this.mode === 'horizontal') notes.push(tr('png.plan', { angle: formatNumber(this.azimuth(), 0) }));
-        else notes.push(exaggeration > 1 ? tr('png.exaggeration', { n: exaggeration }) : tr('png.no-exaggeration'));
         notes.forEach((note, i) => ctx.fillText(note, margin, legendY + 16 + i * 20));
 
         const map = profileToScreen({ width: plotW, height: plotH, window: exportWindow, exaggeration, theme });
@@ -2401,12 +2734,33 @@ class SectionTool {
             // Cote de la mesure sous le segment mesuré (celle de AB est
             // au-dessus), pente au-dessus.
             const p1 = at(this.measure.p1), p2 = at(this.measure.p2);
-            dims.push({ p1, p2, kind: 'aligned', measure: true, side: -1 });
+            dims.push({ p1, p2, kind: 'aligned', layer: 'measure', side: -1 });
             if (kind !== 'plan' && Math.abs(parts.ds) > 0.05 * parts.length && Math.abs(parts.dt) > 0.05 * parts.length) {
-                dims.push({ p1, p2, kind: 'horizontal', measure: true }, { p1, p2, kind: 'vertical', measure: true });
+                dims.push({ p1, p2, kind: 'horizontal', layer: 'measure' }, { p1, p2, kind: 'vertical', layer: 'measure' });
             }
             const slope = this.measureSlope(parts);
-            if (slope) notes.push({ text: `${tr('slope')} ${slope}`, p1, p2, measure: true, side: 1 });
+            if (slope) notes.push({ text: `${tr('slope')} ${slope}`, p1, p2, layer: 'measure', side: 1 });
+        }
+
+        // Règle la plus défavorable, sa flèche cotée, et ses résultats le long
+        // de la règle (au-dessus).
+        let drawingRule: DrawingRule | undefined;
+        const rule = this.ruleOk();
+        if (rule) {
+            const start = at(rule.start), end = at(rule.end);
+            drawingRule = {
+                line: [start, end],
+                supports: rule.supports.map(at),
+                gap: [at(rule.gapRule), at(rule.gapSurface)],
+                gapText: formatGap(rule.gap)
+            };
+            notes.push({
+                text: tr('dxf.rule-note', { gap: formatGap(rule.gap), reach: formatLength(rule.reach), ratio: this.ruleRatio(rule) }),
+                p1: start,
+                p2: end,
+                layer: 'rule',
+                side: 1
+            });
         }
 
         // Cartouche : les résultats de l'image PNG, puis le repère du dessin.
@@ -2439,6 +2793,7 @@ class SectionTool {
             z: kind === 'plan' ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
             ends,
             dims,
+            rule: drawingRule,
             notes,
             axes,
             north: kind === 'plan' ? coords.axisNames[1] : undefined,
@@ -2453,6 +2808,7 @@ class SectionTool {
                 lines: tr('dxf.layer.lines'),
                 dims: tr('dxf.layer.dims'),
                 measure: tr('dxf.layer.measure'),
+                rule: tr('dxf.layer.rule'),
                 grid: tr('dxf.layer.grid'),
                 title: tr('dxf.layer.title')
             },
@@ -2463,7 +2819,9 @@ class SectionTool {
 
     // Tableau pour Excel : une ligne par point de la coupe, dans l'ordre des
     // distances. Les deux coordonnées du profil (distance, puis altitude ou
-    // écart), puis X Y Z dans le repère affiché.
+    // écart), puis X Y Z dans le repère affiché ; avec une règle, l'écart à la
+    // règle (mm, positif sous la règle) des points de la surface qu'elle
+    // enjambe.
     private exportCsv() {
         const section = this.section;
         if (!section) return;
@@ -2475,8 +2833,30 @@ class SectionTool {
             data.sTitle, data.tTitle,
             ...coords.axisNames.map(axis => tr('csv.axis', { axis, frame: coords.frameName }))
         ]];
-        const pts = section.points;
         const decimal = decimalSeparator();
+        const rule = this.ruleOk();
+        let ruleGap: ((i: number) => string) | null = null;
+        if (rule) {
+            rows[0].push(tr('csv.rule'));
+            // Repère de la règle : u le long (0 à len), n vers la surface (à
+            // l'opposé du côté de la règle)
+            const ds = rule.end.s - rule.start.s, dt = rule.end.t - rule.start.t;
+            const len = Math.hypot(ds, dt) || 1;
+            const us = ds / len, ut = dt / len;
+            const flip = ut * rule.normal.s - us * rule.normal.t > 0 ? -1 : 1;
+            const ns = ut * flip, nt = -us * flip;
+            ruleGap = (i: number) => {
+                if (!rule.used[i]) return '';
+                // Point ramené sur le plan de coupe en suivant la surface (voir section-rule.ts)
+                const shift = rule.crossSlope * section.depth[i];
+                const ps = section.points[i * 2] - shift * rule.normal.s - rule.start.s;
+                const pt = section.points[i * 2 + 1] - shift * rule.normal.t - rule.start.t;
+                const u = ps * us + pt * ut;
+                if (u < 0 || u > len) return '';
+                return exportNumber((ps * ns + pt * nt) * 1000, 1, decimal);
+            };
+        }
+        const pts = section.points;
         const num = (v: number) => exportNumber(v, 3, decimal);
         const order = Array.from({ length: section.count }, (_, i) => i)
         .sort((a, b) => pts[a * 2] - pts[b * 2] || pts[a * 2 + 1] - pts[b * 2 + 1]);
@@ -2485,7 +2865,9 @@ class SectionTool {
         for (const i of order) {
             const s = pts[i * 2], t = pts[i * 2 + 1];
             const d = coords.toDisplay(p.set(o.x + X.x * s + Y.x * t, o.y + X.y * s + Y.y * t, o.z + X.z * s + Y.z * t));
-            rows.push([num(s), num(vertical ? d[2] : t), num(d[0]), num(d[1]), num(d[2])]);
+            const row = [num(s), num(vertical ? d[2] : t), num(d[0]), num(d[1]), num(d[2])];
+            if (ruleGap) row.push(ruleGap(i));
+            rows.push(row);
         }
         downloadCsv(rows, `${exportBaseName(tr('export.file'))}.csv`);
     }
@@ -2524,6 +2906,7 @@ class SectionTool {
         }
 
         if (section && !stale) {
+            this.drawRule(ctx, section);
             this.drawMeasure(ctx, section);
             this.drawHover(ctx, section);
         }
@@ -2664,6 +3047,54 @@ class SectionTool {
         ctx.beginPath();
         ctx.arc(p1.x, p1.y, 4, 0, Math.PI * 2);
         ctx.fill();
+    }
+
+    // Règle la plus défavorable sur la coupe, ses appuis et sa flèche.
+    private drawRule(ctx: CanvasRenderingContext2D, section: Section) {
+        const rule = this.ruleOk();
+        if (!rule) return;
+        const camera = this.global.camera;
+        const at = (p: ProfilePoint) => worldToScreen(camera, framePoint(section.frame, p.s, p.t));
+        const a = at(rule.start), b = at(rule.end), gr = at(rule.gapRule), gs = at(rule.gapSurface);
+        if (a.behind || b.behind || gr.behind || gs.behind) return;
+
+        ctx.lineCap = 'round';
+        for (const [color, width] of [['rgba(0, 0, 0, 0.8)', 5], [DARK_THEME.rule, 2.5]] as const) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
+        ctx.lineCap = 'butt';
+        ctx.fillStyle = DARK_THEME.rule;
+        for (const p of rule.supports) {
+            const q = at(p);
+            if (q.behind) continue;
+            ctx.beginPath();
+            ctx.arc(q.x, q.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(gr.x, gr.y);
+        ctx.lineTo(gs.x, gs.y);
+        ctx.stroke();
+
+        const text = tr('rule.tag', { value: formatGap(rule.gap) });
+        ctx.font = '13px Arial';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const width = ctx.measureText(text).width;
+        const x = gr.x + 10, y = gr.y - 14;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.beginPath();
+        ctx.roundRect(x - 6, y - 10, width + 12, 20, 4);
+        ctx.fill();
+        ctx.fillStyle = DARK_THEME.rule;
+        ctx.fillText(text, x, y);
     }
 
     // Point survolé sur le profil, montré dans la vue.

@@ -11,6 +11,7 @@ import { subsample } from './tool-utils';
 // - traits de coupe, les polylignes (3, vert, 0,35 mm) ;
 // - cotes : A et B, cotes de A à B, cotes de niveau, pente (1, rouge) ;
 // - mesure faite sur le profil (30, orange) ;
+// - règle : la plus défavorable, ses appuis, sa flèche cotée (5, bleu) ;
 // - cadre gradué (8, gris) ;
 // - cartouche : titre, date, repère, réglages de la coupe (7).
 // La hauteur des textes suit la taille du dessin (1/60 de sa plus grande
@@ -25,6 +26,7 @@ export interface DrawingLayers {
     lines: string;
     dims: string;
     measure: string;
+    rule: string;
     grid: string;
     title: string;
 }
@@ -33,8 +35,17 @@ export interface DrawingDimension {
     p1: Vec2;
     p2: Vec2;
     kind: 'aligned' | 'horizontal' | 'vertical';
-    measure?: boolean;          // calque de la mesure plutôt que des cotes
+    layer?: 'measure' | 'rule'; // calque de la mesure ou de la règle plutôt que des cotes
     side?: 1 | -1;              // cote alignée : au-dessus (1) ou en dessous (-1) de p1 p2
+}
+
+// Règle (TKT-246) : la plus défavorable, ses appuis, et sa flèche, cotée
+// perpendiculairement à la règle (texte en mm).
+export interface DrawingRule {
+    line: [Vec2, Vec2];
+    supports: Vec2[];
+    gap: [Vec2, Vec2];          // pied sur la règle, surface
+    gapText: string;
 }
 
 export interface SectionDrawing {
@@ -45,9 +56,10 @@ export interface SectionDrawing {
     z: number;                  // altitude des traits, cotes et textes
     ends?: { a: Vec2; b: Vec2; levels?: [string, string] };
     dims: DrawingDimension[];
-    // Texte le long d'un segment (pente de AB, de la mesure), en dessous
-    // (side -1, par défaut) ou au-dessus (1)
-    notes: { text: string; p1: Vec2; p2: Vec2; measure?: boolean; side?: 1 | -1 }[];
+    rule?: DrawingRule;
+    // Texte le long d'un segment (pente de AB, de la mesure, règle), en
+    // dessous (side -1, par défaut) ou au-dessus (1)
+    notes: { text: string; p1: Vec2; p2: Vec2; layer?: 'measure' | 'rule'; side?: 1 | -1 }[];
     axes: { x: string; y: string };
     north?: string;
     title: string;
@@ -116,6 +128,10 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
         include(dim.p1);
         include(dim.p2);
     }
+    if (d.rule) {
+        include(d.rule.line[0]);
+        include(d.rule.line[1]);
+    }
     if (!Number.isFinite(x0)) {
         x0 = y0 = 0;
         x1 = y1 = 1;
@@ -128,8 +144,8 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
     // pas se superposer. Le cadre englobe les lignes de cote.
     const placed: { layer: string; p1: Vec2; p2: Vec2; at: Vec2; angle: number | null }[] = [];
     for (const dim of d.dims) {
-        const layer = dim.measure ? L.measure : L.dims;
-        const offset = h * (dim.measure && dim.kind !== 'aligned' ? 5 : 2.5);
+        const layer = dim.layer ? L[dim.layer] : L.dims;
+        const offset = h * (dim.layer === 'measure' && dim.kind !== 'aligned' ? 5 : 2.5);
         const { p1, p2 } = dim;
         if (dim.kind === 'horizontal') {
             const y = Math.min(p1[1], p2[1]) - offset;
@@ -158,11 +174,13 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
         }
     }
 
+    // Le calque de la règle seulement s'il y en a une
     const w = new DxfWriter([
         { name: L.points, color: 7 },
         { name: L.lines, color: 3, lineweight: 35 },
         { name: L.dims, color: 1 },
         { name: L.measure, color: 30 },
+        ...(d.rule ? [{ name: L.rule, color: 5, lineweight: 35 }] : []),
         { name: L.grid, color: 8 },
         { name: L.title, color: 7 }
     ], { textHeight: h, decimals: 3, decimal: d.decimal });
@@ -225,6 +243,19 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
 
     for (const p of placed) w.dimension(p.layer, p.p1, p.p2, p.at, p.angle, z);
 
+    // Règle, appuis, flèche cotée : la ligne de cote est décalée le long de
+    // la règle, vers son milieu.
+    if (d.rule) {
+        const { line, supports, gap, gapText } = d.rule;
+        w.polyline(L.rule, [line[0][0], line[0][1], line[1][0], line[1][1]], false, z);
+        for (const p of supports) w.circle(L.rule, p, h * 0.25, z);
+        const lx = line[1][0] - line[0][0], ly = line[1][1] - line[0][1], len = Math.hypot(lx, ly) || 1;
+        const mid = (line[0][0] + line[1][0]) / 2;
+        const dir = (gap[0][0] <= mid ? 1 : -1) * Math.sign(lx || 1);
+        const at: Vec2 = [gap[0][0] + lx / len * h * 2 * dir, gap[0][1] + ly / len * h * 2 * dir];
+        w.dimension(L.rule, gap[0], gap[1], at, null, z, gapText);
+    }
+
     // Notes le long de leur segment, dans son sens de lecture.
     for (const note of d.notes) {
         const { p1, p2 } = note;
@@ -233,7 +264,7 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
         if (angle <= -Math.PI / 2) angle += Math.PI;
         const k = (note.side ?? -1) * h * 0.8;
         const mid: Vec2 = [(p1[0] + p2[0]) / 2 - Math.sin(angle) * k, (p1[1] + p2[1]) / 2 + Math.cos(angle) * k];
-        w.text(note.measure ? L.measure : L.dims, mid, h * 0.8, note.text, {
+        w.text(note.layer ? L[note.layer] : L.dims, mid, h * 0.8, note.text, {
             align: 'center',
             baseline: note.side === 1 ? 'bottom' : 'top',
             rotation: angle * 180 / Math.PI

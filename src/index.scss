@@ -1663,6 +1663,27 @@ $tool-warning: #fbbf24;
             margin-top: 8px;
         }
     }
+
+    // Règle et flèche (TKT-246)
+    .section-rule {
+        margin-top: 12px;
+        padding-top: 2px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+
+        .tool-field {
+            margin-top: 8px;
+        }
+
+        // Six choix sur une ligne : chaque bouton à la taille de son texte.
+        .tool-seg-btn {
+            flex: 1 1 auto;
+            padding: 5px 4px;
+        }
+    }
+
+    .section-rule-results {
+        margin-top: 8px;
+    }
 }
 
 // Petit écran : le profil au-dessus, les réglages en dessous, le tout défile.
@@ -1746,6 +1767,11 @@ $tool-warning: #fbbf24;
 
     .measure {
         color: #fbbf24;
+        font-weight: 600;
+    }
+
+    .rule {
+        color: #38bdf8;
         font-weight: 600;
     }
 }

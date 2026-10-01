@@ -224,8 +224,9 @@ export class DxfWriter {
      * @param {Vec2} at - Point par lequel passe la ligne de cote.
      * @param {number | null} angle - Direction mesurée, ou null (alignée).
      * @param {number} [z] - Altitude du dessin.
+     * @param {string} [text] - Texte imposé à la place de la mesure (flèche en mm).
      */
-    dimension(layer: string, p1: Vec2, p2: Vec2, at: Vec2, angle: number | null, z = 0) {
+    dimension(layer: string, p1: Vec2, p2: Vec2, at: Vec2, angle: number | null, z = 0, text?: string) {
         // Cote alignée écrite comme une cote tournée selon p1 p2 (comme ezdxf) :
         // tous les lecteurs la mesurent de la même façon.
         const deg = angle ?? Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI;
@@ -274,7 +275,7 @@ export class DxfWriter {
             return this.solidEntity('0', record, [tip, [bx + n[0] * w, by + n[1] * w], [bx - n[0] * w, by - n[1] * w]], z, true);
         };
         body += arrow(q1, s) + arrow(q2, -s);
-        body += this.textEntity('0', record, mid, txt, this.dimensionText(measurement), {
+        body += this.textEntity('0', record, mid, txt, text ?? this.dimensionText(measurement), {
             align: 'center',
             baseline: 'middle',
             rotation: textAngle * 180 / Math.PI
@@ -283,7 +284,7 @@ export class DxfWriter {
 
         const entity = tags(100, 'AcDbDimension', 2, name) +
             xyz(q2[0], q2[1], z) + xyz(mid[0], mid[1], z, 11) +
-            tags(70, 32, 71, 5, 42, num(measurement), 1, '', 3, DIMSTYLE_NAME) +
+            tags(70, 32, 71, 5, 42, num(measurement), 1, text === undefined ? '' : dxfText(text), 3, DIMSTYLE_NAME) +
             tags(100, 'AcDbAlignedDimension') + xyz(p1[0], p1[1], z, 13) + xyz(p2[0], p2[1], z, 14) +
             tags(50, num(deg), 100, 'AcDbRotatedDimension');
         this.entities.push(this.head('DIMENSION', layer, this.model) + entity);

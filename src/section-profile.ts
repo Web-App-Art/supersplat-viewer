@@ -41,6 +41,22 @@ export interface ProfileMeasure {
     p2: ProfilePoint | null;
 }
 
+// Règle posée sur le profil (TKT-246) : sa portée, ou son premier bout
+// pendant la pose ; la règle la plus défavorable, ses appuis et sa flèche.
+export interface ProfileRule {
+    span: [ProfilePoint, ProfilePoint] | null;
+    pending: ProfilePoint | null;
+    normal: ProfilePoint | null;        // côté de la règle (unitaire)
+    line: {
+        start: ProfilePoint;
+        end: ProfilePoint;
+        supports: ProfilePoint[];
+        gapRule: ProfilePoint;
+        gapSurface: ProfilePoint;
+        label: string;
+    } | null;
+}
+
 export interface ProfileTheme {
     background: string;
     grid: string;
@@ -51,6 +67,7 @@ export interface ProfileTheme {
     marker: string;             // A et B
     markerText: string;
     measure: string;
+    rule: string;               // règle et flèche
     tag: string;                // fond des étiquettes
     font: string;
     scale: number;              // taille des textes et des traits (1 = panneau)
@@ -66,6 +83,7 @@ export const DARK_THEME: ProfileTheme = {
     marker: '#84cc16',
     markerText: '#18181b',
     measure: '#fbbf24',
+    rule: '#38bdf8',
     tag: 'rgba(0, 0, 0, 0.75)',
     font: '-apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif',
     scale: 1
@@ -81,6 +99,7 @@ export const LIGHT_THEME: ProfileTheme = {
     marker: '#4d7c0f',
     markerText: '#ffffff',
     measure: '#c2410c',
+    rule: '#0369a1',
     tag: 'rgba(255, 255, 255, 0.9)',
     font: '-apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif',
     scale: 2
@@ -132,6 +151,7 @@ export interface PaintOptions {
     measure?: ProfileMeasure | null;
     hover?: ProfilePoint | null;
     measureLabel?: (m: ProfileMeasure) => string;
+    rule?: ProfileRule | null;
 }
 
 // Passage profil → écran (px CSS, origine en haut à gauche du canvas).
@@ -193,9 +213,82 @@ const drawTag = (ctx: CanvasRenderingContext2D, text: string, x: number, y: numb
     ctx.fillText(text, left + 5 * f, y);
 };
 
+// Règle : repères aux bouts de la portée, règle la plus défavorable, appuis
+// et flèche ; pendant la pose, le premier bout et un trait jusqu'au curseur.
+const drawRule = (ctx: CanvasRenderingContext2D, rule: ProfileRule, map: ReturnType<typeof profileToScreen>,
+    theme: ProfileTheme, hover: ProfilePoint | null) => {
+    const f = theme.scale;
+    ctx.strokeStyle = theme.rule;
+    ctx.fillStyle = theme.rule;
+
+    // Bouts de la portée : un trait de 14 px en travers, selon le côté de la
+    // règle à l'écran (l'exagération l'incline).
+    if (rule.span && rule.normal) {
+        const nx = map.x(rule.normal.s) - map.x(0), ny = map.y(rule.normal.t) - map.y(0);
+        const len = Math.hypot(nx, ny) || 1;
+        const ux = nx / len * 7 * f, uy = ny / len * 7 * f;
+        ctx.lineWidth = 1.5 * f;
+        ctx.beginPath();
+        for (const p of rule.span) {
+            const x = map.x(p.s), y = map.y(p.t);
+            ctx.moveTo(x - ux, y - uy);
+            ctx.lineTo(x + ux, y + uy);
+        }
+        ctx.stroke();
+    }
+
+    if (rule.pending) {
+        const x = map.x(rule.pending.s), y = map.y(rule.pending.t);
+        if (hover) {
+            ctx.lineWidth = 1.5 * f;
+            ctx.setLineDash([5 * f, 4 * f]);
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(map.x(hover.s), map.y(hover.t));
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        ctx.beginPath();
+        ctx.arc(x, y, 4 * f, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    const line = rule.line;
+    if (!line) return;
+    ctx.lineWidth = 2 * f;
+    ctx.beginPath();
+    ctx.moveTo(map.x(line.start.s), map.y(line.start.t));
+    ctx.lineTo(map.x(line.end.s), map.y(line.end.t));
+    ctx.stroke();
+    for (const p of line.supports) {
+        ctx.beginPath();
+        ctx.arc(map.x(p.s), map.y(p.t), 3.5 * f, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    // Flèche : de la règle à la surface, avec un trait à chaque bout
+    const x1 = map.x(line.gapRule.s), y1 = map.y(line.gapRule.t);
+    const x2 = map.x(line.gapSurface.s), y2 = map.y(line.gapSurface.t);
+    const dx = x2 - x1, dy = y2 - y1, d = Math.hypot(dx, dy);
+    ctx.lineWidth = 1.5 * f;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    if (d > 0.5) {
+        const tx = -dy / d * 5 * f, ty = dx / d * 5 * f;
+        ctx.moveTo(x1 - tx, y1 - ty);
+        ctx.lineTo(x1 + tx, y1 + ty);
+        ctx.moveTo(x2 - tx, y2 - ty);
+        ctx.lineTo(x2 + tx, y2 + ty);
+    }
+    ctx.stroke();
+    // Étiquette du côté de la règle, au-dessus de la flèche
+    const ox = d > 0.5 ? -dx / d : 0, oy = d > 0.5 ? -dy / d : -1;
+    drawTag(ctx, line.label, x1 + ox * 16 * f, y1 + oy * 16 * f, theme, theme.rule, 'center');
+};
+
 /**
  * Dessine le profil : fond, graduations, points, limites de la coupe, A et B,
- * mesure et survol.
+ * règle, mesure et survol.
  *
  * @param {CanvasRenderingContext2D} ctx - Contexte du canvas, sans transformation.
  * @param {ProfileData} data - Points et repères du profil.
@@ -360,6 +453,8 @@ export const paintProfile = (ctx: CanvasRenderingContext2D, data: ProfileData, o
         ctx.fillText(label, x, y + 0.5 * f);
     }
 
+    if (opts.rule) drawRule(ctx, opts.rule, map, theme, opts.hover ?? null);
+
     // Mesure : deux points et leur écart
     const m = opts.measure;
     if (m) {
@@ -418,6 +513,8 @@ export interface ProfileViewCallbacks {
     onMeasure: (m: ProfileMeasure | null) => void;
     onWindow: (w: ProfileWindow) => void;
     measureLabel: (m: ProfileMeasure) => string;
+    // Clic sur le profil, avant la mesure : true s'il est pris (pose de la règle).
+    onPick?: (p: ProfilePoint) => boolean;
 }
 
 // Au-delà de ce déplacement (px), un appui est un glissé et non un clic.
@@ -439,6 +536,8 @@ export class ProfileView {
     private exaggeration: number;
 
     private measure: ProfileMeasure | null;
+
+    private rule: ProfileRule | null = null;
 
     private hover: ProfilePoint | null = null;
 
@@ -538,6 +637,11 @@ export class ProfileView {
         this.draw();
     }
 
+    setRule(rule: ProfileRule | null) {
+        this.rule = rule;
+        this.draw();
+    }
+
     // Survol venu de l'extérieur (null l'efface).
     setHover(p: ProfilePoint | null) {
         this.hover = p;
@@ -575,7 +679,8 @@ export class ProfileView {
             theme: DARK_THEME,
             measure: this.measure,
             hover: this.hover,
-            measureLabel: this.callbacks.measureLabel
+            measureLabel: this.callbacks.measureLabel,
+            rule: this.rule
         });
     }
 
@@ -653,12 +758,17 @@ export class ProfileView {
         this.canvas.style.cursor = '';
         if (drag.moved) return;
 
-        // Clic : point de mesure, accroché au point du profil le plus proche.
+        // Clic : bout de la règle pendant sa pose, sinon point de mesure ;
+        // accroché au point du profil le plus proche.
         const { x, y } = this.local(event);
         const map = this.mapping();
         if (x < map.plot.x0 || x > map.plot.x1 || y < map.plot.y0 || y > map.plot.y1) return;
         const snapped = nearestPoint(this.data, { width: this.width, height: this.height, window: this.window, exaggeration: this.exaggeration, theme: DARK_THEME }, x, y, SNAP_RADIUS);
         const p = snapped ?? { s: map.s(x), t: map.t(y) };
+        if (this.callbacks.onPick?.(p)) {
+            this.draw();
+            return;
+        }
         this.measure = this.measure && !this.measure.p2 ? { p1: this.measure.p1, p2: p } : { p1: p, p2: null };
         this.callbacks.onMeasure(this.measure);
         this.draw();
