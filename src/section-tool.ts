@@ -4,6 +4,8 @@ import { formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import { sectionDxf } from './section-dxf';
 import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-dxf';
+import { SectionFolder } from './section-folder';
+import type { FolderItem } from './section-folder';
 import { DARK_THEME, LIGHT_THEME, ProfileView, paintProfile, profileToScreen, scaleBarLength } from './section-profile';
 import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileRule, ProfileWindow } from './section-profile';
 import { computeRule, spanFrame, spanIsUpright } from './section-rule';
@@ -17,7 +19,7 @@ import {
 } from './tool-panel';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import {
-    worldToScreen, screenToRay, getSplatCenters, displayedLodInBox, loadFinestCenters, orientedBoxAabb, median, subsample,
+    worldToScreen, screenToRay, segmentToScreen, getSplatCenters, displayedLodInBox, loadFinestCenters, orientedBoxAabb, median, subsample,
     fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba, RULE_LENGTHS, RULE_MIN_SAMPLES, WAVE_WIDTHS
 } from './tool-utils';
 import type { FinestResult, LodUsage, OrientedBox, SplatCenters } from './tool-utils';
@@ -47,6 +49,13 @@ import type { Global } from './types';
 // points), une règle posée sur les points hauts, de A à B ou entre deux
 // clics sur le profil ; flèche maximale entre deux appuis, portée, L/xxx.
 // Calcul : section-rule.ts.
+//
+// Dossier de coupes (TKT-249) : « Garder cette coupe » range la coupe
+// ouverte dans un dossier (liste en haut à droite, section-folder.ts), avec
+// son résultat calculé, ses réglages et une vignette de la vue 3D. Une
+// coupe gardée se rouvre pour être modifiée, puis mise à jour ou gardée
+// comme nouvelle ; la vue 3D montre ses traits et son nom, comme sur un
+// plan d'architecte.
 
 type SectionMode = 'vertical' | 'horizontal' | 'points';
 const SECTION_MODES: SectionMode[] = ['vertical', 'horizontal', 'points'];
@@ -229,8 +238,67 @@ interface Dimensions {
 
 type LodStatus = 'finest' | 'finer' | 'loading' | 'too-large' | 'failed';
 
+// Coupe gardée dans le dossier (TKT-249) : son résultat calculé, et de quoi
+// la rouvrir telle qu'elle était. Le résultat est gardé, et pas seulement
+// les réglages : sur un modèle LOD, recalculer plusieurs coupes obligerait
+// à recharger le niveau fin de chaque zone. Tout est dans le repère du
+// moteur ; le repère affiché (UTM, Lambert-93, NGF, Relatif…) s'applique à
+// l'affichage et aux exports.
+interface KeptSection {
+    label: string | null;       // lettre d'une verticale (« B » : B-B), numéro d'un profil entre deux points
+    signature: string;          // état de la coupe gardée (voir signature())
+    mode: SectionMode;
+    placement: Placement | null;
+    ends: Vec3[];               // entre deux points : A et B posés
+    grip: Vec3;
+    handleLength: number;
+    up: Vec3;
+    thickness: number;
+    filterIsolated: boolean;
+    exaggeration: number;
+    section: Section;
+    lod: { usage: LodUsage; status: LodStatus } | null;
+    measure: ProfileMeasure | null;
+    profileWindow: ProfileWindow | null;
+    rule: {
+        on: boolean;
+        length: number;
+        side: 1 | -1;
+        tile: number;
+        span: [ProfilePoint, ProfilePoint] | null;
+        picking: boolean;       // gardée pendant la pose d'une portée
+        result: RuleResult | null;
+    };
+}
+
+type KeptItem = FolderItem<KeptSection>;
+
+// Bande de l'écran où poser les noms des coupes gardées (voir labelArea).
+interface LabelArea {
+    top: number;
+    bottom: number;
+}
+
+// Lien entre la coupe ouverte et le dossier : la coupe qu'on vient de
+// garder, ou une coupe rouverte pour être modifiée (edit).
+interface FolderLink {
+    id: number;
+    edit: boolean;
+}
+
 // Première lettre en capitale : « Incliné à 35° ».
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Lettre d'une coupe : A à Z, puis AA, AB…
+const sectionLetter = (n: number): string => (n < 26 ? '' : sectionLetter(Math.floor(n / 26) - 1)) + String.fromCharCode(65 + n % 26);
+
+const clonePlacement = (p: Placement): Placement => ({
+    anchor: p.anchor.clone(),
+    along: p.along.clone(),
+    normal: p.normal.clone(),
+    offset: p.offset,
+    floor: p.floor
+});
 
 // Flèche, toujours en mm : « 12,3 mm ».
 const formatGap = (m: number) => `${formatNumber(m * 1000, 1)} mm`;
@@ -546,6 +614,20 @@ class SectionTool {
 
     private rule: RuleResult | null = null;
 
+    // Dossier de coupes (TKT-249) : il reste quand l'outil se ferme.
+    private folder: SectionFolder<KeptSection>;
+
+    private link: FolderLink | null = null;
+
+    // Boutons « Garder » de l'en-tête, refaits quand leur état change.
+    private keepBox: HTMLDivElement | null = null;
+
+    private keepKey = '';
+
+    private titleEl: HTMLDivElement | null = null;
+
+    private folderLayout = '';
+
     private overlay: HTMLDivElement | null = null;
 
     private drawCanvas: HTMLCanvasElement | null = null;
@@ -585,6 +667,15 @@ class SectionTool {
             onClear: () => this.clearAll(),
             isEmpty: () => this.state === 'idle'
         });
+        this.folder = new SectionFolder<KeptSection>({
+            autoName: item => this.autoName(item),
+            describe: item => this.describeKept(item),
+            onOpen: item => this.reopen(item),
+            onChange: () => {
+                this.keepKey = '';
+                this.global.app.renderNextFrame = true;
+            }
+        });
     }
 
     activate() {
@@ -604,6 +695,7 @@ class SectionTool {
         this.hint.className = 'tool-hint';
         this.overlay.appendChild(this.hint);
         this.updateHint();
+        this.folder.mount(this.overlay);
 
         this.pointerHandler.activate();
         this.global.events.on('coords:changed', this.coordsHandler);
@@ -643,11 +735,15 @@ class SectionTool {
         this.cancelRecompute();
         this.removePanel();
         this.highlight.clear();
+        this.folder.unmount();
+        this.folder.setOpen(null);
+        this.link = null;
 
         if (this.overlay) {
             this.overlay.remove();
             this.overlay = null;
         }
+        this.folderLayout = '';
 
         this.drawCanvas = null;
         this.hint = null;
@@ -925,6 +1021,7 @@ class SectionTool {
 
     private clearAll() {
         this.cancelRecompute();
+        this.link = null;
         this.placement = null;
         this.handles = [];
         this.lastHandles = [];
@@ -939,10 +1036,12 @@ class SectionTool {
 
     // Type de coupe. Entre verticale et horizontale, la coupe reste au même
     // endroit (à 1 m au-dessus d'un sol cliqué pour une horizontale) ; vers
-    // ou depuis « Entre deux points », elle est à reposer.
+    // ou depuis « Entre deux points », elle est à reposer. C'est une autre
+    // coupe : elle n'est plus liée au dossier.
     private setMode(mode: SectionMode) {
         if (mode === this.mode) return;
         const previous = this.mode;
+        this.link = null;
         this.mode = mode;
         storeText(MODE_STORAGE_KEY, mode);
         if (this.state !== 'done' || mode === 'points' || previous === 'points') {
@@ -1744,6 +1843,218 @@ class SectionTool {
         if (rule.gap < rule.noiseFloor) results.appendChild(createNote(tr('rule.warn-noise', { value: formatGap(rule.noiseFloor) }), true));
     }
 
+    // ── Dossier de coupes (TKT-249) ──
+
+    // État de la coupe ouverte, comparé à celui d'une coupe gardée : ce qui
+    // change son résultat ou son dessin (position, réglages, exagération,
+    // règle, mesure), pas le cadrage du profil.
+    private signature(): string {
+        if (this.state !== 'done') return '';
+        return JSON.stringify([
+            this.frameKey(), this.thickness, this.filterIsolated, this.viewExaggeration(),
+            this.ruleOn, this.ruleLength, this.ruleSide, this.ruleTile, this.ruleSpan, this.measure
+        ]);
+    }
+
+    // Ce qui empêche de garder la coupe : pas de coupe, niveau fin en cours
+    // de chargement, calcul en attente (réglage, poignée).
+    private keepBlocker(): 'no-section' | 'loading' | 'pending' | null {
+        const section = this.section;
+        if (this.state !== 'done' || !section) return 'no-section';
+        if (this.lod?.status === 'loading') return 'loading';
+        if (this.recomputeTimer || this.geometryDirty || this.pointerHandler.isDragging || section.frame.key !== this.frameKey()) return 'pending';
+        return null;
+    }
+
+    // Coupe du dossier liée à la coupe ouverte ; clean : identique à elle.
+    // Une coupe supprimée garde son lien : « Annuler » la remet.
+    private linkState(): { item: KeptItem | null; clean: boolean; edit: boolean } {
+        const item = this.link ? this.folder.get(this.link.id) : null;
+        if (!item) return { item: null, clean: false, edit: false };
+        return { item, clean: item.data.signature === this.signature(), edit: this.link.edit };
+    }
+
+    // En-tête du panneau : titre (avec le nom de la coupe gardée) et bouton
+    // « Garder cette coupe », ou « Mettre à jour » et « Garder comme
+    // nouvelle » pour une coupe rouverte et modifiée. Relu à chaque image,
+    // refait seulement quand il change.
+    private updateKeepButtons(link: ReturnType<SectionTool['linkState']>) {
+        const box = this.keepBox;
+        if (!box) return;
+        const { item, clean, edit } = link;
+        const blocker = this.keepBlocker();
+        const name = item ? this.folder.nameOf(item) : '';
+        const key = JSON.stringify([item?.id ?? null, clean, edit, blocker, name]);
+        if (key === this.keepKey) return;
+        this.keepKey = key;
+
+        this.titleEl.textContent = item && (clean || edit) ? tr('title-named', { name }) : tr('title');
+        box.textContent = '';
+        if (clean) {
+            const kept = document.createElement('span');
+            kept.className = 'section-kept';
+            kept.textContent = tr('keep.kept');
+            kept.title = tr('keep.kept-title', { name });
+            box.appendChild(kept);
+            return;
+        }
+        const add = (caption: string, title: string, onClick: () => void, primary: boolean) => {
+            const button = document.createElement('button');
+            button.className = primary ? 'tool-btn primary' : 'tool-btn';
+            button.textContent = caption;
+            button.title = blocker ? tr(`keep.wait-${blocker}`) : title;
+            button.disabled = !!blocker;
+            button.addEventListener('click', onClick);
+            box.appendChild(button);
+        };
+        if (edit) {
+            add(tr('keep.update'), tr('keep.update-title', { name }), () => this.keep(false), true);
+            add(tr('keep.copy'), tr('keep.copy-title', { name }), () => this.keep(true), false);
+        } else {
+            add(tr('keep.add'), tr('keep.add-title'), () => this.keep(false), true);
+        }
+    }
+
+    // Garde la coupe ouverte : nouvelle coupe du dossier, ou mise à jour de
+    // la coupe rouverte. La vignette suit, prise sur la vue actuelle.
+    private keep(asNew: boolean) {
+        if (this.keepBlocker()) return;
+        const { item: linked, edit } = this.linkState();
+        let item: KeptItem;
+        if (linked && edit && !asNew) {
+            this.folder.update(linked, this.snapshot(linked.data.label));
+            item = linked;
+        } else {
+            item = this.folder.add(this.snapshot(this.nextLabel(this.mode)));
+            this.link = { id: item.id, edit: false };
+        }
+        this.folder.captureThumbnail(this.global, item);
+        this.keepKey = '';
+        this.global.app.renderNextFrame = true;
+    }
+
+    // La coupe ouverte, figée. Ses tableaux de points ne sont jamais modifiés
+    // après le calcul : ils sont partagés, pas copiés.
+    private snapshot(label: string | null): KeptSection {
+        return {
+            label,
+            signature: this.signature(),
+            mode: this.mode,
+            placement: this.mode !== 'points' && this.placement ? clonePlacement(this.placement) : null,
+            ends: this.mode === 'points' ? this.handles.map(h => h.clone()) : [],
+            grip: this.grip.clone(),
+            handleLength: this.handleLength,
+            up: this.up.clone(),
+            thickness: this.thickness,
+            filterIsolated: this.filterIsolated,
+            exaggeration: this.exaggeration,
+            section: this.section,
+            lod: this.lod ? { usage: { ...this.lod.usage }, status: this.lod.status } : null,
+            measure: this.measure,
+            profileWindow: this.profileWindow,
+            rule: {
+                on: this.ruleOn,
+                length: this.ruleLength,
+                side: this.ruleSide,
+                tile: this.ruleTile,
+                span: this.ruleSpan,
+                picking: this.rulePicking,
+                result: this.rule
+            }
+        };
+    }
+
+    // Rouvre une coupe gardée telle qu'elle était, sans la recalculer. Elle
+    // se modifie comme une autre ; « Mettre à jour » la remplace dans le
+    // dossier. Les réglages mémorisés du navigateur ne changent pas.
+    private reopen(item: KeptItem) {
+        const k = item.data;
+        this.cancelRecompute();
+        this.pointerHandler.reset();
+        this.mode = k.mode;
+        this.placement = k.placement && clonePlacement(k.placement);
+        this.up = k.up.clone();
+        this.grip = k.grip.clone();
+        this.handleLength = k.handleLength;
+        this.thickness = k.thickness;
+        this.filterIsolated = k.filterIsolated;
+        this.exaggeration = k.exaggeration;
+        this.state = 'done';
+        if (this.mode === 'points') {
+            this.handles = k.ends.map(p => p.clone());
+            this.storeHandles();
+        } else {
+            this.placeHandles();
+        }
+
+        this.frame = k.section.frame;
+        this.section = k.section;
+        this.failure = null;
+        this.lod = k.lod && { usage: { ...k.lod.usage }, status: k.lod.status };
+        this.finest = null;
+        this.finestRequest++;
+        this.geometryDirty = false;
+        this.profileWindow = k.profileWindow;
+        this.measure = k.measure;
+        this.hover = null;
+
+        this.ruleOn = k.rule.on;
+        this.ruleLength = k.rule.length;
+        this.ruleSide = k.rule.side;
+        this.ruleTile = k.rule.tile;
+        this.ruleSpan = k.rule.span;
+        this.rulePickFirst = null;
+        this.rulePicking = this.ruleOn && this.mode === 'vertical' && !this.ruleSpan;
+        this.rule = k.rule.result;
+        if (k.rule.picking) this.updateRule();
+
+        this.link = { id: item.id, edit: true };
+        this.keepKey = '';
+        this.updateHighlight();
+        this.showPanel();
+        this.updateHint();
+        this.global.app.renderNextFrame = true;
+    }
+
+    // Lettre d'une nouvelle verticale (la première libre : A, B…), numéro
+    // d'un nouveau profil entre deux points ; rien pour une horizontale,
+    // nommée d'après sa hauteur.
+    private nextLabel(mode: SectionMode): string | null {
+        if (mode === 'horizontal') return null;
+        const used = new Set(this.folder.items.filter(item => item.data.mode === mode).map(item => item.data.label));
+        for (let n = 0; ; n++) {
+            const label = mode === 'vertical' ? sectionLetter(n) : String(n + 1);
+            if (!used.has(label)) return label;
+        }
+    }
+
+    // Nom automatique : « B-B », « Profil 2 », « Plan à +1,00 m » (hauteur
+    // au-dessus du sol cliqué) ou « Plan à 254,12 m » (altitude dans le
+    // repère affiché, relue à chaque fois).
+    private autoName(item: KeptItem): string {
+        const k = item.data;
+        if (k.mode === 'vertical') return tr('folder.name-vertical', { letter: k.label });
+        if (k.mode === 'points') return tr('folder.name-points', { n: k.label });
+        const p = k.placement;
+        if (p.floor) return tr('folder.name-floor', { height: formatLength(p.offset, true) });
+        const level = this.global.coords.toDisplay(p.anchor.clone().add(p.normal.clone().mulScalar(p.offset)))[2];
+        return tr('folder.name-level', { level: `${level < 0 ? '−' : ''}${formatNumber(Math.abs(level), 2)} m` });
+    }
+
+    // Ligne sous le nom : type, longueur (verticale), AB (entre deux
+    // points) ou étendue (plan), et la flèche de la règle.
+    private describeKept(item: KeptItem): string {
+        const k = item.data;
+        const s = k.section;
+        const parts = [tr(`mode.${k.mode}`)];
+        if (k.mode === 'points' && s.ends) parts.push(`AB ${formatLength(s.ends.a3.distance(s.ends.b3))}`);
+        else if (k.mode === 'vertical') parts.push(formatLength(s.uMax - s.uMin));
+        else parts.push(`${formatNumber(s.uMax - s.uMin, 1)} × ${formatNumber(s.wMax - s.wMin, 1)} m`);
+        const rule = k.rule.on && k.rule.result?.status === 'ok' ? k.rule.result : null;
+        if (rule) parts.push(tr('summary-line.rule', { value: formatGap(rule.gap), ratio: this.ruleRatio(rule) }));
+        return parts.join(' · ');
+    }
+
     // ── Masquage et surbrillance dans la vue ──
 
     // D'après la coupe posée (suit un glisser en direct) ou, entre deux
@@ -1997,8 +2308,18 @@ class SectionTool {
         this.panel.appendChild(body);
 
         this.overlay.appendChild(this.panel);
+        this.dockClasses();
         side.scrollTop = sideScroll;
         this.refreshResults();
+    }
+
+    // Taille du panneau du bas, pour placer le dossier au-dessus de lui.
+    private dockClasses() {
+        const overlay = this.overlay;
+        if (!overlay) return;
+        overlay.classList.toggle('dock', !!this.panel);
+        overlay.classList.toggle('dock-large', !!this.panel && this.large);
+        overlay.classList.toggle('dock-collapsed', !!this.panel && this.collapsed);
     }
 
     // Résultats seuls : résumé, profil, cotes et informations. Les réglages
@@ -2071,10 +2392,14 @@ class SectionTool {
         this.summary = null;
         this.main = null;
         this.results = null;
+        this.keepBox = null;
+        this.titleEl = null;
+        this.keepKey = '';
         if (this.panel) {
             this.panel.remove();
             this.panel = null;
         }
+        this.dockClasses();
         // Le profil disparaît sans « pointerleave » : le survol ne doit pas
         // rester affiché dans la vue.
         this.hover = null;
@@ -2114,12 +2439,18 @@ class SectionTool {
         const title = document.createElement('div');
         title.className = 'tool-title';
         title.textContent = tr('title');
+        this.titleEl = title;
 
         this.summary = document.createElement('span');
         this.summary.className = 'section-summary';
 
         const actions = document.createElement('div');
         actions.className = 'tool-header-actions';
+
+        // Garder la coupe dans le dossier (voir updateKeepButtons)
+        this.keepBox = document.createElement('div');
+        this.keepBox.className = 'section-keep';
+        this.keepKey = '';
 
         const reset = document.createElement('button');
         reset.className = 'tool-btn';
@@ -2145,9 +2476,10 @@ class SectionTool {
             this.collapsed = collapsed;
             storeText(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
             this.panel?.classList.toggle('collapsed', collapsed);
+            this.dockClasses();
         });
 
-        actions.append(reset, large, collapse);
+        actions.append(this.keepBox, reset, large, collapse);
         header.append(title, this.summary, actions);
         return header;
     }
@@ -2891,12 +3223,24 @@ class SectionTool {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // Dossier : boutons de l'en-tête, coupe surlignée dans la liste,
+        // coupes gardées dans la vue.
+        const link = this.linkState();
+        this.updateKeepButtons(link);
+        this.folder.setOpen(link.item && (link.clean || link.edit) ? link.item.id : null);
+        this.layoutFolder();
+        const area = this.labelArea();
+        this.drawKept(ctx, link, area);
         if (this.handles.length === 0) return;
 
         const camera = this.global.camera;
         const stale = this.pointerHandler.isDragging || !!this.recomputeTimer || this.geometryDirty;
         const section = this.section;
-        if (section && !stale) this.drawPlane(ctx, section);
+        if (section && !stale) {
+            this.drawPlane(ctx, section);
+            if (link.clean) this.drawTrace(ctx, section, link.item.data.up, this.folder.nameOf(link.item), true, area);
+        }
 
         if (this.mode === 'points') this.drawEnds(ctx);
         else this.drawHandles(ctx);
@@ -3001,6 +3345,132 @@ class SectionTool {
             ctx.stroke();
             ctx.lineCap = 'butt';
         });
+    }
+
+    // Coupes du dossier, sauf la coupe ouverte si elle n'a pas changé.
+    private drawKept(ctx: CanvasRenderingContext2D, link: ReturnType<SectionTool['linkState']>, area: LabelArea) {
+        if (this.folder.items.length === 0) return;
+        const names = this.folder.names();
+        for (const item of this.folder.items) {
+            if (item === link.item && link.clean) continue;
+            this.drawTrace(ctx, item.data.section, item.data.up, names.get(item.id), false, area);
+        }
+    }
+
+    // Place du dossier : en haut à droite, sous l'aide quand elle passe
+    // au-dessus de lui (téléphone), jusqu'au panneau du bas. L'aide passe
+    // sur plusieurs lignes selon la largeur : sa hauteur est relue.
+    private layoutFolder() {
+        const overlay = this.overlay;
+        if (!overlay) return;
+        const hint = this.hint?.getBoundingClientRect();
+        const panel = this.panel?.getBoundingClientRect();
+        const left = window.innerWidth - 16 - Math.min(300, window.innerWidth - 32);
+        const top = hint && hint.height > 0 && hint.right > left ? Math.max(80, Math.round(hint.bottom + 8)) : 80;
+        const bottom = panel && panel.height > 0 ? panel.top - 8 : window.innerHeight - 76;
+        const layout = `${top}px|${Math.round(Math.max(44, bottom - top))}px`;
+        if (layout === this.folderLayout) return;
+        this.folderLayout = layout;
+        const [topPx, maxPx] = layout.split('|');
+        overlay.style.setProperty('--folder-top', topPx);
+        overlay.style.setProperty('--folder-max', maxPx);
+    }
+
+    // Zone de l'écran où poser les noms : sous l'aide du haut, au-dessus du
+    // panneau du bas.
+    private labelArea(): LabelArea {
+        const margin = 24;
+        const hint = this.hint?.getBoundingClientRect();
+        const panel = this.panel?.getBoundingClientRect();
+        return {
+            top: Math.max(margin, hint && hint.height > 0 ? hint.bottom + 16 : 0),
+            bottom: Math.min(window.innerHeight - margin, panel && panel.height > 0 ? panel.top - 12 : Infinity)
+        };
+    }
+
+    // Coupe gardée, comme sur un plan d'architecte : contour de la tranche,
+    // flèches du sens de vue au pied d'une coupe verticale (on la regarde
+    // depuis le côté de sa normale) et nom, au milieu du bord le plus haut à
+    // l'écran. La coupe ouverte n'a que son nom : son contour est celui de
+    // drawPlane.
+    private drawTrace(ctx: CanvasRenderingContext2D, section: Section, up: Vec3, name: string, open: boolean, area: LabelArea) {
+        const camera = this.global.camera;
+        const f = section.frame;
+        const { uMin, uMax, wMin, wMax } = section;
+        const at = (u: number, w: number) => f.origin.clone().add(f.along.clone().mulScalar(u)).add(f.across.clone().mulScalar(w));
+        const corners = [at(uMin, wMin), at(uMax, wMin), at(uMax, wMax), at(uMin, wMax)];
+        const edges = corners.map((c, i) => [c, corners[(i + 1) % 4]]);
+
+        if (!open) {
+            const lines = edges.map(([p, q]) => segmentToScreen(camera, p, q)).filter(seg => seg);
+            const arrows: typeof lines = [];
+            if (f.kind === 'vertical') {
+                const bottom = f.across.dot(up) >= 0 ? wMin : wMax;
+                const length = Math.min(1.5, Math.max(0.3, 0.08 * (uMax - uMin)));
+                for (const u of [uMin, uMax]) {
+                    const base = at(u, bottom);
+                    const seg = segmentToScreen(camera, base, base.clone().add(f.normal.clone().mulScalar(-length)));
+                    if (seg) arrows.push(seg);
+                }
+            }
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            for (const [color, width] of [['rgba(0, 0, 0, 0.55)', 3.5], ['rgba(255, 255, 255, 0.9)', 1.5]] as const) {
+                ctx.strokeStyle = color;
+                ctx.lineWidth = width;
+                ctx.beginPath();
+                for (const [a, b] of lines.concat(arrows)) {
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                }
+                // Pointe des flèches, à l'écran
+                for (const [a, b] of arrows) {
+                    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+                    if (len < 6) continue;
+                    const ux = dx / len, uy = dy / len, head = Math.min(9, len * 0.4);
+                    ctx.moveTo(b.x - head * (ux + uy * 0.6), b.y - head * (uy - ux * 0.6));
+                    ctx.lineTo(b.x, b.y);
+                    ctx.lineTo(b.x - head * (ux - uy * 0.6), b.y - head * (uy + ux * 0.6));
+                }
+                ctx.stroke();
+            }
+            ctx.lineCap = 'butt';
+            ctx.lineJoin = 'miter';
+        }
+
+        // Nom : milieu de bord visible le plus haut, sinon centre de la
+        // tranche ; jamais sous l'aide ni sous le panneau.
+        const margin = 24;
+        const visible = (s: { x: number; y: number; behind: boolean }) => !s.behind &&
+            s.x > margin && s.x < window.innerWidth - margin && s.y > area.top && s.y < area.bottom;
+        const candidates = edges.map(([p, q]) => worldToScreen(camera, p.clone().add(q).mulScalar(0.5))).filter(visible);
+        if (candidates.length === 0) {
+            const center = worldToScreen(camera, at((uMin + uMax) / 2, (wMin + wMax) / 2));
+            if (visible(center)) candidates.push(center);
+        }
+        if (candidates.length === 0) return;
+        const best = candidates.reduce((a, b) => (b.y < a.y ? b : a));
+        this.drawName(ctx, name, best.x, Math.max(area.top, best.y - 14), open);
+    }
+
+    // Étiquette du nom d'une coupe gardée ; verte pour la coupe ouverte.
+    private drawName(ctx: CanvasRenderingContext2D, name: string, x: number, y: number, open: boolean) {
+        const text = name.length > 32 ? `${name.slice(0, 31)}…` : name;
+        ctx.font = '600 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const width = ctx.measureText(text).width + 16;
+        ctx.beginPath();
+        ctx.roundRect(x - width / 2, y - 10, width, 20, 10);
+        ctx.fillStyle = open ? ACCENT_COLOR : 'rgba(24, 24, 27, 0.88)';
+        ctx.fill();
+        if (!open) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+        ctx.fillStyle = open ? '#18181b' : '#ffffff';
+        ctx.fillText(text, x, y + 0.5);
     }
 
     // Contour du plan de coupe, sur l'étendue des points retenus.

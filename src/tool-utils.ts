@@ -269,6 +269,23 @@ export function worldToScreen(camera: Entity, pos: Vec3): { x: number; y: number
     };
 }
 
+// ARTLIGHT (TKT-249) : segment monde à l'écran, coupé au ras de la caméra
+// quand il passe derrière elle (contour d'une grande coupe vu de
+// l'intérieur). null s'il est entièrement derrière.
+const SEGMENT_NEAR = 0.05;
+
+export function segmentToScreen(camera: Entity, p: Vec3, q: Vec3): [{ x: number; y: number }, { x: number; y: number }] | null {
+    const eye = camera.getPosition();
+    const forward = camera.forward;
+    const dp = new Vec3().sub2(p, eye).dot(forward) - SEGMENT_NEAR;
+    const dq = new Vec3().sub2(q, eye).dot(forward) - SEGMENT_NEAR;
+    if (dp < 0 && dq < 0) return null;
+    const cut = dp < 0 || dq < 0 ? new Vec3().lerp(p, q, dp / (dp - dq)) : null;
+    const a = worldToScreen(camera, dp < 0 ? cut : p);
+    const b = worldToScreen(camera, dq < 0 ? cut : q);
+    return [a, b];
+}
+
 // ARTLIGHT (TKT-240) : rayon de la caméra passant par un point de l'écran
 // (pixels CSS depuis le coin du canvas, comme worldToScreen), avec la pose
 // courante de la caméra. Deux points de la droite pris à mi-profondeur :
