@@ -1643,6 +1643,19 @@ $tool-warning: #fbbf24;
         margin-top: 12px;
     }
 
+    // Exports : trois boutons de même largeur sur une ligne.
+    .section-export-buttons {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+
+        .tool-btn {
+            padding: 4px 6px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
     .section-results {
         margin-top: 12px;
 

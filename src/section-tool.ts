@@ -2,13 +2,16 @@ import { Mat4, Vec3 } from 'playcanvas';
 
 import { formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
+import { sectionDxf } from './section-dxf';
+import type { DrawingDimension, DrawingKind, SectionDrawing } from './section-dxf';
 import { DARK_THEME, LIGHT_THEME, ProfileView, paintProfile, profileToScreen, scaleBarLength } from './section-profile';
 import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileWindow } from './section-profile';
+import { traceSection } from './section-trace';
 import { SplatSectionHighlight } from './splat-highlight';
 import {
     translator, formatNumber, formatCount, formatLength, readStoredNumber, storeNumber, readStoredText, storeText,
-    sceneName, exportBaseName, downloadBlob, createRow, createNote, createField, createSegmented, createStepper,
-    createSwitch, createCollapseButton
+    sceneName, exportBaseName, exportNumber, decimalSeparator, downloadBlob, downloadCsv, createRow, createNote,
+    createField, createSegmented, createStepper, createSwitch, createCollapseButton
 } from './tool-panel';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import {
@@ -137,6 +140,10 @@ const EXAGGERATIONS = [1, 2, 5, 10];
 
 // Pente affichée jusqu'à 60° ; au-delà, faux aplomb en mm/m.
 const SLOPE_MAX_ANGLE = 60 * Math.PI / 180;
+
+// Export DXF : au plus 100 000 points (un sur n au-delà) ; le CSV les a tous.
+// ArchiCAD fait un point chaud de chaque point, AutoCAD s'alourdit.
+const DXF_MAX_POINTS = 100000;
 
 const MODE_STORAGE_KEY = 'artlight.section.mode';
 const THICKNESS_STORAGE_KEY = 'artlight.section.thickness';
@@ -1964,12 +1971,21 @@ class SectionTool {
         filter.title = tr('filter.title');
         box.appendChild(filter);
 
-        const exportButton = document.createElement('button');
-        exportButton.className = 'tool-btn block section-export';
-        exportButton.textContent = tr('export.png');
-        exportButton.title = tr('export.png-note');
-        exportButton.addEventListener('click', () => this.exportPng());
-        box.appendChild(exportButton);
+        // Exports : image pour un rapport, dessin pour la CAO, tableau pour Excel.
+        const exports = document.createElement('div');
+        exports.className = 'section-export-buttons';
+        const frame = this.global.coords.frameName;
+        for (const [key, run] of [['png', () => this.exportPng()], ['dxf', () => this.exportDxf()], ['csv', () => this.exportCsv()]] as const) {
+            const button = document.createElement('button');
+            button.className = 'tool-btn';
+            button.textContent = tr(`export.${key}`);
+            button.title = tr(`export.${key}-note`, { frame });
+            button.addEventListener('click', run);
+            exports.appendChild(button);
+        }
+        const exportField = createField(tr('export.label'), exports);
+        exportField.classList.add('section-export');
+        box.appendChild(exportField);
         return box;
     }
 
@@ -1979,8 +1995,9 @@ class SectionTool {
         if (!el) return;
         el.textContent = '';
         const section = this.section;
-        const exportButton = this.panel?.querySelector<HTMLButtonElement>('.section-export');
-        if (exportButton) exportButton.disabled = !section;
+        this.panel?.querySelectorAll<HTMLButtonElement>('.section-export button').forEach((button) => {
+            button.disabled = !section;
+        });
         if (!section) return;
 
         const dim = this.dimensions(section);
@@ -2297,6 +2314,172 @@ class SectionTool {
         canvas.toBlob((blob) => {
             if (blob) downloadBlob(blob, `${exportBaseName(tr('export.file'))}.png`);
         }, 'image/png');
+    }
+
+    // ── Exports DXF et CSV ──
+
+    // Repère du dessin DXF : profil en hauteur (plan vertical), vue en plan
+    // (plan horizontal) ou plan incliné.
+    private drawingKind(frame: Frame): DrawingKind {
+        if (frame.kind === 'vertical') return 'profile';
+        return frame.kind === 'horizontal' ? 'plan' : 'plane';
+    }
+
+    // Point du profil dans le repère du dessin. Profil en hauteur : X =
+    // distance, Y = altitude affichée ; vue en plan : X Y Z du repère affiché
+    // (coordonnées réelles d'une scène géoréférencée) ; plan incliné : X Y
+    // du profil.
+    private drawingPoint(frame: Frame, kind: DrawingKind, s: number, t: number): [number, number, number] {
+        if (kind === 'plane') return [s, t, 0];
+        const d = this.global.coords.toDisplay(framePoint(frame, s, t));
+        return kind === 'plan' ? d : [s, d[2], 0];
+    }
+
+    // Dessin pour la CAO : points de la tranche, traits de coupe, cotes (A
+    // et B, cotes de niveau, pente), mesure, cadre gradué et cartouche. Mise
+    // en page : section-dxf.ts ; format : dxf.ts.
+    private exportDxf() {
+        const section = this.section;
+        if (!section) return;
+        const frame = section.frame;
+        const kind = this.drawingKind(frame);
+        const coords = this.global.coords;
+        const at = (p: ProfilePoint): [number, number] => {
+            const d = this.drawingPoint(frame, kind, p.s, p.t);
+            return [d[0], d[1]];
+        };
+
+        const stride = Math.max(1, Math.ceil(section.count / DXF_MAX_POINTS));
+        const count = Math.ceil(section.count / stride);
+        const points = new Float64Array(count * 3);
+        let sMin = Infinity, sMax = -Infinity;
+        for (let k = 0; k < count; k++) {
+            const i = k * stride;
+            points.set(this.drawingPoint(frame, kind, section.points[i * 2], section.points[i * 2 + 1]), k * 3);
+        }
+        for (let i = 0; i < section.count; i++) {
+            sMin = Math.min(sMin, section.points[i * 2]);
+            sMax = Math.max(sMax, section.points[i * 2]);
+        }
+
+        const trace = traceSection(section.points, section.count);
+        const lines = trace.lines.map((line) => {
+            const out: number[] = [];
+            for (let i = 0; i < line.points.length; i += 2) out.push(...at({ s: line.points[i], t: line.points[i + 1] }));
+            return { points: out, closed: line.closed };
+        });
+
+        // A et B : cote de A à B ; en hauteur, ses composantes si AB est en
+        // biais, les cotes de niveau et la pente.
+        const dims: DrawingDimension[] = [];
+        const notes: SectionDrawing['notes'] = [];
+        let ends: SectionDrawing['ends'];
+        const dim = this.dimensions(section);
+        if (section.ends && dim) {
+            const a = at(section.ends.a), b = at(section.ends.b);
+            ends = { a, b };
+            dims.push({ p1: a, p2: b, kind: 'aligned' });
+            if (kind === 'profile') {
+                ends.levels = [exportNumber(a[1], 3), exportNumber(b[1], 3)];
+                if (Math.abs(dim.rise) > 0.02 * dim.length && dim.horizontal > 0.02 * dim.length) {
+                    dims.push({ p1: a, p2: b, kind: 'horizontal' }, { p1: a, p2: b, kind: 'vertical' });
+                }
+                const [label, value] = this.slopeRow(dim);
+                notes.push({ text: `${label} ${value}`, p1: a, p2: b });
+            }
+        }
+        const parts = this.measure && this.measureParts(this.measure);
+        if (parts) {
+            // Cote de la mesure sous le segment mesuré (celle de AB est
+            // au-dessus), pente au-dessus.
+            const p1 = at(this.measure.p1), p2 = at(this.measure.p2);
+            dims.push({ p1, p2, kind: 'aligned', measure: true, side: -1 });
+            if (kind !== 'plan' && Math.abs(parts.ds) > 0.05 * parts.length && Math.abs(parts.dt) > 0.05 * parts.length) {
+                dims.push({ p1, p2, kind: 'horizontal', measure: true }, { p1, p2, kind: 'vertical', measure: true });
+            }
+            const slope = this.measureSlope(parts);
+            if (slope) notes.push({ text: `${tr('slope')} ${slope}`, p1, p2, measure: true, side: 1 });
+        }
+
+        // Cartouche : les résultats de l'image PNG, puis le repère du dessin.
+        const data = this.profileData(section);
+        const axes = kind === 'plan' ?
+            { x: `${coords.axisNames[0]} (m)`, y: `${coords.axisNames[1]} (m)` } :
+            { x: data.sTitle, y: data.tTitle };
+        const rows: [string, string][] = [];
+        if (kind === 'profile') rows.push([tr('dxf.axes'), tr('dxf.axes-profile', { axis: coords.axisNames[2], frame: coords.frameName })]);
+        else if (kind === 'plan') rows.push([tr('dxf.axes'), tr('dxf.axes-plan', { axes: coords.axisNames.join(', '), frame: coords.frameName })]);
+        else rows.push([tr('dxf.axes'), tr('dxf.axes-plane')]);
+        rows.push([tr('dxf.unit'), tr('dxf.meter')]);
+        if (kind === 'profile') {
+            const end = (s: number) => {
+                const d = coords.toDisplay(framePoint(frame, s, 0));
+                return formatCoordsInline([d[0], d[1], 0], undefined, coords.axisNames.slice(0, 2));
+            };
+            rows.push([tr('dxf.left-end', { s: exportNumber(sMin, 3) }), end(sMin)], [tr('dxf.right-end', { s: exportNumber(sMax, 3) }), end(sMax)]);
+        }
+        rows.push([tr('dxf.points'), stride > 1 ?
+            tr('dxf.points-decimated', { n: formatCount(count), total: formatCount(section.count), step: stride }) :
+            formatCount(count)]);
+        rows.push([tr('dxf.lines'), tr('dxf.lines-value', { n: formatCount(lines.length), tolerance: formatLength(trace.tolerance) })]);
+
+        const blob = sectionDxf({
+            kind,
+            points,
+            count,
+            lines,
+            z: kind === 'plan' ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
+            ends,
+            dims,
+            notes,
+            axes,
+            north: kind === 'plan' ? coords.axisNames[1] : undefined,
+            title: tr(`png.title-${this.mode}`, { scene: sceneName() }),
+            subtitle: `${new Date().toLocaleString(getLocale(), { dateStyle: 'long', timeStyle: 'short' })} · ${coords.frameName}`,
+            sections: [...this.summarySections(), { title: tr('dxf.drawing'), rows }].map(sec => ({
+                title: sec.title,
+                lines: sec.rows.map(([label, value]) => tr('dxf.row', { label, value }))
+            })),
+            layers: {
+                points: tr('dxf.layer.points'),
+                lines: tr('dxf.layer.lines'),
+                dims: tr('dxf.layer.dims'),
+                measure: tr('dxf.layer.measure'),
+                grid: tr('dxf.layer.grid'),
+                title: tr('dxf.layer.title')
+            },
+            decimal: decimalSeparator()
+        });
+        downloadBlob(blob, `${exportBaseName(tr('export.file'))}.dxf`);
+    }
+
+    // Tableau pour Excel : une ligne par point de la coupe, dans l'ordre des
+    // distances. Les deux coordonnées du profil (distance, puis altitude ou
+    // écart), puis X Y Z dans le repère affiché.
+    private exportCsv() {
+        const section = this.section;
+        if (!section) return;
+        const frame = section.frame;
+        const coords = this.global.coords;
+        const data = this.profileData(section);
+        const vertical = frame.kind === 'vertical';
+        const rows: string[][] = [[
+            data.sTitle, data.tTitle,
+            ...coords.axisNames.map(axis => tr('csv.axis', { axis, frame: coords.frameName }))
+        ]];
+        const pts = section.points;
+        const decimal = decimalSeparator();
+        const num = (v: number) => exportNumber(v, 3, decimal);
+        const order = Array.from({ length: section.count }, (_, i) => i)
+        .sort((a, b) => pts[a * 2] - pts[b * 2] || pts[a * 2 + 1] - pts[b * 2 + 1]);
+        const { origin: o, x: X, y: Y } = frame;
+        const p = new Vec3();
+        for (const i of order) {
+            const s = pts[i * 2], t = pts[i * 2 + 1];
+            const d = coords.toDisplay(p.set(o.x + X.x * s + Y.x * t, o.y + X.y * s + Y.y * t, o.z + X.z * s + Y.z * t));
+            rows.push([num(s), num(vertical ? d[2] : t), num(d[0]), num(d[1]), num(d[2])]);
+        }
+        downloadCsv(rows, `${exportBaseName(tr('export.file'))}.csv`);
     }
 
     // ── Tracé dans la vue 3D ──
