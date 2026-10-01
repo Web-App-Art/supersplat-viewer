@@ -10,9 +10,11 @@ import {
 import { ToolPointerHandler } from './tool-pointer-handler';
 import {
     worldToScreen, screenToRay, drawEdgeLabel, getSplatCenters, displayedLodInBox, loadFinestCenters, copyTable,
-    median, subsample, fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba
+    median, subsample, fitPlaneLS, verticalAxis, ACCENT_COLOR, accentRgba, firstDenseLayer, measureWindow,
+    HIDDEN_MIN_POINTS, HIDDEN_MIN_DEPTH, HIDDEN_SIGMAS, RULE_LENGTHS, RULE_MIN_SAMPLES, RULE_MIN_COVERAGE,
+    RULE_CELLS_PER_LENGTH, RULE_POINTS_PER_CELL, RULE_MIN_CELL_POINTS, RULE_SPIKE_MIN, WAVE_WIDTHS
 } from './tool-utils';
-import type { FinestResult, LodUsage, Plane, SplatCenters } from './tool-utils';
+import type { FinestResult, LodUsage, Plane, SplatCenters, WindowResult } from './tool-utils';
 import type { Global } from './types';
 
 type FlatnessMeasureState = 'idle' | 'placing' | 'closed';
@@ -116,13 +118,9 @@ const MAX_BAND_CM = 50;
 // couche) sont écartés. Sur 7 dalles de 1 m du parquet : écart type de 16-24
 // à 1-2,5 mm, flèche sous 1 m de 64-177 à 8-16 mm. Sur une toiture en tuiles
 // canal synthétique, le relief des tuiles est conservé (seuil calé ici).
+// Fenêtre, part et retrait : voir firstDenseLayer (tool-utils.ts).
 const HIDDEN_CELL_MIN = 0.04;
 const HIDDEN_CELL_POINTS = 30;
-const HIDDEN_MIN_POINTS = 8;
-const HIDDEN_LAYER_WINDOW = 0.02;
-const HIDDEN_LAYER_SHARE = 0.3;
-const HIDDEN_MIN_DEPTH = 0.015;
-const HIDDEN_SIGMAS = 3.5;
 const HIDDEN_NEIGHBOR_RADIUS = 2;
 
 // Sens des écarts : + = bosse. Pour une pente de moins de 60° (sol, dalle,
@@ -141,26 +139,10 @@ const REFERENCE_MAX_TILT = 10 * Math.PI / 180;
 // cases et reste.
 const SPIKE_SIGMAS = 4;
 const SPIKE_MIN = 0.01;
-// Sur la grille de la règle, le seuil suit le bruit (3 mm au moins) : un point
-// haut isolé soulevait la règle, un point bas isolé creusait une flèche.
-const RULE_SPIKE_MIN = 0.003;
 
-// Règle : longueurs proposées, directions testées (tous les 22,5°), nombre
-// minimal de cases sous la règle et part de la règle qui doit porter sur des
-// points mesurés.
-// 0 = toute la zone : la règle couvre la zone d'un bord à l'autre (affaissement
-// d'un pan de toiture, d'un plancher).
-const RULE_LENGTHS = [0.2, 1, 2, 3, 5, 0];
+// Règle : longueurs, grille et seuils communs avec la coupe (tool-utils.ts) ;
+// directions testées (tous les 22,5°).
 const RULE_DIRECTIONS = 8;
-const RULE_MIN_SAMPLES = 8;
-const RULE_MIN_COVERAGE = 0.7;
-// Grille propre à la règle : des cases de L/40 (5 cm pour 2 m), agrandies
-// pour contenir 8 splats en moyenne (3 au moins par case). Le bruit d'une
-// case baisse avec le nombre de splats ; la règle n'a pas besoin de la
-// finesse de la carte.
-const RULE_CELLS_PER_LENGTH = 40;
-const RULE_POINTS_PER_CELL = 8;
-const RULE_MIN_CELL_POINTS = 3;
 const RULE_MAX_CELLS = 300000;
 const DEFAULT_RULE_LENGTH = 2;
 const DEFAULT_TOLERANCE = 0.005;
@@ -179,14 +161,13 @@ const RULE_NOISE_FACTOR = 7;
 // Taille des échantillons pour les estimations de dispersion.
 const NOISE_SAMPLE = 10000;
 
-// Lissage des tuiles : largeurs d'ondulation proposées (0 = pas de lissage).
-// Régler sur la plus grande dimension visible de la tuile : sur une toiture
-// en tuiles canal affaissée de 4 cm (synthétique), lisser sur 40 cm donne une
-// flèche de 43,7 mm, sur 20 cm 48,9 mm (les recouvrements restent).
+// Lissage des tuiles, largeurs proposées : WAVE_WIDTHS (tool-utils.ts). Sur
+// une toiture en tuiles canal affaissée de 4 cm (synthétique), lisser sur
+// 40 cm donne une flèche de 43,7 mm, sur 20 cm 48,9 mm (les recouvrements
+// restent).
 // Moyenne gaussienne d'écart type λ/2 : une ondulation de période λ est
 // atténuée à moins de 1 % (exp(−2π²σ²/λ²)), une forme de plusieurs mètres
 // presque pas.
-const WAVE_WIDTHS = [0, 0.15, 0.2, 0.3, 0.4, 0.6];
 const WAVE_SIGMA_RATIO = 0.5;
 // En dessous d'un tiers de case, le lissage n'a pas d'effet : on s'en passe.
 const WAVE_MIN_SIGMA_CELLS = 0.33;
@@ -368,52 +349,6 @@ const smoothGrid = (grid: (number | null)[][], resX: number, resY: number, sx: n
         out.push(row);
     }
     return out;
-};
-
-interface WindowResult {
-    gap: number;    // plus grand jour entre deux appuis
-    a: number;      // appui de gauche de l'arête qui le porte
-    slope: number;  // pente de cette arête (par échantillon)
-    iGap: number;   // échantillon du plus grand jour
-}
-
-// Règle posée sur le profil [i0, i1[ : elle repose sur l'enveloppe convexe
-// supérieure (chaîne monotone) ; on garde le plus grand jour entre une arête
-// et les points qu'elle enjambe.
-const measureWindow = (profile: Float64Array, i0: number, i1: number, hull: Int32Array, out: WindowResult) => {
-    let n = 0;
-    for (let i = i0; i < i1; i++) {
-        const y = profile[i];
-        if (Number.isNaN(y)) continue;
-        while (n >= 2) {
-            const o = hull[n - 2], a = hull[n - 1];
-            const cross = (a - o) * (y - profile[o]) - (profile[a] - profile[o]) * (i - o);
-            if (cross < 0) break;
-            n--;
-        }
-        hull[n++] = i;
-    }
-
-    out.gap = 0;
-    out.a = hull[0];
-    out.slope = 0;
-    out.iGap = hull[0];
-    for (let e = 0; e + 1 < n; e++) {
-        const ia = hull[e], ib = hull[e + 1];
-        if (ib - ia < 2) continue;
-        const slope = (profile[ib] - profile[ia]) / (ib - ia);
-        for (let i = ia + 1; i < ib; i++) {
-            const y = profile[i];
-            if (Number.isNaN(y)) continue;
-            const g = profile[ia] + slope * (i - ia) - y;
-            if (g > out.gap) {
-                out.gap = g;
-                out.a = ia;
-                out.slope = slope;
-                out.iGap = i;
-            }
-        }
-    }
 };
 
 // Tolérance toujours en mm, comme dans le compteur : « 5 mm », « 12,5 mm ».
@@ -1473,18 +1408,11 @@ class FlatnessTool {
             const b = buckets[k];
             if (b.length < HIDDEN_MIN_POINTS) continue;
             b.sort((x, y) => y - x);
-            const need = Math.max(4, Math.ceil(HIDDEN_LAYER_SHARE * b.length));
-            let m = 0;
-            for (let i = 0; i < b.length; i++) {
-                if (m < i) m = i;
-                while (m + 1 < b.length && b[m + 1] >= b[i] - HIDDEN_LAYER_WINDOW) m++;
-                if (m - i + 1 < need) continue;
-                const layer = b.slice(i, m + 1);
-                const level = median(layer);
-                levels[k] = level;
-                for (const v of layer) residuals.push(v - level);
-                break;
-            }
+            const layer = firstDenseLayer(b);
+            if (!layer) continue;
+            const level = median(layer);
+            levels[k] = level;
+            for (const v of layer) residuals.push(v - level);
         }
         if (residuals.length === 0) return points;
 
@@ -1728,7 +1656,7 @@ class FlatnessTool {
 
         const edge = Math.max(1, Math.floor(W * 0.2));
         const minValid = Math.ceil(W * RULE_MIN_COVERAGE);
-        const win: WindowResult = { gap: 0, a: 0, slope: 0, iGap: 0 };
+        const win: WindowResult = { gap: 0, a: 0, b: 0, slope: 0, iGap: 0 };
         const fleches: number[] = [];
         const worst: { gap: number; at: Pick<RuleOk, 'start' | 'end' | 'gapSurface' | 'gapRule'> | null } = { gap: -1, at: null };
         let fits = false;

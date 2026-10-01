@@ -101,6 +101,116 @@ export const verticalAxis = (global: Global): Vec3 => {
     return up.length() > 1e-9 ? up.normalize() : Vec3.UP.clone();
 };
 
+// ── Couche visible, partagée par la planéité et la règle de la coupe ──
+//
+// Un sol vitrifié, un carrelage brillant ou une vitre sont souvent modélisés
+// avec une couche de splats fantômes derrière la surface (le reflet vu comme
+// une pièce en miroir). Dans une case, la couche visible est la première
+// fenêtre de 2 cm qui contient 30 % des splats (4 au moins) en partant du
+// côté visible ; les splats en retrait de plus de 1,5 cm (ou 3,5 σ de la
+// couche) sont écartés. Calé sur le parquet de l'appartement de Yannick
+// (voir la planéité).
+export const HIDDEN_MIN_POINTS = 8;
+export const HIDDEN_LAYER_WINDOW = 0.02;
+export const HIDDEN_LAYER_SHARE = 0.3;
+export const HIDDEN_MIN_DEPTH = 0.015;
+export const HIDDEN_SIGMAS = 3.5;
+
+// Première couche dense d'une case : `sorted` trié du côté visible vers
+// l'arrière (décroissant). null si aucune fenêtre n'est assez fournie.
+export const firstDenseLayer = (sorted: number[]): number[] | null => {
+    const need = Math.max(4, Math.ceil(HIDDEN_LAYER_SHARE * sorted.length));
+    let m = 0;
+    for (let i = 0; i < sorted.length; i++) {
+        if (m < i) m = i;
+        while (m + 1 < sorted.length && sorted[m + 1] >= sorted[i] - HIDDEN_LAYER_WINDOW) m++;
+        if (m - i + 1 >= need) return sorted.slice(i, m + 1);
+    }
+    return null;
+};
+
+// ── Règle virtuelle, partagée par la planéité et la coupe ──
+//
+// La règle repose sur les points hauts du profil, qui forment l'enveloppe
+// convexe supérieure ; la flèche est le plus grand jour mesuré entre deux
+// points d'appui, comme sous une règle réelle (DIN 18202 : Stichmaß entre
+// appuis). Le jour au-delà des appuis, là où la règle bascule dans le vide,
+// ne compte pas : il doublait la hauteur d'une bosse étroite.
+
+// Longueurs proposées (m). 0 = d'un bout à l'autre : toute la zone
+// (planéité), toute la portée (coupe) ; affaissement d'un pan, d'un plancher.
+export const RULE_LENGTHS = [0.2, 1, 2, 3, 5, 0];
+// Nombre minimal de cases sous la règle, et part de la règle qui doit porter
+// sur des points mesurés.
+export const RULE_MIN_SAMPLES = 8;
+export const RULE_MIN_COVERAGE = 0.7;
+// Grille propre à la règle : des cases de L/40 (5 cm pour 2 m), agrandies
+// pour contenir 8 splats en moyenne (3 au moins par case). Le bruit d'une
+// case baisse avec le nombre de splats ; la règle n'a pas besoin de la
+// finesse de la carte.
+export const RULE_CELLS_PER_LENGTH = 40;
+export const RULE_POINTS_PER_CELL = 8;
+export const RULE_MIN_CELL_POINTS = 3;
+// Cases isolées sur la grille de la règle : le seuil suit le bruit (3 mm au
+// moins). Un point haut isolé soulevait la règle, un point bas isolé
+// creusait une flèche.
+export const RULE_SPIKE_MIN = 0.003;
+
+// Tuiles : largeurs d'ondulation proposées (0 = surface lisse). Régler sur la
+// plus grande dimension visible de la tuile, souvent sa longueur (30 à
+// 40 cm) : les recouvrements ondulent aussi.
+export const WAVE_WIDTHS = [0, 0.15, 0.2, 0.3, 0.4, 0.6];
+
+export interface WindowResult {
+    gap: number;    // plus grand jour entre deux appuis
+    a: number;      // appuis de l'arête qui le porte (gauche, droite)
+    b: number;
+    slope: number;  // pente de cette arête (par échantillon)
+    iGap: number;   // échantillon du plus grand jour
+}
+
+// Règle posée sur le profil [i0, i1[ (NaN : pas de mesure) : elle repose sur
+// l'enveloppe convexe supérieure (chaîne monotone) ; on garde le plus grand
+// jour entre une arête et les points qu'elle enjambe. `hull` : tableau de
+// travail d'au moins i1 − i0 cases.
+export const measureWindow = (profile: Float64Array, i0: number, i1: number, hull: Int32Array, out: WindowResult) => {
+    let n = 0;
+    for (let i = i0; i < i1; i++) {
+        const y = profile[i];
+        if (Number.isNaN(y)) continue;
+        while (n >= 2) {
+            const o = hull[n - 2], a = hull[n - 1];
+            const cross = (a - o) * (y - profile[o]) - (profile[a] - profile[o]) * (i - o);
+            if (cross < 0) break;
+            n--;
+        }
+        hull[n++] = i;
+    }
+
+    out.gap = 0;
+    out.a = hull[0];
+    out.b = hull[0];
+    out.slope = 0;
+    out.iGap = hull[0];
+    for (let e = 0; e + 1 < n; e++) {
+        const ia = hull[e], ib = hull[e + 1];
+        if (ib - ia < 2) continue;
+        const slope = (profile[ib] - profile[ia]) / (ib - ia);
+        for (let i = ia + 1; i < ib; i++) {
+            const y = profile[i];
+            if (Number.isNaN(y)) continue;
+            const g = profile[ia] + slope * (i - ia) - y;
+            if (g > out.gap) {
+                out.gap = g;
+                out.a = ia;
+                out.b = ib;
+                out.slope = slope;
+                out.iGap = i;
+            }
+        }
+    }
+};
+
 // Accent color — must match $clr-accent in index.scss
 export const ACCENT_COLOR = '#84cc16';
 export const ACCENT_R = 132;
