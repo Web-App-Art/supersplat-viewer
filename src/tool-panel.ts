@@ -104,6 +104,22 @@ export const exportBaseName = (label: string): string => {
     return `${slugify(label)}-${slugify(sceneName()) || 'scene'}-${stamp}`;
 };
 
+// Séparateur décimal de la langue de l'interface : « , » en français.
+export const decimalSeparator = (): string => new Intl.NumberFormat(getLocale()).formatToParts(1.5).find(part => part.type === 'decimal')?.value ?? '.';
+
+// Nombre pour un export : `digits` décimales, séparateur de la langue (à
+// passer en `decimal` dans une boucle), sans séparateur de milliers ni « -0 ».
+// Écrit en entiers : un CSV de 700 000 points se fait sans toFixed.
+export const exportNumber = (value: number, digits: number, decimal = decimalSeparator()) => {
+    const scale = 10 ** digits;
+    const rounded = Math.round(value * scale);
+    if (!Number.isFinite(rounded)) return String(value);
+    const abs = Math.abs(rounded);
+    const whole = Math.floor(abs / scale);
+    const sign = rounded < 0 ? '-' : '';
+    return digits > 0 ? `${sign}${whole}${decimal}${String(abs - whole * scale).padStart(digits, '0')}` : `${sign}${whole}`;
+};
+
 export const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -113,6 +129,15 @@ export const downloadBlob = (blob: Blob, filename: string) => {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+// Tableau CSV pour Excel : « ; » avec la virgule décimale, « , » avec le
+// point, comme l'attend Excel dans chaque langue ; UTF-8 avec BOM.
+export const downloadCsv = (rows: string[][], filename: string) => {
+    const separator = decimalSeparator() === ',' ? ';' : ',';
+    const field = (text: string) => (text.includes(separator) || text.includes('"') ? `"${text.replace(/"/g, '""')}"` : text);
+    const text = `\uFEFF${rows.map(r => r.map(field).join(separator)).join('\r\n')}`;
+    downloadBlob(new Blob([text], { type: 'text/csv;charset=utf-8' }), filename);
 };
 
 // ── Composants ──

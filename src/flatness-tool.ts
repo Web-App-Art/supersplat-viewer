@@ -4,8 +4,8 @@ import { coordsForClipboard, formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import {
     translator, formatNumber, formatCount, formatLength, readStoredNumber, storeNumber, readStoredText, storeText,
-    sceneName, exportBaseName, downloadBlob, createRow, createNote, createField, createSegmented, createStepper,
-    createRange, createSwitch, createCollapseButton, createTabs
+    sceneName, exportBaseName, exportNumber, decimalSeparator, downloadBlob, downloadCsv, createRow, createNote,
+    createField, createSegmented, createStepper, createRange, createSwitch, createCollapseButton, createTabs
 } from './tool-panel';
 import { ToolPointerHandler } from './tool-pointer-handler';
 import {
@@ -2698,8 +2698,7 @@ class FlatnessTool {
         if (!data || !geo) return;
 
         const coords = this.global.coords;
-        const decimal = new Intl.NumberFormat(getLocale()).formatToParts(1.5).find(part => part.type === 'decimal')?.value ?? '.';
-        const num = (v: number, digits: number) => v.toFixed(digits).replace('.', decimal);
+        const decimal = decimalSeparator();
 
         const rows: string[][] = [[
             'i', 'j', 'u (m)', 'v (m)',
@@ -2714,20 +2713,15 @@ class FlatnessTool {
                 const v = geo.vMin + (j + 0.5) * geo.dv;
                 const p = coords.toDisplay(this.toWorld({ u, v, h: value }));
                 rows.push([
-                    String(i), String(j), num(u, 3), num(v, 3),
+                    String(i), String(j), exportNumber(u, 3, decimal), exportNumber(v, 3, decimal),
                     ...coordsForClipboard(p),
-                    num(value * 1000, 1),
+                    exportNumber(value * 1000, 1, decimal),
                     tr(data.measured[j][i] ? 'csv.measured' : 'csv.estimated')
                 ]);
             }
         }
 
-        // Séparateur « ; » avec la virgule décimale, « , » avec le point, comme
-        // l'attend Excel dans chaque langue.
-        const separator = decimal === ',' ? ';' : ',';
-        const field = (text: string) => (text.includes(separator) || text.includes('"') ? `"${text.replace(/"/g, '""')}"` : text);
-        const text = `\uFEFF${rows.map(r => r.map(field).join(separator)).join('\r\n')}`;
-        downloadBlob(new Blob([text], { type: 'text/csv;charset=utf-8' }), `${this.exportBaseName()}.csv`);
+        downloadCsv(rows, `${this.exportBaseName()}.csv`);
     }
 
     private copySummary(button: HTMLButtonElement) {
