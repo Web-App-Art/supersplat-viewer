@@ -50,6 +50,8 @@
                 noanim: url.searchParams.has('noanim'),
                 // ARTLIGHT (TKT-228): `view` = pose conservée par la bascule splats / nuage.
                 nointro: url.searchParams.has('nointro') || url.searchParams.has('view'),
+                // ARTLIGHT (TKT-241): niveau de vitesse par défaut (1 à 5), sinon celui de la scène du projet.
+                speed: url.searchParams.get('speed') ?? undefined,
                 nofx: url.searchParams.has('nofx'),
                 hpr: url.searchParams.has('hpr') ? ['', '1', 'true', 'enable'].includes(url.searchParams.get('hpr')) : undefined,
                 ministats: url.searchParams.has('ministats'),
@@ -98,6 +100,7 @@
                 if (scene.intro === false) {
                     sseConfig.nointro = true;
                 }
+                sseConfig.speed ??= scene.speed;
                 sseConfig.skyboxUrl = rel(scene.skybox) || skyboxUrl;
 
                 window.sse.project = { project, projectParam, sceneId: scene.id };
@@ -303,9 +306,25 @@
             </div>
 
             <div id="walkHint" class="walkHint hidden"></div>
+            <div id="speedHint" class="walkHint speedHint hidden"></div>
 
             <!-- Settings Panel -->
             <div id="settingsPanel" class="hidden">
+                <!-- ARTLIGHT (TKT-241): vitesse de déplacement, 5 niveaux -->
+                <div id="speedSetting">
+                    <div class="speedLabel">
+                        <span data-i18n="artlight.speed.label">Movement speed</span>
+                        <span id="speedName"></span>
+                    </div>
+                    <div id="speedLevels" class="tool-seg">
+                        <button class="tool-seg-btn" data-level="1">1</button>
+                        <button class="tool-seg-btn" data-level="2">2</button>
+                        <button class="tool-seg-btn" data-level="3">3</button>
+                        <button class="tool-seg-btn" data-level="4">4</button>
+                        <button class="tool-seg-btn" data-level="5">5</button>
+                    </div>
+                </div>
+                <div class="divider"></div>
                 <div id="performanceModeRow" class="settingsRow">
                     <div id="performanceModeOption" data-i18n="settings.performance-mode">Performance Mode</div>
                     <div id="performanceModeCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>
@@ -393,6 +412,10 @@
                                     <span class="control-key" data-i18n="help.key.shift-ctrl">Shift / Ctrl</span>
                                 </div>
                                 <div class="control-item">
+                                    <span class="control-action" data-i18n="artlight.speed.label">Movement speed</span>
+                                    <span class="control-key">+ / -</span>
+                                </div>
+                                <div class="control-item">
                                     <span class="control-action" data-i18n="help.action.focus-point">Focus Point</span>
                                     <span class="control-key" data-i18n="help.key.double-click">Double-click</span>
                                 </div>
@@ -413,6 +436,10 @@
                                 <div class="control-item">
                                     <span class="control-action" data-i18n="help.action.run-slow">Run / Slow</span>
                                     <span class="control-key" data-i18n="help.key.shift-ctrl">Shift / Ctrl</span>
+                                </div>
+                                <div class="control-item">
+                                    <span class="control-action" data-i18n="artlight.speed.label">Movement speed</span>
+                                    <span class="control-key">+ / -</span>
                                 </div>
                             </div>
                             <div class="control-spacer"></div>

@@ -52,6 +52,11 @@ type ProjectScene = {
     skybox?: string;
     /** `false` supprime l'animation d'intro générée automatiquement. */
     intro?: boolean;
+    /**
+     * ARTLIGHT (TKT-241) : niveau de vitesse de déplacement au chargement, de
+     * 1 (très lente) à 5 (très rapide), 3 par défaut. Voir src/move-speed.ts.
+     */
+    speed?: number;
     portals?: Portal[];
 };
 

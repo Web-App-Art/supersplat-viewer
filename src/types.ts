@@ -25,6 +25,7 @@ type Config = {
     noui: boolean;
     noanim: boolean;
     nointro: boolean;                           // ARTLIGHT: supprime l'animation d'intro générée quand la scène n'a pas d'animTrack
+    speed?: unknown;                            // ARTLIGHT (TKT-241): niveau de vitesse par défaut de la scène (1 à 5), voir move-speed.ts
     nofx: boolean;                              // disable post effects
     hpr?: boolean;                              // override highPrecisionRendering (undefined = use settings)
     ministats: boolean;
@@ -64,6 +65,7 @@ type State = {
     volumeMeasureMode: boolean;
     pointMode: boolean;                         // ARTLIGHT (TKT-225): outil « Point XYZ »
     sectionMode: boolean;                       // ARTLIGHT (TKT-238): outil « Coupe »
+    speedLevel: number;                         // ARTLIGHT (TKT-241): niveau de vitesse de déplacement, 1 à 5
     isFullscreen: boolean;
     controlsHidden: boolean;
     showAnnotations: boolean;

@@ -483,5 +483,12 @@
     "artlight.section.png.rule": "Straightedge in blue, resting on the high points; deflection measured perpendicular to the straightedge, between two supports.",
     "artlight.section.dxf.layer.rule": "SECTION_RULE",
     "artlight.section.dxf.rule-note": "Straightedge: deflection {gap} · span between supports {reach} · {ratio}",
-    "artlight.section.csv.rule": "Gap under the straightedge (mm)"
+    "artlight.section.csv.rule": "Gap under the straightedge (mm)",
+    "artlight.speed.label": "Movement speed",
+    "artlight.speed.level-1": "Very slow",
+    "artlight.speed.level-2": "Slow",
+    "artlight.speed.level-3": "Normal",
+    "artlight.speed.level-4": "Fast",
+    "artlight.speed.level-5": "Very fast",
+    "artlight.speed.hint": "Movement speed: {name} ({level}/{max})"
 }

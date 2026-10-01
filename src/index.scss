@@ -96,6 +96,12 @@ button {
     white-space: nowrap;
 }
 
+// ARTLIGHT (TKT-241): confirmation des raccourcis + et −, non cliquable
+.speedHint {
+    cursor: default;
+    pointer-events: none;
+}
+
 /* poster */
 
 #poster {
@@ -411,6 +417,33 @@ button {
         margin: 8px 0;
 
         background-color: rgba(white, 0.08);
+    }
+
+    // ARTLIGHT (TKT-241): libellé et nom du niveau, boutons 1 à 5 en dessous
+    > #speedSetting {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 4px;
+
+        > .speedLabel {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 8px;
+            color: $clr-text-dark;
+
+            > #speedName {
+                color: $clr-text;
+            }
+        }
+
+        .tool-seg-btn {
+            padding: 7px 2px;
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+        }
     }
 }
 

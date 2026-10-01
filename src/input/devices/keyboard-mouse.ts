@@ -111,7 +111,7 @@ class KeyboardMouseDevice implements InputDevice {
             this._buttons[i] += button[i];
         }
 
-        const { isFly, isWalk, isFirstPerson, gamingControls, dt, distance, cameraComponent, mode, touchCount } = ctx;
+        const { isFly, isWalk, isFirstPerson, gamingControls, dt, distance, cameraComponent, mode, touchCount, speedFactor } = ctx;
         const pan = this._buttons[2] || +(button[2] === -1) || +(touchCount > 1);
 
         // auto-move cancellation and requestFirstPerson events (driven by keyboard axes)
@@ -146,7 +146,7 @@ class KeyboardMouseDevice implements InputDevice {
         keyMove.normalize();
         const shiftMul = isWalk ? 2 : 4;
         const ctrlMul = isWalk ? 0.5 : 0.25;
-        const speed = this.moveSpeed * (this._shift ? shiftMul : this._ctrl ? ctrlMul : 1);
+        const speed = this.moveSpeed * speedFactor * (this._shift ? shiftMul : this._ctrl ? ctrlMul : 1);
         keyMove.mulScalar(speed);
         if (isFly) {
             flyKeyVelocity.copy(keyMove);
@@ -170,7 +170,9 @@ class KeyboardMouseDevice implements InputDevice {
         screenToWorld(cameraComponent, mouse[0], mouse[1], distance, panMove);
         v.add(panMove.mulScalar(pan));
         wheelMove.set(0, 0, -wheel[0]);
-        v.add(wheelMove.mulScalar(this.wheelSpeed * DISPLACEMENT_SCALE));
+        // ARTLIGHT (TKT-241): en vue drone la molette avance, au pas du niveau
+        // de vitesse ; en orbite elle zoome, sans lui.
+        v.add(wheelMove.mulScalar(this.wheelSpeed * (isFirstPerson ? speedFactor : 1) * DISPLACEMENT_SCALE));
         deltas.move.append([v.x, v.y, flipZForOrbit(mode, v.z)]);
 
         // rotate (mouse-drag, masked when in pan mode)

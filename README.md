@@ -28,6 +28,7 @@ The app supports a number of URL parameters (these are subject to change):
 | `pointcloud` | URL of a LiDAR point cloud converted with `scripts/las-to-splats.mjs`, in the same frame as `content` | |
 | `mode` | `pointcloud` shows the point cloud instead of the splats | |
 | `view` | Initial camera pose `px,py,pz,tx,ty,tz,fov`, set when switching content | |
+| `speed` | Default movement speed level, `1` (very slow) to `5` (very fast); overrides the project scene's `speed` | `3` |
 | `skybox` | URL of an equirectangular skybox image | |
 | `poster` | URL of an image to show while loading | |
 | `collision` | URL of a collision asset (`.glb` mesh, or voxel data). `voxel` is accepted as an alias. | |
@@ -243,6 +244,11 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # zones Lambert CC (TKT-232) : le panneau Point propose aussi la zone CC42 à CC50 du chantier,
 # déduite de la latitude (partie entière : Callian 43,62° N → CC43). Pour imposer une autre zone,
 # ajouter "displayEpsg": 3944 (3942 à 3950) au bloc "coordinates" du settings.json.
+
+# vitesse de déplacement (TKT-241) : 5 niveaux, clavier 1, 2, 4, 8 et 16 m/s (joystick moitié moins).
+# Niveau au chargement, par scène, dans project.json : "speed": 2 (1 très lente … 5 très rapide, 3 par défaut),
+# par exemple 2 dans une pièce, 4 au-dessus d'un site. Hors projet : ?speed=2.
+# L'utilisateur le change dans Paramètres ou avec + / - ; son choix vaut pour la scène jusqu'à la fin de la session.
 
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build

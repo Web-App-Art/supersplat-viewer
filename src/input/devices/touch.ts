@@ -74,7 +74,7 @@ class TouchDevice implements InputDevice {
 
     update(ctx: UpdateContext, frame: CameraInputFrame): void {
         const { touch, pinch, count } = this._source.read();
-        const { isFly, isWalk, isFirstPerson, isOrbit, gamingControls, dt, distance, cameraComponent } = ctx;
+        const { isFly, isWalk, isFirstPerson, isOrbit, gamingControls, dt, distance, cameraComponent, speedFactor } = ctx;
 
         // running touch count
         this._touchCount += count[0];
@@ -163,12 +163,13 @@ class TouchDevice implements InputDevice {
         // outside gaming controls, alongside the gestures (value is 0 at rest).
         const stick = Math.min(1, Math.hypot(this._joystick[0], this._joystick[1]));
         flyMoveTmp.set(this._joystick[0], 0, -this._joystick[1]);
-        v.add(flyMoveTmp.mulScalar(fly * stick * JOYSTICK_MAX_SPEED * dt));
+        v.add(flyMoveTmp.mulScalar(fly * stick * JOYSTICK_MAX_SPEED * speedFactor * dt));
         // Two-finger pinch z: orbit interprets +z as "farther from target"
         // (close-pinch = +pinch[0] = zoom out). First-person modes interpret
         // +z as "forward", so spreading (pinch[0] < 0) should move forward —
-        // flip the sign there.
-        pinchMoveTmp.set(0, 0, (orbit - directFirstPerson) * pinch[0]);
+        // flip the sign there. ARTLIGHT (TKT-241): seule l'avance en vue
+        // drone suit le niveau de vitesse, pas le zoom de l'orbite.
+        pinchMoveTmp.set(0, 0, (orbit - directFirstPerson * speedFactor) * pinch[0]);
         v.add(pinchMoveTmp.mulScalar(double * this.pinchSpeed * DISPLACEMENT_SCALE));
         // tap-to-jump in walk + gaming controls
         if (isWalk && this._tapJump) {

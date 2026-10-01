@@ -2,7 +2,9 @@ import { EventHandler } from 'playcanvas';
 
 import { version as appVersion } from '../package.json';
 import { localize } from './localization';
+import { SPEED_LEVELS } from './move-speed';
 import type { Annotation } from './settings';
+import { translator } from './tool-panel';
 import { isToolActive } from './tool-utils';
 import { Tooltip } from './tooltip';
 import { Global } from './types';
@@ -254,6 +256,7 @@ const initUI = (global: Global) => {
         'touchFlyClickToWalk', 'touchFlyGamingControls',
         'touchClickToWalk', 'touchGamingControls',
         'walkHint',
+        'speedName', 'speedLevels', 'speedHint',
         'reset', 'frame',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
@@ -405,6 +408,46 @@ const initUI = (global: Global) => {
     };
     events.on('performanceMode:changed', updatePerformanceMode);
     updatePerformanceMode();
+
+    // ARTLIGHT (TKT-241): vitesse de déplacement, 5 niveaux
+    const trSpeed = translator('artlight.speed');
+    const speedName = (level: number) => trSpeed(`level-${level}`);
+    const speedButtons = Array.from(dom.speedLevels.querySelectorAll<HTMLButtonElement>('button'));
+    speedButtons.forEach((button) => {
+        const level = Number(button.dataset.level);
+        button.title = speedName(level);
+        button.addEventListener('click', () => {
+            state.speedLevel = level;
+        });
+    });
+
+    const updateSpeedLevel = () => {
+        speedButtons.forEach((button) => {
+            const active = Number(button.dataset.level) === state.speedLevel;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+        dom.speedName.textContent = speedName(state.speedLevel);
+    };
+    events.on('speedLevel:changed', updateSpeedLevel);
+    updateSpeedLevel();
+
+    // Raccourcis + et − : en vol la souris est souvent capturée et le panneau
+    // fermé, un bandeau confirme le niveau quelques instants.
+    let speedHintTimeout: ReturnType<typeof setTimeout> | null = null;
+    events.on('inputEvent', (type: string) => {
+        if (type !== 'speedUp' && type !== 'speedDown') return;
+        const step = type === 'speedUp' ? 1 : -1;
+        state.speedLevel = Math.min(SPEED_LEVELS, Math.max(1, state.speedLevel + step));
+        dom.speedHint.textContent = trSpeed('hint', {
+            name: speedName(state.speedLevel),
+            level: state.speedLevel,
+            max: SPEED_LEVELS
+        });
+        dom.speedHint.classList.remove('hidden');
+        clearTimeout(speedHintTimeout);
+        speedHintTimeout = setTimeout(() => dom.speedHint.classList.add('hidden'), 1500);
+    });
 
     // Gaming mode toggle (settings row visible on mobile only)
     dom.gamingControlsRow.addEventListener('click', () => {

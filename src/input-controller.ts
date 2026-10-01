@@ -10,6 +10,7 @@ import { KeyboardMouseDevice } from './input/devices/keyboard-mouse';
 import { TouchDevice } from './input/devices/touch';
 import { TrackpadDevice } from './input/devices/trackpad';
 import type { UpdateContext } from './input/shared';
+import { speedFactor } from './move-speed';
 import type { Picker } from './picker';
 import type { Global } from './types';
 
@@ -104,7 +105,8 @@ class InputController {
             gamingControls: state.gamingControls,
             // Touch must update first so the count is current; the running
             // count is also used by the keyboard-mouse pan flag.
-            touchCount: this._touch.touchCount
+            touchCount: this._touch.touchCount,
+            speedFactor: speedFactor(state.speedLevel)
         };
 
         // order: touch first (so touchCount in ctx reflects this frame's

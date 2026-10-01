@@ -28,7 +28,7 @@ class GamepadDevice implements InputDevice {
     }
 
     update(ctx: UpdateContext, frame: CameraInputFrame): void {
-        const { dt, cameraComponent, isFly, isFirstPerson } = ctx;
+        const { dt, cameraComponent, isFly, isFirstPerson, speedFactor } = ctx;
         const { leftStick, rightStick } = this._source.read();
         const orbitFactor = isFirstPerson ? cameraComponent.fov / 120 : 1;
         const { deltas } = frame;
@@ -39,7 +39,7 @@ class GamepadDevice implements InputDevice {
 
         const v = tmpV.set(0, 0, 0);
         stickMove.set(leftStick[0], 0, -leftStick[1]);
-        v.add(stickMove.mulScalar(this.moveSpeed * dt));
+        v.add(stickMove.mulScalar(this.moveSpeed * (isFirstPerson ? speedFactor : 1) * dt));
         deltas.move.append([v.x, v.y, v.z]);
 
         v.set(0, 0, 0);

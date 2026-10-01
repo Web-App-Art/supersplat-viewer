@@ -88,6 +88,11 @@ type UpdateContext = {
     gamingControls: boolean;
     /** Number of touches currently active (read by mouse pan flag). */
     touchCount: number;
+    /**
+     * ARTLIGHT (TKT-241): multiplicateur des déplacements en vue drone, selon
+     * le niveau de vitesse (1 au niveau 3). Les panoramiques restent 1:1.
+     */
+    speedFactor: number;
 };
 
 /** Common shape every input device implements. */

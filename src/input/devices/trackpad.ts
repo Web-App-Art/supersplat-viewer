@@ -150,7 +150,7 @@ class TrackpadDevice implements InputDevice {
     }
 
     update(ctx: UpdateContext, frame: CameraInputFrame): void {
-        const { isOrbit, isFirstPerson, distance, cameraComponent } = ctx;
+        const { isOrbit, isFirstPerson, distance, cameraComponent, speedFactor } = ctx;
         const orbitFactor = isFirstPerson ? cameraComponent.fov / 120 : 1;
         const { deltas } = frame;
 
@@ -184,7 +184,7 @@ class TrackpadDevice implements InputDevice {
             // synthetic-Ctrl pinch → forward/back along z (same sign as the
             // bare-wheel path in KeyboardMouseDevice, so pinch and scroll
             // produce identical motion in fly/walk modes)
-            const moveZ = -this._zoom * this.wheelSpeed * this.trackpadZoomSensitivity * DISPLACEMENT_SCALE;
+            const moveZ = -this._zoom * this.wheelSpeed * this.trackpadZoomSensitivity * speedFactor * DISPLACEMENT_SCALE;
             deltas.move.append([0, 0, moveZ]);
         }
 

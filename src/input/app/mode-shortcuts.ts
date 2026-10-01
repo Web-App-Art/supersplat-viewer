@@ -12,7 +12,7 @@ const isWasdKey = (event: KeyboardEvent) => (
 
 /**
  * Keyboard shortcuts that switch camera mode and toggle UI affordances.
- * Listens on `window` so the user can press 1/2/3, V, G, H, F, R, Space,
+ * Listens on `window` so the user can press 1/2/3, V, G, H, F, R, +/-, Space,
  * or Escape regardless of which element has focus.
  */
 class ModeShortcuts {
@@ -65,6 +65,15 @@ class ModeShortcuts {
                 break;
             case 'r':
                 events.fire('inputEvent', 'reset', event);
+                break;
+            // ARTLIGHT (TKT-241): niveau de vitesse de déplacement. `=` est la
+            // touche de `+` sans Maj sur les claviers QWERTY.
+            case '+':
+            case '=':
+                events.fire('inputEvent', 'speedUp', event);
+                break;
+            case '-':
+                events.fire('inputEvent', 'speedDown', event);
                 break;
             default:
                 if (isWasdKey(event) && state.inputMode === 'desktop') {

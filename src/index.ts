@@ -22,6 +22,7 @@ import { VIEW_PARAM, applyViewParam } from './content-mode'; // ARTLIGHT (TKT-22
 import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
 import { observe } from './core/observe';
 import { initLocalization } from './localization';
+import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
 import { applyArrivalPose } from './portals';
 import { importSettings } from './settings';
 import type { Config, Global } from './types';
@@ -271,6 +272,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     }
     const storedPerformanceMode = localStorage.getItem('performanceMode');
 
+    const sceneUrl = config.splatsUrl ?? config.contentUrl;
+    const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
+
     const state = observe(events, {
         loaded: false,
         performanceMode: storedPerformanceMode !== null ? storedPerformanceMode === 'true' : platform.mobile,
@@ -295,11 +299,16 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         volumeMeasureMode: false,
         pointMode: false,
         sectionMode: false,
+        speedLevel: loadSpeedLevel(sceneKey, config.speed),
         isFullscreen: false,
         controlsHidden: false,
         showAnnotations: localStorage.getItem('showAnnotations') !== 'false',
         gamingControls: localStorage.getItem('gamingControls') === 'true'
     });
+
+    // ARTLIGHT (TKT-241) : le niveau choisi reste celui de la scène pour la
+    // session (même clé que le zéro, pour que le nuage de points la partage).
+    events.on('speedLevel:changed', (level: number) => saveSpeedLevel(sceneKey, level));
 
     // ARTLIGHT: quand on arrive par un portail, sa pose d'arrivée remplace la
     // caméra initiale de la scène. Appliqué ici, sur les réglages déjà migrés,
@@ -313,9 +322,6 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // ARTLIGHT (TKT-228): après une bascule splats / nuage, la caméra reprend
     // la pose transmise dans l'URL (l'intro est coupée dans index.html).
     applyViewParam(settings, new URL(location.href).searchParams.get(VIEW_PARAM));
-
-    const sceneUrl = config.splatsUrl ?? config.contentUrl;
-    const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
 
     const global: Global = {
         app,
