@@ -1,3 +1,6 @@
+import { cp1252Byte, dimensionGeometry, formatDimension } from './drawing';
+import type { DrawingTarget, TextOptions, Vec2 } from './drawing';
+
 // ARTLIGHT (TKT-238) : écriture d'un fichier DXF, pour reprendre une coupe
 // dans AutoCAD, ArchiCAD, Revit, BricsCAD, QGIS…
 //
@@ -28,15 +31,6 @@ export interface DxfDimStyle {
     decimal: string;        // séparateur décimal
 }
 
-export type DxfAlign = 'left' | 'center' | 'right';
-export type DxfBaseline = 'baseline' | 'bottom' | 'middle' | 'top';
-
-export interface DxfTextOptions {
-    align?: DxfAlign;
-    baseline?: DxfBaseline;
-    rotation?: number;      // degrés
-}
-
 // Étendue du dessin (m) ; z : altitude du dessin.
 export interface DxfExtents {
     x0: number;
@@ -45,8 +39,6 @@ export interface DxfExtents {
     y1: number;
     z: number;
 }
-
-type Vec2 = [number, number];
 
 const DIMSTYLE_NAME = 'ARTLIGHT';
 const TEXT_STYLE = 'Standard';
@@ -62,17 +54,6 @@ const num = (v: number, digits = 6) => {
     if (s.endsWith('.')) s += '0';
     if (!s.includes('.')) s += '.0';
     return s === '-0.0' ? '0.0' : s;
-};
-
-// Windows-1252 : 0x80 à 0x9F ci-dessous (cinq codes non attribués gardent
-// leur valeur) ; 0xA0 à 0xFF valent leur code Unicode.
-const CP1252_HIGH = '\u20AC\u0081\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u008D\u017D\u008F' +
-    '\u0090\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u009D\u017E\u0178';
-
-const cp1252Byte = (code: number): number | null => {
-    if (code < 0x80 || (code >= 0xA0 && code <= 0xFF)) return code;
-    const i = CP1252_HIGH.indexOf(String.fromCharCode(code));
-    return i >= 0 ? 0x80 + i : null;
 };
 
 // Texte d'une entité : sur une ligne, signe moins et espaces insécables
@@ -106,7 +87,7 @@ const xyz = (x: number, y: number, z: number, code = 10) => tags(code, num(x), c
  * Dessin DXF en mètres, espace objet seulement. Les entités s'ajoutent au fil
  * de l'eau ; toBlob() assemble le fichier.
  */
-export class DxfWriter {
+export class DxfWriter implements DrawingTarget {
     private nextHandle = 1;
 
     private layers: DxfLayer[];
@@ -187,11 +168,11 @@ export class DxfWriter {
         return this.head('SOLID', layer, owner, byBlock) + tags(100, 'AcDbTrace') + p.map((q, i) => xyz(q[0], q[1], z, 10 + i)).join('');
     }
 
-    text(layer: string, at: Vec2, height: number, text: string, opts: DxfTextOptions = {}, z = 0) {
+    text(layer: string, at: Vec2, height: number, text: string, opts: TextOptions = {}, z = 0) {
         this.entities.push(this.textEntity(layer, this.model, at, height, text, opts, z, false));
     }
 
-    private textEntity(layer: string, owner: string, at: Vec2, height: number, text: string, opts: DxfTextOptions, z: number, byBlock: boolean) {
+    private textEntity(layer: string, owner: string, at: Vec2, height: number, text: string, opts: TextOptions, z: number, byBlock: boolean) {
         const h = { left: 0, center: 1, right: 2 }[opts.align ?? 'left'];
         const v = { baseline: 0, bottom: 1, middle: 2, top: 3 }[opts.baseline ?? 'baseline'];
         let body = this.head('TEXT', layer, owner, byBlock) + tags(100, 'AcDbText') + xyz(at[0], at[1], z) +
@@ -204,12 +185,8 @@ export class DxfWriter {
         return body;
     }
 
-    // Valeur d'une cote telle qu'AutoCAD l'écrit avec le style ARTLIGHT :
-    // `decimals` décimales, zéros de fin supprimés, séparateur de la langue.
     dimensionText(value: number): string {
-        let s = value.toFixed(this.dim.decimals);
-        if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
-        return s.replace('.', this.dim.decimal);
+        return formatDimension(value, this.dim.decimals, this.dim.decimal);
     }
 
     /**
@@ -227,66 +204,27 @@ export class DxfWriter {
      * @param {string} [text] - Texte imposé à la place de la mesure (flèche en mm).
      */
     dimension(layer: string, p1: Vec2, p2: Vec2, at: Vec2, angle: number | null, z = 0, text?: string) {
-        // Cote alignée écrite comme une cote tournée selon p1 p2 (comme ezdxf) :
-        // tous les lecteurs la mesurent de la même façon.
-        const deg = angle ?? Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI;
-        const rad = deg * Math.PI / 180;
-        const r: Vec2 = [Math.cos(rad), Math.sin(rad)];
-        const n: Vec2 = [-r[1], r[0]];
-        const measurement = Math.abs((p2[0] - p1[0]) * r[0] + (p2[1] - p1[1]) * r[1]);
-        if (!(measurement > 1e-9)) return;
-
-        const { textHeight: txt } = this.dim;
-        const asz = txt, exo = txt / 4, exe = txt / 2, gap = txt / 4;
-        const onLine = (p: Vec2): Vec2 => {
-            const d = (at[0] - p[0]) * n[0] + (at[1] - p[1]) * n[1];
-            return [p[0] + n[0] * d, p[1] + n[1] * d];
-        };
-        const q1 = onLine(p1), q2 = onLine(p2);
-
-        // Texte lisible : angle ramené dans ]−90°, 90°], au-dessus de la ligne.
-        let textAngle = Math.atan2(q2[1] - q1[1], q2[0] - q1[0]);
-        if (textAngle > Math.PI / 2 + 1e-9) textAngle -= Math.PI;
-        if (textAngle <= -Math.PI / 2 + 1e-9) textAngle += Math.PI;
-        const up: Vec2 = [-Math.sin(textAngle), Math.cos(textAngle)];
-        const mid: Vec2 = [(q1[0] + q2[0]) / 2 + up[0] * (gap + txt / 2), (q1[1] + q2[1]) / 2 + up[1] * (gap + txt / 2)];
+        const g = dimensionGeometry(p1, p2, at, angle, this.dim.textHeight);
+        if (!g) return;
 
         const record = this.handle();
         const name = `*D${this.blocks.length + 1}`;
         let body = '';
-        // Lignes d'attache : du point mesuré (moins l'écart) jusqu'au-delà de la ligne de cote.
-        for (const [p, q] of [[p1, q1], [p2, q2]] as const) {
-            const dx = q[0] - p[0], dy = q[1] - p[1], len = Math.hypot(dx, dy);
-            if (len <= exo) continue;
-            const e: Vec2 = [dx / len, dy / len];
-            body += this.lineEntity('0', record, [p[0] + e[0] * exo, p[1] + e[1] * exo], [q[0] + e[0] * exe, q[1] + e[1] * exe], z, true);
-        }
-        // Ligne de cote et flèches, à l'intérieur si elles tiennent.
-        const len = Math.hypot(q2[0] - q1[0], q2[1] - q1[1]);
-        const d: Vec2 = [(q2[0] - q1[0]) / len, (q2[1] - q1[1]) / len];
-        const inside = len >= 2.5 * asz;
-        const s = inside ? 1 : -1;
-        const a1: Vec2 = inside ? q1 : [q1[0] - d[0] * asz * 2, q1[1] - d[1] * asz * 2];
-        const a2: Vec2 = inside ? q2 : [q2[0] + d[0] * asz * 2, q2[1] + d[1] * asz * 2];
-        body += this.lineEntity('0', record, a1, a2, z, true);
-        const arrow = (tip: Vec2, dir: number) => {
-            const bx = tip[0] + d[0] * asz * dir, by = tip[1] + d[1] * asz * dir;
-            const w = asz / 6;
-            return this.solidEntity('0', record, [tip, [bx + n[0] * w, by + n[1] * w], [bx - n[0] * w, by - n[1] * w]], z, true);
-        };
-        body += arrow(q1, s) + arrow(q2, -s);
-        body += this.textEntity('0', record, mid, txt, text ?? this.dimensionText(measurement), {
+        for (const [a, b] of g.extensions) body += this.lineEntity('0', record, a, b, z, true);
+        body += this.lineEntity('0', record, g.line[0], g.line[1], z, true);
+        for (const arrow of g.arrows) body += this.solidEntity('0', record, arrow, z, true);
+        body += this.textEntity('0', record, g.mid, this.dim.textHeight, text ?? this.dimensionText(g.measurement), {
             align: 'center',
             baseline: 'middle',
-            rotation: textAngle * 180 / Math.PI
+            rotation: g.textAngle
         }, z, true);
         this.blocks.push({ name, record, begin: this.handle(), end: this.handle(), body });
 
         const entity = tags(100, 'AcDbDimension', 2, name) +
-            xyz(q2[0], q2[1], z) + xyz(mid[0], mid[1], z, 11) +
-            tags(70, 32, 71, 5, 42, num(measurement), 1, text === undefined ? '' : dxfText(text), 3, DIMSTYLE_NAME) +
+            xyz(g.q2[0], g.q2[1], z) + xyz(g.mid[0], g.mid[1], z, 11) +
+            tags(70, 32, 71, 5, 42, num(g.measurement), 1, text === undefined ? '' : dxfText(text), 3, DIMSTYLE_NAME) +
             tags(100, 'AcDbAlignedDimension') + xyz(p1[0], p1[1], z, 13) + xyz(p2[0], p2[1], z, 14) +
-            tags(50, num(deg), 100, 'AcDbRotatedDimension');
+            tags(50, num(g.deg), 100, 'AcDbRotatedDimension');
         this.entities.push(this.head('DIMENSION', layer, this.model) + entity);
     }
 

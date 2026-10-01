@@ -24,12 +24,15 @@ interface FolderItem<T> {
     data: T;
     thumbnail: Blob | null;     // vignette JPEG de la vue 3D
     thumbnailUrl: string | null;
+    capture: Promise<void> | null;  // vignette en cours de capture
 }
 
 interface FolderOptions<T> {
     autoName: (item: FolderItem<T>) => string;
     describe: (item: FolderItem<T>) => string;
     onOpen: (item: FolderItem<T>) => void;
+    // Rapport PDF du dossier (TKT-249, lot 2).
+    onReport: () => void;
     // Liste changée (nom, ordre, suppression) : l'outil redessine la vue et
     // l'en-tête de la coupe ouverte.
     onChange: () => void;
@@ -134,7 +137,7 @@ class SectionFolder<T> {
     }
 
     add(data: T): FolderItem<T> {
-        const item: FolderItem<T> = { id: this.nextId++, name: null, data, thumbnail: null, thumbnailUrl: null };
+        const item: FolderItem<T> = { id: this.nextId++, name: null, data, thumbnail: null, thumbnailUrl: null, capture: null };
         this.items.push(item);
         this.dropRemoved();
         this.render();
@@ -155,11 +158,24 @@ class SectionFolder<T> {
 
     // Vignette prise maintenant, rangée quand elle est prête.
     captureThumbnail(global: Global, item: FolderItem<T>) {
-        captureView(global).then((blob) => {
+        const capture = captureView(global).then((blob) => {
             if (blob) this.setThumbnail(item, blob);
         }).catch(() => {
             // pas de vignette : la liste garde sa case vide
+        }).finally(() => {
+            if (item.capture === capture) item.capture = null;
         });
+        item.capture = capture;
+    }
+
+    // Vignettes en cours de capture (rapport PDF juste après « Garder ») :
+    // attendues `timeout` ms au plus.
+    thumbnailsReady(timeout: number): Promise<unknown> {
+        const pending = this.items.map(item => item.capture).filter(Boolean);
+        if (pending.length === 0) return Promise.resolve();
+        return Promise.race([Promise.all(pending), new Promise((resolve) => {
+            setTimeout(resolve, timeout);
+        })]);
     }
 
     setOpen(id: number | null) {
@@ -279,6 +295,14 @@ class SectionFolder<T> {
             undo.append(text, button);
             body.appendChild(undo);
         }
+        if (this.items.length > 0) {
+            const report = document.createElement('button');
+            report.className = 'tool-btn primary section-folder-report';
+            report.textContent = tr('report');
+            report.title = tr('report-title');
+            report.addEventListener('click', () => this.options.onReport());
+            body.appendChild(report);
+        }
         body.appendChild(createNote(tr('note')));
         panel.appendChild(body);
 
@@ -380,5 +404,5 @@ class SectionFolder<T> {
     }
 }
 
-export { SectionFolder };
+export { SectionFolder, captureView };
 export type { FolderItem };

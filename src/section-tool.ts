@@ -2,10 +2,12 @@ import { Mat4, Vec3 } from 'playcanvas';
 
 import { formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
-import { sectionDxf } from './section-dxf';
-import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-dxf';
-import { SectionFolder } from './section-folder';
+import { sectionDxf } from './section-drawing';
+import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-drawing';
+import { SectionFolder, captureView } from './section-folder';
 import type { FolderItem } from './section-folder';
+import { PdfDialog, sectionReportPdf } from './section-pdf';
+import type { PdfSettings, PdfSheet } from './section-pdf';
 import { DARK_THEME, LIGHT_THEME, ProfileView, paintProfile, profileToScreen, scaleBarLength } from './section-profile';
 import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileRule, ProfileWindow } from './section-profile';
 import { computeRule, spanFrame, spanIsUpright } from './section-rule';
@@ -56,6 +58,11 @@ import type { Global } from './types';
 // coupe gardée se rouvre pour être modifiée, puis mise à jour ou gardée
 // comme nouvelle ; la vue 3D montre ses traits et son nom, comme sur un
 // plan d'architecte.
+//
+// Rapport PDF (TKT-249, lot 2) : la coupe ouverte (« PDF à l'échelle ») ou
+// tout le dossier (« Rapport PDF »), une page par coupe à une échelle
+// normalisée, avec cartouche. Dessin commun avec le DXF (sectionDrawing,
+// section-drawing.ts) ; pages : section-pdf.ts ; format : pdf.ts.
 
 type SectionMode = 'vertical' | 'horizontal' | 'points';
 const SECTION_MODES: SectionMode[] = ['vertical', 'horizontal', 'points'];
@@ -158,8 +165,12 @@ const EXAGGERATIONS = [1, 2, 5, 10];
 const SLOPE_MAX_ANGLE = 60 * Math.PI / 180;
 
 // Export DXF : au plus 100 000 points (un sur n au-delà) ; le CSV les a tous.
-// ArchiCAD fait un point chaud de chaque point, AutoCAD s'alourdit.
+// ArchiCAD fait un point chaud de chaque point, AutoCAD s'alourdit. Même
+// limite pour le PDF.
 const DXF_MAX_POINTS = 100000;
+
+// Rapport PDF juste après « Garder » : attente des vignettes en cours (ms).
+const PDF_THUMBNAIL_WAIT = 3000;
 
 const MODE_STORAGE_KEY = 'artlight.section.mode';
 const THICKNESS_STORAGE_KEY = 'artlight.section.thickness';
@@ -272,6 +283,20 @@ interface KeptSection {
 }
 
 type KeptItem = FolderItem<KeptSection>;
+
+// Règle d'une coupe gardée : son résultat s'il est bon, et sa portée (posée
+// sur le profil, sinon de A à B ; aucune pendant la pose d'une portée).
+const keptRuleOk = (k: KeptSection): RuleOk | null => (k.rule.on && k.rule.result?.status === 'ok' ? k.rule.result : null);
+
+const keptRuleSpan = (k: KeptSection): [ProfilePoint, ProfilePoint] | null => {
+    if (k.rule.picking) return null;
+    if (k.rule.span) return k.rule.span;
+    const ends = k.section.ends;
+    return k.mode === 'points' && ends ? [ends.a, ends.b] : null;
+};
+
+// Exagération du profil ; une vue en plan n'en a pas.
+const keptExaggeration = (k: KeptSection) => (k.mode === 'horizontal' ? 1 : k.exaggeration);
 
 // Bande de l'écran où poser les noms des coupes gardées (voir labelArea).
 interface LabelArea {
@@ -628,6 +653,9 @@ class SectionTool {
 
     private folderLayout = '';
 
+    // Fenêtre des réglages du PDF (coupe ouverte ou dossier).
+    private pdfDialog: PdfDialog | null = null;
+
     private overlay: HTMLDivElement | null = null;
 
     private drawCanvas: HTMLCanvasElement | null = null;
@@ -671,6 +699,7 @@ class SectionTool {
             autoName: item => this.autoName(item),
             describe: item => this.describeKept(item),
             onOpen: item => this.reopen(item),
+            onReport: () => this.openPdfDialog('folder'),
             onChange: () => {
                 this.keepKey = '';
                 this.global.app.renderNextFrame = true;
@@ -732,6 +761,7 @@ class SectionTool {
 
         this.pointerHandler.deactivate();
         this.global.events.off('coords:changed', this.coordsHandler);
+        this.pdfDialog?.close();
         this.cancelRecompute();
         this.removePanel();
         this.highlight.clear();
@@ -862,8 +892,7 @@ class SectionTool {
     }
 
     // Point du plan à l'aplomb du point cliqué.
-    private planeOrigin(): Vec3 {
-        const p = this.placement;
+    private planeOrigin(p = this.placement): Vec3 {
         return p.anchor.clone().add(p.normal.clone().mulScalar(p.offset));
     }
 
@@ -1590,15 +1619,15 @@ class SectionTool {
         return { frame, thickness: this.thickness, uMin, uMax, wMin, wMax, points, depth, count, isolated, ends: sectionEnds, fit };
     }
 
-    private dimensions(section: Section): Dimensions | null {
+    private dimensions(section: Section, up = this.up): Dimensions | null {
         const ends = section.ends;
         if (!ends) return null;
-        return this.between(ends.a3, ends.b3);
+        return this.between(ends.a3, ends.b3, up);
     }
 
-    private between(a: Vec3, b: Vec3): Dimensions {
+    private between(a: Vec3, b: Vec3, up = this.up): Dimensions {
         const d = new Vec3().sub2(b, a);
-        const rise = d.dot(this.up);
+        const rise = d.dot(up);
         const length = d.length();
         return { length, rise, horizontal: Math.sqrt(Math.max(0, length * length - rise * rise)) };
     }
@@ -1721,15 +1750,14 @@ class SectionTool {
 
     // Position de la flèche sur le profil : depuis A, ou abscisse du profil
     // (signée : le profil a son origine au point cliqué).
-    private rulePosition(rule: RuleOk): string {
+    private rulePosition(rule: RuleOk, mode = this.mode): string {
         const s = rule.gapSurface.s;
-        return this.mode === 'points' ? tr('rule.position-from-a', { s: formatLength(s) }) : tr('rule.position-profile', { s: formatLength(s, true) });
+        return mode === 'points' ? tr('rule.position-from-a', { s: formatLength(s) }) : tr('rule.position-profile', { s: formatLength(s, true) });
     }
 
     // Côtés de la règle (1, puis −1), selon l'orientation de la portée :
     // dessus et dessous, ou gauche et droite pour un mur vu de profil.
-    private ruleSideKeys(): [string, string] {
-        const span = this.currentRuleSpan();
+    private ruleSideKeys(span = this.currentRuleSpan()): [string, string] {
         return span && spanIsUpright(span) ? ['left', 'right'] : ['above', 'below'];
     }
 
@@ -2043,10 +2071,10 @@ class SectionTool {
 
     // Ligne sous le nom : type, longueur (verticale), AB (entre deux
     // points) ou étendue (plan), et la flèche de la règle.
-    private describeKept(item: KeptItem): string {
+    private describeKept(item: KeptItem, withMode = true): string {
         const k = item.data;
         const s = k.section;
-        const parts = [tr(`mode.${k.mode}`)];
+        const parts = withMode ? [tr(`mode.${k.mode}`)] : [];
         if (k.mode === 'points' && s.ends) parts.push(`AB ${formatLength(s.ends.a3.distance(s.ends.b3))}`);
         else if (k.mode === 'vertical') parts.push(formatLength(s.uMax - s.uMin));
         else parts.push(`${formatNumber(s.uMax - s.uMin, 1)} × ${formatNumber(s.wMax - s.wMin, 1)} m`);
@@ -2137,9 +2165,8 @@ class SectionTool {
 
     // Orientation d'une coupe verticale : angle (0 à 180°) de sa direction
     // avec l'axe Nord (Y) du repère source, compté vers l'Est.
-    private azimuth(): number {
+    private azimuth(along = this.placement.along): number {
         const coords = this.global.coords;
-        const along = this.placement.along;
         const d = typeof coords?.toSource === 'function' ? coords.toSource(along) : [along.x, -along.z, along.y];
         const deg = Math.atan2(d[0], d[1]) * 180 / Math.PI;
         return ((deg % 180) + 180) % 180;
@@ -2174,22 +2201,25 @@ class SectionTool {
     // calcul au repos.
     private afterPlacementChange(newAxes: boolean) {
         if (newAxes) {
-            // Nouvelle orientation : le point cliqué est ramené sur le plan.
-            this.placement.anchor = this.planeOrigin();
-            this.placement.offset = 0;
+            // Nouvelle orientation d'une verticale : le point cliqué est
+            // ramené sur le plan. Une horizontale tourne sans bouger : elle
+            // garde sa hauteur au-dessus du sol, et son nom (TKT-249).
+            if (this.mode !== 'horizontal') {
+                this.placement.anchor = this.planeOrigin();
+                this.placement.offset = 0;
+            }
             this.newView();
         }
         this.resetGrip();
         this.placeHandles();
         this.updateHighlight();
         this.global.app.renderNextFrame = true;
-        // Nouvelle orientation : le décalage revient à zéro, les réglages
-        // sont redessinés une fois le calcul fait.
+        // Nouvelle orientation : les réglages (décalage d'une verticale
+        // revenu à zéro) sont redessinés une fois le calcul fait.
         this.scheduleRecompute(newAxes);
     }
 
-    private lodText(): string | null {
-        const lod = this.lod;
+    private lodText(lod = this.lod): string | null {
         if (!lod) return null;
         const { min, max, levels } = lod.usage;
         const used = min === max ? tr('lod.level', { level: min }) : tr('lod.levels', { min, max });
@@ -2229,8 +2259,8 @@ class SectionTool {
     };
 
     // Pente de la mesure, sur un profil en hauteur et jusqu'à 60°.
-    private measureSlope(parts: { ds: number; dt: number }): string | null {
-        if (!this.profileIsVertical() || Math.atan2(Math.abs(parts.dt), Math.abs(parts.ds)) >= SLOPE_MAX_ANGLE) return null;
+    private measureSlope(parts: { ds: number; dt: number }, vertical = this.profileIsVertical()): string | null {
+        if (!vertical || Math.atan2(Math.abs(parts.dt), Math.abs(parts.ds)) >= SLOPE_MAX_ANGLE) return null;
         return this.slopeText(parts.ds >= 0 ? parts.dt : -parts.dt, Math.abs(parts.ds));
     }
 
@@ -2604,11 +2634,14 @@ class SectionTool {
         filter.title = tr('filter.title');
         box.appendChild(filter);
 
-        // Exports : image pour un rapport, dessin pour la CAO, tableau pour Excel.
+        // Exports : page à l'échelle pour un client, image pour un rapport,
+        // dessin pour la CAO, tableau pour Excel.
         const exports = document.createElement('div');
         exports.className = 'section-export-buttons';
         const frame = this.global.coords.frameName;
-        for (const [key, run] of [['png', () => this.exportPng()], ['dxf', () => this.exportDxf()], ['csv', () => this.exportCsv()]] as const) {
+        for (const [key, run] of [
+            ['pdf', () => this.openPdfDialog('section')], ['png', () => this.exportPng()], ['dxf', () => this.exportDxf()], ['csv', () => this.exportCsv()]
+        ] as const) {
             const button = document.createElement('button');
             button.className = 'tool-btn';
             button.textContent = tr(`export.${key}`);
@@ -2771,15 +2804,16 @@ class SectionTool {
 
     // ── Export PNG ──
 
-    // Résultats de l'image, par colonnes.
-    private summarySections(): { title: string; rows: [string, string][] }[] {
-        const section = this.section;
+    // Résultats d'une coupe (la coupe ouverte, ou une coupe du dossier),
+    // par sections : image PNG, cartouche du DXF, tableau du PDF.
+    private summarySections(k: KeptSection = this.snapshot(null)): { title: string; rows: [string, string][] }[] {
+        const section = k.section;
         const coords = this.global.coords;
         const point = (p: Vec3) => formatCoordsInline(coords.toDisplay(p), undefined, coords.axisNames);
         const out: { title: string; rows: [string, string][] }[] = [];
 
-        const settings: [string, string][] = [[tr('mode.label'), tr(`mode.${this.mode}`)]];
-        const dim = this.dimensions(section);
+        const settings: [string, string][] = [[tr('mode.label'), tr(`mode.${k.mode}`)]];
+        const dim = this.dimensions(section, k.up);
         if (dim) {
             out.push({
                 title: tr('summary.dimensions'),
@@ -2798,49 +2832,49 @@ class SectionTool {
                 ]
             });
             settings.push([tr('plane.label'), capitalize(this.planeText(section.frame))]);
-        } else if (this.mode === 'vertical') {
-            settings.push([tr('orientation.label'), `${formatNumber(this.azimuth(), 0)}°`]);
-            settings.push([tr('summary.through'), point(this.planeOrigin())]);
+        } else if (k.mode === 'vertical') {
+            settings.push([tr('orientation.label'), `${formatNumber(this.azimuth(k.placement.along), 0)}°`]);
+            settings.push([tr('summary.through'), point(this.planeOrigin(k.placement))]);
         } else {
-            if (this.placement.floor) settings.push([tr('position.floor'), formatLength(this.placement.offset)]);
-            settings.push([tr('level'), this.heightText(this.planeOrigin())]);
-            settings.push([tr('orientation.plan-label'), `${formatNumber(this.azimuth(), 0)}°`]);
+            if (k.placement.floor) settings.push([tr('position.floor'), formatLength(k.placement.offset)]);
+            settings.push([tr('level'), this.heightText(this.planeOrigin(k.placement))]);
+            settings.push([tr('orientation.plan-label'), `${formatNumber(this.azimuth(k.placement.along), 0)}°`]);
         }
         settings.push(
             [tr('thickness.label'), formatLength(section.thickness)],
             [tr('summary.points'), formatCount(section.count)],
-            [tr('summary.isolated'), this.filterIsolated ? formatCount(section.isolated) : tr('summary.filter-off')]
+            [tr('summary.isolated'), k.filterIsolated ? formatCount(section.isolated) : tr('summary.filter-off')]
         );
-        const lod = this.lodText();
+        const lod = this.lodText(k.lod);
         if (lod) settings.push([tr('summary.lod'), lod]);
         out.push({ title: tr('summary.settings'), rows: settings });
 
-        const parts = this.measure && this.measureParts(this.measure);
+        const parts = k.measure && this.measureParts(k.measure);
         if (parts) {
             const rows: [string, string][] = [
                 [tr('summary.measure-length'), formatLength(parts.length)],
                 [tr('summary.measure-ds'), formatLength(Math.abs(parts.ds))],
                 [tr('summary.measure-dt'), formatLength(Math.abs(parts.dt))]
             ];
-            const slope = this.measureSlope(parts);
+            const slope = this.measureSlope(parts, section.frame.kind === 'vertical');
             if (slope) rows.push([tr('slope'), slope]);
             out.push({ title: tr('summary.measure'), rows });
         }
 
-        const rule = this.ruleOk();
+        const rule = keptRuleOk(k);
         if (rule) {
-            const [first, second] = this.ruleSideKeys();
+            const [first, second] = this.ruleSideKeys(keptRuleSpan(k));
             out.push({
                 title: tr('summary.rule'),
                 rows: [
-                    [this.ruleLength > 0 ? tr('rule.gap-under', { length: formatRuleLength(this.ruleLength) }) : tr('rule.gap'), formatGap(rule.gap)],
-                    [tr('rule.position'), this.rulePosition(rule)],
+                    [k.rule.length > 0 ? tr('rule.gap-under', { length: formatRuleLength(k.rule.length) }) : tr('rule.gap'), formatGap(rule.gap)],
+                    [tr('rule.position'), this.rulePosition(rule, k.mode)],
                     [tr('rule.reach'), formatLength(rule.reach)],
                     [tr('rule.ratio'), this.ruleRatio(rule)],
                     [tr('rule.noise-floor'), `≈ ${formatGap(rule.noiseFloor)}`],
-                    [tr('rule.length'), this.ruleLength > 0 ? formatRuleLength(this.ruleLength) : tr('rule.length-span')],
-                    [tr('rule.side'), tr(`rule.side-${this.ruleSide > 0 ? first : second}`)],
-                    [tr('summary.rule-tiles'), rule.tiles ? formatLength(this.ruleTile) : tr('rule.tiles-none')]
+                    [tr('rule.length'), k.rule.length > 0 ? formatRuleLength(k.rule.length) : tr('rule.length-span')],
+                    [tr('rule.side'), tr(`rule.side-${k.rule.side > 0 ? first : second}`)],
+                    [tr('summary.rule-tiles'), rule.tiles ? formatLength(k.rule.tile) : tr('rule.tiles-none')]
                 ]
             });
         }
@@ -3009,17 +3043,23 @@ class SectionTool {
         return kind === 'plan' ? d : [s, d[2], 0];
     }
 
-    // Dessin pour la CAO : points de la tranche, traits de coupe, cotes (A
-    // et B, cotes de niveau, pente), mesure, cadre gradué et cartouche. Mise
-    // en page : section-dxf.ts ; format : dxf.ts.
-    private exportDxf() {
-        const section = this.section;
-        if (!section) return;
+    // Dessin d'une coupe (la coupe ouverte, ou une coupe du dossier), commun
+    // au DXF et au PDF : points de la tranche (au plus 100 000), traits de
+    // coupe, cotes (A et B, cotes de niveau, pente), mesure, règle, cadre
+    // gradué, et les résultats, pour le cartouche du DXF et le tableau du
+    // PDF. Mise en page : section-drawing.ts ; formats : dxf.ts, pdf.ts.
+    private sectionDrawing(k: KeptSection, format: 'dxf' | 'pdf', linesOnly = false): { drawing: SectionDrawing; tables: { title: string; rows: [string, string][] }[] } {
+        const section = k.section;
         const frame = section.frame;
         const kind = this.drawingKind(frame);
         const coords = this.global.coords;
+        // Vue en plan du PDF : orientée comme à l'écran (murs droits), en
+        // distances depuis le point cliqué, avec la flèche du nord tournée.
+        // Le DXF garde les coordonnées réelles.
+        const turned = format === 'pdf' && kind === 'plan';
+        const pointKind: DrawingKind = turned ? 'plane' : kind;
         const at = (p: ProfilePoint): [number, number] => {
-            const d = this.drawingPoint(frame, kind, p.s, p.t);
+            const d = this.drawingPoint(frame, pointKind, p.s, p.t);
             return [d[0], d[1]];
         };
 
@@ -3027,9 +3067,9 @@ class SectionTool {
         const count = Math.ceil(section.count / stride);
         const points = new Float64Array(count * 3);
         let sMin = Infinity, sMax = -Infinity;
-        for (let k = 0; k < count; k++) {
-            const i = k * stride;
-            points.set(this.drawingPoint(frame, kind, section.points[i * 2], section.points[i * 2 + 1]), k * 3);
+        for (let j = 0; j < count; j++) {
+            const i = j * stride;
+            points.set(this.drawingPoint(frame, pointKind, section.points[i * 2], section.points[i * 2 + 1]), j * 3);
         }
         for (let i = 0; i < section.count; i++) {
             sMin = Math.min(sMin, section.points[i * 2]);
@@ -3048,7 +3088,7 @@ class SectionTool {
         const dims: DrawingDimension[] = [];
         const notes: SectionDrawing['notes'] = [];
         let ends: SectionDrawing['ends'];
-        const dim = this.dimensions(section);
+        const dim = this.dimensions(section, k.up);
         if (section.ends && dim) {
             const a = at(section.ends.a), b = at(section.ends.b);
             ends = { a, b };
@@ -3062,23 +3102,23 @@ class SectionTool {
                 notes.push({ text: `${label} ${value}`, p1: a, p2: b });
             }
         }
-        const parts = this.measure && this.measureParts(this.measure);
+        const parts = k.measure && this.measureParts(k.measure);
         if (parts) {
             // Cote de la mesure sous le segment mesuré (celle de AB est
             // au-dessus), pente au-dessus.
-            const p1 = at(this.measure.p1), p2 = at(this.measure.p2);
+            const p1 = at(k.measure.p1), p2 = at(k.measure.p2);
             dims.push({ p1, p2, kind: 'aligned', layer: 'measure', side: -1 });
             if (kind !== 'plan' && Math.abs(parts.ds) > 0.05 * parts.length && Math.abs(parts.dt) > 0.05 * parts.length) {
                 dims.push({ p1, p2, kind: 'horizontal', layer: 'measure' }, { p1, p2, kind: 'vertical', layer: 'measure' });
             }
-            const slope = this.measureSlope(parts);
+            const slope = this.measureSlope(parts, frame.kind === 'vertical');
             if (slope) notes.push({ text: `${tr('slope')} ${slope}`, p1, p2, layer: 'measure', side: 1 });
         }
 
         // Règle la plus défavorable, sa flèche cotée, et ses résultats le long
         // de la règle (au-dessus).
         let drawingRule: DrawingRule | undefined;
-        const rule = this.ruleOk();
+        const rule = keptRuleOk(k);
         if (rule) {
             const start = at(rule.start), end = at(rule.end);
             drawingRule = {
@@ -3098,14 +3138,19 @@ class SectionTool {
 
         // Cartouche : les résultats de l'image PNG, puis le repère du dessin.
         const data = this.profileData(section);
-        const axes = kind === 'plan' ?
+        const axes = kind === 'plan' && !turned ?
             { x: `${coords.axisNames[0]} (m)`, y: `${coords.axisNames[1]} (m)` } :
             { x: data.sTitle, y: data.tTitle };
+        // Axes du dessin : le PDF les montre sur le cadre, sauf pour un plan
+        // incliné (sans coordonnées réelles).
         const rows: [string, string][] = [];
-        if (kind === 'profile') rows.push([tr('dxf.axes'), tr('dxf.axes-profile', { axis: coords.axisNames[2], frame: coords.frameName })]);
-        else if (kind === 'plan') rows.push([tr('dxf.axes'), tr('dxf.axes-plan', { axes: coords.axisNames.join(', '), frame: coords.frameName })]);
-        else rows.push([tr('dxf.axes'), tr('dxf.axes-plane')]);
-        rows.push([tr('dxf.unit'), tr('dxf.meter')]);
+        if (format === 'dxf' || kind === 'plane') {
+            let axesText = tr('dxf.axes-plane');
+            if (kind === 'profile') axesText = tr('dxf.axes-profile', { axis: coords.axisNames[2], frame: coords.frameName });
+            else if (kind === 'plan') axesText = tr('dxf.axes-plan', { axes: coords.axisNames.join(', '), frame: coords.frameName });
+            rows.push([tr('dxf.axes'), axesText]);
+        }
+        if (format === 'dxf') rows.push([tr('dxf.unit'), tr('dxf.meter')]);
         if (kind === 'profile') {
             const end = (s: number) => {
                 const d = coords.toDisplay(framePoint(frame, s, 0));
@@ -3113,26 +3158,37 @@ class SectionTool {
             };
             rows.push([tr('dxf.left-end', { s: exportNumber(sMin, 3) }), end(sMin)], [tr('dxf.right-end', { s: exportNumber(sMax, 3) }), end(sMax)]);
         }
-        rows.push([tr('dxf.points'), stride > 1 ?
-            tr('dxf.points-decimated', { n: formatCount(count), total: formatCount(section.count), step: stride }) :
-            formatCount(count)]);
+        if (turned) {
+            const o = coords.toDisplay(frame.origin);
+            rows.push([tr('pdf.plan-origin'), formatCoordsInline([o[0], o[1], 0], undefined, coords.axisNames.slice(0, 2))]);
+        }
+        if (format === 'pdf' && kind !== 'plan' && keptExaggeration(k) > 1) rows.push([tr('pdf.exaggeration-label'), tr('pdf.exaggeration-value', { n: keptExaggeration(k) })]);
+        if (linesOnly) {
+            rows.push([tr('dxf.points'), tr('pdf.points-none')]);
+        } else {
+            rows.push([tr('dxf.points'), stride > 1 ?
+                tr(format === 'pdf' ? 'pdf.points-decimated' : 'dxf.points-decimated', { n: formatCount(count), total: formatCount(section.count), step: stride }) :
+                formatCount(count)]);
+        }
         rows.push([tr('dxf.lines'), tr('dxf.lines-value', { n: formatCount(lines.length), tolerance: formatLength(trace.tolerance) })]);
+        const tables = [...this.summarySections(k), { title: tr('dxf.drawing'), rows }];
 
-        const blob = sectionDxf({
+        const drawing: SectionDrawing = {
             kind,
             points,
             count,
             lines,
-            z: kind === 'plan' ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
+            z: kind === 'plan' && !turned ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
             ends,
             dims,
             rule: drawingRule,
             notes,
             axes,
             north: kind === 'plan' ? coords.axisNames[1] : undefined,
-            title: tr(`png.title-${this.mode}`, { scene: sceneName() }),
+            northAngle: turned ? this.northAngle(frame) : 0,
+            title: tr(`png.title-${k.mode}`, { scene: sceneName() }),
             subtitle: `${new Date().toLocaleString(getLocale(), { dateStyle: 'long', timeStyle: 'short' })} · ${coords.frameName}`,
-            sections: [...this.summarySections(), { title: tr('dxf.drawing'), rows }].map(sec => ({
+            sections: tables.map(sec => ({
                 title: sec.title,
                 lines: sec.rows.map(([label, value]) => tr('dxf.row', { label, value }))
             })),
@@ -3146,8 +3202,92 @@ class SectionTool {
                 title: tr('dxf.layer.title')
             },
             decimal: decimalSeparator()
+        };
+        return { drawing, tables };
+    }
+
+    // Direction du nord du repère affiché (axe Y : N en Lambert-93 ou en
+    // UTM) dans le repère du profil : angle depuis le haut du dessin, compté
+    // vers la gauche (degrés). Lu sur les coordonnées affichées, comme les
+    // graduations : la convergence des méridiens est comprise.
+    private northAngle(frame: Frame): number {
+        const coords = this.global.coords;
+        const o = coords.toDisplay(framePoint(frame, 0, 0));
+        const a = coords.toDisplay(framePoint(frame, 1, 0)), b = coords.toDisplay(framePoint(frame, 0, 1));
+        const sx = a[0] - o[0], sy = a[1] - o[1], tx = b[0] - o[0], ty = b[1] - o[1];
+        // Nord (0, 1) dans le repère (s, t)
+        const det = sx * ty - sy * tx;
+        return Math.atan2(tx / det, sx / det) * 180 / Math.PI;
+    }
+
+    private exportDxf() {
+        if (!this.section) return;
+        const { drawing } = this.sectionDrawing(this.snapshot(null), 'dxf');
+        downloadBlob(sectionDxf(drawing), `${exportBaseName(tr('export.file'))}.dxf`);
+    }
+
+    // ── Export PDF (TKT-249) ──
+
+    // Fenêtre des réglages, puis le PDF : la coupe ouverte sur une page, ou
+    // le dossier (page de garde, une page par coupe).
+    private openPdfDialog(scope: 'section' | 'folder') {
+        if (this.pdfDialog || !this.overlay) return;
+        if (scope === 'section' ? !this.section : this.folder.items.length === 0) return;
+        const count = this.folder.items.length;
+        this.pdfDialog = new PdfDialog(this.overlay, {
+            title: tr(`pdf.dialog-${scope}`),
+            intro: scope === 'section' ? tr('pdf.intro-section') : tr('pdf.intro-folder', { n: count }),
+            onCreate: settings => this.createPdf(scope, settings),
+            onClose: () => {
+                this.pdfDialog = null;
+            }
         });
-        downloadBlob(blob, `${exportBaseName(tr('export.file'))}.dxf`);
+    }
+
+    private async createPdf(scope: 'section' | 'folder', settings: PdfSettings): Promise<string[]> {
+        const sheets: PdfSheet[] = [];
+        if (scope === 'section') {
+            if (!this.section) return [];
+            // Coupe gardée et inchangée : son nom et sa vignette ; sinon, la
+            // vue telle qu'elle est.
+            const { item, clean } = this.linkState();
+            const kept = item && clean ? item : null;
+            const thumbnail = kept?.thumbnail ?? await captureView(this.global).catch((): Blob | null => null);
+            sheets.push(this.pdfSheet(this.snapshot(null), kept, thumbnail, settings.linesOnly));
+        } else {
+            await this.folder.thumbnailsReady(PDF_THUMBNAIL_WAIT);
+            for (const item of this.folder.items) sheets.push(this.pdfSheet(item.data, item, item.thumbnail, settings.linesOnly));
+        }
+        if (sheets.length === 0) return [];
+        const result = await sectionReportPdf(sheets, {
+            ...settings,
+            frameName: this.global.coords.frameName,
+            cover: scope === 'folder',
+            date: new Date(),
+            locale: getLocale()
+        });
+        downloadBlob(result.blob, `${exportBaseName(tr(scope === 'folder' ? 'pdf.file-folder' : 'export.file'))}.pdf`);
+        return result.fallbacks.map(f => tr('pdf.fallback', { name: f.title, forced: `1:${settings.scale}`, scale: f.scale }));
+    }
+
+    // Page d'une coupe : titre (« Coupe A-A », « Plan à +1,00 m », nom
+    // donné), dessin, résultats, vignette.
+    private pdfSheet(k: KeptSection, item: KeptItem | null, thumbnail: Blob | null, linesOnly: boolean): PdfSheet {
+        const { drawing, tables } = this.sectionDrawing(k, 'pdf', linesOnly);
+        let title = tr(`pdf.title-${k.mode}`);
+        if (item) {
+            const name = this.folder.nameOf(item);
+            title = item.name === null && k.mode === 'vertical' ? tr('title-named', { name }) : name;
+        }
+        return {
+            title,
+            kind: tr(`pdf.kind-${drawing.kind === 'plan' ? 'plan' : k.mode}`),
+            summary: item ? this.describeKept(item, false) : '',
+            drawing,
+            exaggeration: drawing.kind === 'plan' ? 1 : keptExaggeration(k),
+            tables,
+            thumbnail
+        };
     }
 
     // Tableau pour Excel : une ligne par point de la coupe, dans l'ordre des
