@@ -227,13 +227,46 @@ pm2 start npm --name "splatviewer" -- run serve
 
 # Syntaxe splat-transform v3.x (npm install -g @playcanvas/splat-transform@latest)
 # Renommages v3.0.0 : -O -> -L (--select-lod), -C <n> -> --lod-chunk-count <n>, -F <n%> -> -d <n%> (--decimate)
+# Les actions (-r, -N, -H, -d…) s'appliquent au fichier qui les précède : placées avant l'entrée, elles sont
+# ignorées sans message (-H 1 laissait 3 bandes SH). Une seule entrée : les mettre après l'entrée.
+# Plusieurs entrées (-l 0, -l 1…) : mettre -H 1 après la sortie, il s'applique au résultat final
+# (après une seule entrée, le build échoue : « inputs must share … SH band count »).
+# Les options globales (-w, -L, -i, --lod-chunk-count) restent avant l'entrée.
+# -N retire les splats à valeur NaN ou infinie ; sans lui, les .lcc récents (Callian, Immeuble Toulon)
+# font échouer le build des LOD (« non-finite opacity »). En v3.3.3, -N ne nettoie qu'un niveau à la fois.
 
-# pour créer les lod depuis un lcc source
-splat-transform -w -L 0,1,2 -H 1 -i 16 --lod-chunk-count 256 Maison_Nico.lcc -r 90,0,0 ../lod-output/lod-meta.json
+# ===== Générer une scène depuis un .lcc (splat-transform v3.3.3) =====
+# Commandes lancées depuis le dossier du projet, ex. public/projects/immeuble-toulon
+# (guillemets autour des chemins avec espaces : "lcc/lcc-result/Immeuble Full.lcc").
 
-ou
+# ROTATION : PAS DE -r en v3.3.3. Le lecteur .lcc oriente déjà le modèle dans le repère attendu par le
+# viewer, (E, N, H) → (E, −H, N). Ajouter -r 90,0,0 le remet couché (erreur faite sur Belgentier,
+# Saint-Jean-Cap-Ferrat, Callian et Immeuble Toulon). L'effet de -r varie selon le chemin et les actions
+# (-r 180,0,0 était juste sur Callian, faux sur Toulon) : ne jamais en ajouter, toujours contrôler.
 
-splat-transform -w -L 0,1,2,3,4 -H 1 -i 16 --lod-chunk-count 128 lcc-result/VillaCavalaire.lcc -r 90,0,0 lod-output/lod-meta.json
+## 1. Test rapide (≈ 1 min) : niveaux 3 et 4 seulement, compression SH rapide, dans lod-test/
+mkdir -p ../../../tmp/modele
+for k in 3 4; do splat-transform -w -L $k lcc-result/modele.lcc -N -H 1 ../../../tmp/modele/lod$k.ply; done
+splat-transform -w -i 1 --lod-chunk-count 128 ../../../tmp/modele/lod3.ply -l 0 ../../../tmp/modele/lod4.ply -l 1 lod-test/lod-meta.json
+splat-transform lod-test/lod-meta.json --stats null | grep -E "^\| (x|y|z) " | head -3
+# Comparer au "boundingBox" du .lcc (E, N, H). Bon repère : x = E, y = −H (plage de H inversée,
+# la plus petite), z = N. Si y reprend la plage de N, le modèle est couché.
+# Vue : http://localhost:4001/?settings=projects/<projet>/settings.json&content=projects/<projet>/lod-test/lod-meta.json
+# (é du chemin à écrire %C3%A9 dans l'URL). Supprimer lod-test/ ensuite.
+
+## 2. Conversion complète : un PLY par niveau (-N n'est efficace que niveau par niveau), puis combinaison
+for k in 0 1 2 3 4; do splat-transform -w -L $k lcc-result/modele.lcc -N -H 1 ../../../tmp/modele/lod$k.ply; done
+splat-transform -w -i 16 --lod-chunk-count 128 ../../../tmp/modele/lod0.ply -l 0 ../../../tmp/modele/lod1.ply -l 1 ../../../tmp/modele/lod2.ply -l 2 ../../../tmp/modele/lod3.ply -l 3 ../../../tmp/modele/lod4.ply -l 4 lod-output/lod-meta.json
+rm -r ../../../tmp/modele
+splat-transform lod-output/lod-meta.json --stats null | grep -E "^\| (x|y|z) " | head -3
+# (PLY à 1 bande SH ≈ 100 o par splat : ≈ 3 Go pour 28 M splats.)
+
+## 3. settings.json (copie de celui d'un autre projet) et project.json (une scène : content, settings, speed)
+# Caméra de départ : dans le viewer, ouvrir le panneau debug (Ctrl+Shift+D ou ?debug), se placer, puis dans
+# la console du navigateur : copy(JSON.stringify(getCameraState())). La pose {"position","angles","distance"}
+# se convertit en position/target pour settings.json (depuis la racine du dépôt) :
+node --input-type=module -e "import {Quat,Vec3} from './node_modules/playcanvas/build/playcanvas.mjs'; const s=<pose collée>; const t=new Quat().setFromEulerAngles(...s.angles).transformVector(Vec3.FORWARD,new Vec3()).mulScalar(s.distance).add(new Vec3(...s.position)); console.log(JSON.stringify({position:s.position.map(v=>+v.toFixed(3)),target:[t.x,t.y,t.z].map(v=>+v.toFixed(3))}))"
+# fov 85 en intérieur, 75 en extérieur. Test : http://localhost:4001/?project=projects/<projet>/project.json
 
 # géoréférencement (TKT-227) : splat-transform perd "offset" et "epsg" du .lcc,
 # les recopier dans le bloc "coordinates" du settings.json de la scène
@@ -285,34 +318,34 @@ node scripts/las-to-splats.mjs nuage.laz tmp/nuage --lcc lcc-result/Villa_Callia
 # Test : http://localhost:4001/?project=projects/parking-muy/project.json
 
 # 1. Export LCC → PLY (LOD 0 = pleine résolution)
-splat-transform -w -L 0 Maison_Nico.lcc -r 90,0,0 full.ply
+splat-transform -w -L 0 Maison_Nico.lcc -N full.ply
 
 # 2. Pipeline PLY avec tes propres niveaux
-splat-transform -w -d 70% full.ply lod1.ply
-splat-transform -w -d 45% full.ply lod2.ply
-splat-transform -w -d 25% full.ply lod3.ply
-splat-transform -w -d 10% full.ply lod4.ply
+splat-transform -w full.ply -d 70% lod1.ply
+splat-transform -w full.ply -d 45% lod2.ply
+splat-transform -w full.ply -d 25% lod3.ply
+splat-transform -w full.ply -d 10% lod4.ply
 
 # 3. Combinaison finale
-splat-transform -w -H 1 -i 16 --lod-chunk-count 128 full.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 lod-output/lod-meta.json
+splat-transform -w -i 16 --lod-chunk-count 128 full.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 lod-output/lod-meta.json -H 1
 
 # pour créer les lod depuis un ply source
 
 ## passer de 3sh à 1sh
-splat-transform -H 1 input.ply output.ply
+splat-transform input.ply -H 1 output.ply
 
 ## Étape 1 : Créer les LODs décimés (PLY intermédiaires)
-splat-transform -w -d 50% ton-modele.ply lod1.ply
-splat-transform -w -d 25% ton-modele.ply lod2.ply
+splat-transform -w ton-modele.ply -d 50% lod1.ply
+splat-transform -w ton-modele.ply -d 25% lod2.ply
 
 ## Étape 2 : Combiner en LOD streaming avec filtrage SH
-splat-transform -w -H 1 -i 16 --lod-chunk-count 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 output/lod-meta.json
+splat-transform -w -i 16 --lod-chunk-count 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 output/lod-meta.json -H 1
 
 # LODs intermédiaires plus granulaires
-splat-transform -w -d 70% ton-modele.ply lod1.ply
-splat-transform -w -d 45% ton-modele.ply lod2.ply
-splat-transform -w -d 25% ton-modele.ply lod3.ply
-splat-transform -w -d 10% ton-modele.ply lod4.ply
+splat-transform -w ton-modele.ply -d 70% lod1.ply
+splat-transform -w ton-modele.ply -d 45% lod2.ply
+splat-transform -w ton-modele.ply -d 25% lod3.ply
+splat-transform -w ton-modele.ply -d 10% lod4.ply
 
 # Combinaison finale (SH filtrage uniquement ici, pas aux étapes intermédiaires)
-splat-transform -w -H 1 -i 16 --lod-chunk-count 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 output/lod-meta.json
+splat-transform -w -i 16 --lod-chunk-count 256 ton-modele.ply -l 0 lod1.ply -l 1 lod2.ply -l 2 lod3.ply -l 3 lod4.ply -l 4 output/lod-meta.json -H 1

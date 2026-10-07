@@ -21,9 +21,10 @@
 //   --keep-noise        garde les classes 7 et 18 (bruit), retirées par défaut
 //
 // Chaque niveau est écrit en PLY 3DGS (lod0.ply, lod1.ply…), offset retiré,
-// avec la rotation -r 90,0,0 que les .lcc reçoivent de splat-transform déjà
-// appliquée : (E, N, H) → (E, −H, N). Le viewer garde donc son sourceFromWorld
-// par défaut. La commande splat-transform à lancer est affichée à la fin.
+// dans le repère où splat-transform v3.3.3 place un .lcc (sans -r, son lecteur
+// .lcc l'oriente déjà) : (E, N, H) → (E, −H, N). Le viewer garde donc son
+// sourceFromWorld par défaut. La commande splat-transform à lancer est affichée
+// à la fin.
 //
 // Les LAZ sont décompressés par PDAL (`pdal translate`) dans le dossier de
 // sortie avant lecture.
@@ -337,7 +338,7 @@ for (let first = 0; first < pointCount; first += CHUNK_POINTS) {
             const s = logScales[k];
             const v = o.buf;
             let w = o.used++ * PLY_PROPERTIES.length;
-            // Rotation de 90° autour de X, comme `splat-transform -r 90,0,0`.
+            // Rotation de 90° autour de X : repère des .lcc après splat-transform.
             v[w++] = x; v[w++] = -z; v[w++] = y;
             v[w++] = (r - 0.5) / SH_C0; v[w++] = (g - 0.5) / SH_C0; v[w++] = (b - 0.5) / SH_C0;
             v[w++] = OPACITY_LOGIT;
