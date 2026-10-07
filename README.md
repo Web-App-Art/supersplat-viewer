@@ -283,6 +283,45 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # par exemple 2 dans une pièce, 4 au-dessus d'un site. Hors projet : ?speed=2.
 # L'utilisateur le change dans Paramètres ou avec + / - ; son choix vaut pour la scène jusqu'à la fin de la session.
 
+# ===== Préparer la carte d'une scène (TKT-268) =====
+# Outil : scripts/scene-map.mjs. Fond de la mini-carte, calculé une fois ici : par niveau, une vue de dessus
+# des splats coupée de sol − 0,2 à sol + 1,8 m (map/<id>.webp) et la carte des murs (map/<id>-murs.png) ;
+# pour un extérieur (Callian, parking), une « vue d'avion » entière, sans murs. Nord en haut.
+# Prérequis : splat-transform v3.3.3, brew install webp (cwebp / dwebp). Pas de Python.
+# La scène doit avoir un project.json : en créer un minimal si besoin (id, name, content, settings),
+# comme public/projects/callian/project.json ou appartement-yannick/project.json (un .sog marche tel quel).
+# Les cartes sont écrites dans map/ à côté du project.json (map/<id scène>/ si le projet a plusieurs scènes),
+# donc dans public/projects (hors git) : les déployer avec la scène.
+
+## Étape 1 : proposer les niveaux (≈ 10 à 50 s)
+node scripts/scene-map.mjs propose public/projects/immeuble-toulon/project.json
+# Lit le LOD 1 (--lod n pour un autre), détecte les sols (surfaces horizontales avec du vide au-dessus,
+# espacés d'au moins 2,20 m) et écrit map/levels.json et la planche map/controle.html : vues de côté avec les
+# niveaux, une vignette par niveau. Une vue d'avion est toujours proposée, gardée d'office si aucun niveau.
+# Refuse d'écraser un levels.json existant (déjà édité) sans --force.
+
+## Étape 2 : valider à la main, dans map/levels.json
+# Relire la planche. Toitures, faîtages et houppiers sont souvent pris pour des sols :
+# "keep": false pour un faux niveau, "name" pour les vrais ("RDC", "R+1"…). Au besoin, corriger "floor"
+# (m, H du repère de la scène), "bounds" [E0, N0, E1, N1] ou "cut" (hauteur de coupe au-dessus du sol).
+# Extérieur : garder seulement l'entrée "avion". Contrôles du 07/10/2026 :
+#   immeuble-toulon : 7 proposés, n7 (+11,74, toits) écarté ; callian : vue d'avion seule ;
+#   parking-muy : vue d'avion seule (proposée d'office) ; appartement-yannick : n2 (+2,81, faîtage) écarté.
+
+## Étape 3 : construire les cartes (≈ 15 s par niveau intérieur, 1 à 2 min pour une vue d'avion)
+node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
+# Écrit map/<id>.webp, map/<id>-murs.png et le bloc "map" de la scène dans project.json (reste du fichier
+# inchangé ; s'il n'est pas au format JSON.stringify(…, 2), le bloc est affiché pour être recopié) :
+#   "map": { "north": 0, "levels": [ {"id": "n1", "name": "RDC", "floor": -6.76,
+#            "bounds": [E0, N0, E1, N1], "photo": "./map/n1.webp", "walls": "./map/n1-murs.png"} ] }
+# bounds en (E, N) du repère source (coordinates.ts) : point moteur (x, y, z) → carte (−x, z).
+# "north": 0 si la scène est géoréférencée (nord du quadrillage en haut), absent sinon.
+# La planche est complétée (photo + murs en rouge) avec un contrôle du recalage photo / splats :
+# « RECALAGE DOUTEUX » si le meilleur décalage dépasse 10 cm ou si la corrélation est faible. Relire la planche.
+# Pièges : le filtre -B et le rendu .webp de splat-transform sont en (−E, H, N), le PLY en (E, −H, N).
+# Au-delà d'environ 800 px, splat-transform perd des splats sans prévenir sur une tranche dense : le script
+# rend donc en tuiles de 640 px au plus. Relancer build après chaque modification de levels.json.
+
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
 # et chargée seulement si l'utilisateur choisit « Altitude NGF ». Déployer public/geoid/ avec le viewer.
