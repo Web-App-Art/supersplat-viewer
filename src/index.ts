@@ -294,7 +294,6 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         // ARTLIGHT
         measureMode: false,
         areaMeasureMode: false,
-        floorplanMode: false,
         flatnessMeasureMode: false,
         volumeMeasureMode: false,
         pointMode: false,

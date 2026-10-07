@@ -1162,6 +1162,10 @@ $tool-ok: #bef264;
 $tool-ko: #fca5a5;
 $tool-warning: #fbbf24;
 
+// ARTLIGHT (TKT-268) : côté de la mini-carte
+$minimap-size: 180px;
+$minimap-size-narrow: 110px;
+
 // Aide contextuelle en haut de l'écran (planéité, coupe)
 .tool-hint {
     position: fixed;
@@ -2726,6 +2730,15 @@ button.section-folder-open:hover .section-folder-name {
     }
 }
 
+// ARTLIGHT (TKT-268) : sous la mini-carte quand la scène en a une.
+body.has-minimap #zeroBadge {
+    top: calc(16px + #{$minimap-size} + 8px);
+
+    @media (max-width: 720px) {
+        top: calc(16px + #{$minimap-size-narrow} + 8px);
+    }
+}
+
 .zero-badge-dot {
     flex: none;
     width: 8px;
@@ -2766,151 +2779,145 @@ button.section-folder-open:hover .section-folder-name {
     }
 }
 
-/* Floorplan tool */
+// ARTLIGHT (TKT-268, lot 2) : mini-carte en haut à gauche (les panneaux
+// d'outils sont en haut à droite, la barre à menus en bas), vue agrandie au clic.
 
-#floorplanOverlay {
+#minimap {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 10;
+    top: max(16px, env(safe-area-inset-top));
+    left: max(16px, env(safe-area-inset-left));
+    z-index: 21;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    color: $tool-text;
+
+    &.hidden,
+    .hidden {
+        display: none !important;
+    }
+
+    // la règle globale `canvas` vise la vue 3D, plein écran
+    canvas {
+        position: static;
+        display: block;
+        width: 100%;
+        height: 100%;
+        opacity: 1;
+    }
 }
 
-#floorplanPanel {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    z-index: 2;
-    width: 220px;
-    background: rgba(#141414, 0.92);
-    border-radius: 8px;
-    padding: 12px;
+.minimap-compact {
+    display: block;
+    width: $minimap-size;
+    height: $minimap-size;
+    padding: 0;
+    border: 1px solid $tool-border;
+    border-radius: 10px;
+    overflow: hidden;
+    background: $tool-panel-bkg;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    cursor: zoom-in;
+
+    &:hover {
+        border-color: rgba(255, 255, 255, 0.35);
+    }
+
+    @media (max-width: 720px) {
+        width: $minimap-size-narrow;
+        height: $minimap-size-narrow;
+        border-radius: 8px;
+    }
+}
+
+.minimap-panel {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    pointer-events: auto;
-    color: $clr-text;
-    font-family: Arial, sans-serif;
-    font-size: 12px;
-    backdrop-filter: blur(8px);
+    width: min(560px, calc(100vw - 32px));
+    height: min(620px, calc(100vh - 16px - 76px));
+    box-sizing: border-box;
+    padding: 10px 12px 12px;
+    background: $tool-panel-bkg;
+    border: 1px solid $tool-border;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
-.floorplan-title {
-    font-size: 14px;
-    font-weight: bold;
-    color: $clr-text-light;
-    margin-bottom: 4px;
-}
-
-.floorplan-row {
+.minimap-header {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.minimap-title {
+    font-weight: 600;
+    color: $tool-text-strong;
+}
+
+.minimap-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: $tool-control-bkg;
+    color: $tool-text;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        background: $tool-control-bkg-hover;
+    }
+}
+
+.minimap-levels,
+.minimap-backgrounds {
+    display: flex;
+    flex-wrap: wrap;
     gap: 4px;
 }
 
-.floorplan-slider-label {
-    color: $clr-text-dark;
-    font-size: 11px;
-}
-
-.floorplan-slider-wrap {
-    display: flex;
+.minimap-level,
+.minimap-bg {
+    display: inline-flex;
     align-items: center;
     gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: $tool-control-bkg;
+    color: $tool-text-muted;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+        background: $tool-control-bkg-hover;
+        color: $tool-text;
+    }
+
+    &.active {
+        border-color: $tool-accent;
+        color: $tool-text-strong;
+    }
 }
 
-.floorplan-slider {
+// Point vert : l'étage où se trouve le visiteur.
+.minimap-here {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: transparent;
+
+    .visitor > & {
+        background: #22c55e;
+    }
+}
+
+.minimap-canvas {
     flex: 1;
-    height: 4px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: $clr-bkg-light;
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-
-    &::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: $clr-accent;
-        cursor: pointer;
-    }
-}
-
-.floorplan-slider-value {
-    min-width: 50px;
-    text-align: right;
-    color: $clr-text-light;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-}
-
-.floorplan-btn {
-    width: 100%;
-    padding: 6px 0;
-    border: 1px solid $clr-bkg-light;
-    border-radius: 4px;
-    background: $clr-bkg;
-    color: $clr-text;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.15s;
-
-    &:hover {
-        background: $clr-bkg-light;
-    }
-}
-
-.floorplan-btn-primary {
-    background: $clr-accent;
-    color: #fff;
-    border-color: $clr-accent;
-
-    &:hover {
-        background: lighten($clr-accent, 8%);
-    }
-}
-
-.floorplan-desc {
-    color: $clr-text-dark;
-    font-size: 10px;
-    line-height: 1.4;
-}
-
-.floorplan-row-inline {
-    flex-direction: row;
-    align-items: center;
-}
-
-.floorplan-check-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    color: $clr-text;
-    font-size: 12px;
-
-    input[type="checkbox"] {
-        accent-color: $clr-accent;
-    }
-}
-
-#floorplanCanvas {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 1;
-    pointer-events: auto;
-    cursor: grab;
-    background: #e8e8e8;
-
-    &:active {
-        cursor: grabbing;
-    }
+    min-height: 0;
+    border-radius: 8px;
+    overflow: hidden;
 }

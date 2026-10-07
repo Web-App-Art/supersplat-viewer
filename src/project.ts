@@ -34,6 +34,28 @@ type Portal = {
     arrival?: PortalArrival;
 };
 
+/**
+ * ARTLIGHT (TKT-268) : un niveau de la carte, préparé par scripts/scene-map.mjs.
+ * bounds en (E, N) du repère source : un point moteur (x, y, z) est en (−x, z).
+ */
+type SceneMapLevel = {
+    id: string;
+    name?: string;
+    /** Hauteur du sol, y moteur. */
+    floor: number;
+    bounds: [number, number, number, number];
+    /** Vue de dessus (.webp transparent hors scan), relative au project.json. */
+    photo: string;
+    /** Carte des murs (PNG gris + alpha), mêmes bounds ; absente pour une vue d'avion. */
+    walls?: string;
+};
+
+type SceneMap = {
+    /** Angle du nord en degrés, 0 = en haut ; absent pour une scène non géoréférencée. */
+    north?: number;
+    levels: SceneMapLevel[];
+};
+
 type ProjectScene = {
     id: string;
     name?: string;
@@ -58,6 +80,8 @@ type ProjectScene = {
      */
     speed?: number;
     portals?: Portal[];
+    /** ARTLIGHT (TKT-268) : carte de la scène, voir src/minimap.ts. */
+    map?: SceneMap;
 };
 
 type Project = {
@@ -185,5 +209,5 @@ const findPortal = (project: Project, portalId?: string | null): Portal | null =
     return null;
 };
 
-export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene };
+export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene, SceneMap, SceneMapLevel };
 export { findPortal, resolveScene, validateProject };

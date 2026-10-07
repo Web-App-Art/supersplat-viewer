@@ -3,8 +3,8 @@ import type { Entity, GSplatComponent } from 'playcanvas';
 
 import type { Global, State } from './types';
 
-// ARTLIGHT: vrai dès qu'un de nos outils (mesure, surface, planéité, plan de
-// sol) est actif. Ces outils s'approprient le clic canvas pour poser et
+// ARTLIGHT: vrai dès qu'un de nos outils (mesure, surface, planéité, cubature,
+// point, coupe) est actif. Ces outils s'approprient le clic canvas pour poser et
 // déplacer leurs points ; la navigation au clic ajoutée en amont (clic pour se
 // déplacer / recentrer, double-clic pour changer de mode) doit donc se taire
 // tant qu'un outil est ouvert.
@@ -14,7 +14,6 @@ export function isToolActive(state: State): boolean {
         state.flatnessMeasureMode ||
         state.volumeMeasureMode ||
         state.pointMode ||
-        state.floorplanMode ||
         state.sectionMode;
 }
 
@@ -26,7 +25,6 @@ export function closeTools(state: State) {
     state.flatnessMeasureMode = false;
     state.volumeMeasureMode = false;
     state.pointMode = false;
-    state.floorplanMode = false;
     state.sectionMode = false;
 }
 

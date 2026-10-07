@@ -41,13 +41,13 @@ import { FlatnessTool } from './flatness-tool'; // ARTLIGHT
 import { InputController } from './input-controller';
 import { MeasureTool } from './measure-tool'; // ARTLIGHT
 import { MeshDebugOverlay } from './mesh-debug-overlay';
+import { MiniMap } from './minimap'; // ARTLIGHT (TKT-268)
 import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
-import { FloorplanTool } from './tools/floorplan-tool'; // ARTLIGHT
 import type { Config, ContentMode, Global } from './types';
 import { VolumeTool } from './volume-tool'; // ARTLIGHT
 import { VoxelDebugOverlay } from './voxel-debug-overlay';
@@ -168,6 +168,8 @@ class Viewer {
 
     portals: Portals | null = null; // ARTLIGHT
 
+    miniMap: MiniMap | null = null; // ARTLIGHT (TKT-268)
+
     voxelOverlay: VoxelDebugOverlay | null = null;
 
     meshOverlay: MeshDebugOverlay | null = null;
@@ -182,8 +184,6 @@ class Viewer {
     areaMeasureTool: AreaMeasureTool;
 
     flatnessTool: FlatnessTool;
-
-    floorplanTool: FloorplanTool;
 
     volumeTool: VolumeTool;
 
@@ -409,6 +409,9 @@ class Viewer {
                 // ARTLIGHT: après Annotations, qui crée le parent DOM partagé
                 // par tous les hotspots.
                 this.portals = new Portals(global);
+
+                // ARTLIGHT (TKT-268) : rien sans bloc « map » dans la scène.
+                this.miniMap = MiniMap.create(global);
             }
 
             this.picker = new Picker(app, camera);
@@ -502,16 +505,6 @@ class Viewer {
                     this.sectionTool.activate();
                 } else {
                     this.sectionTool.deactivate();
-                }
-            });
-
-            // Floorplan tool
-            this.floorplanTool = new FloorplanTool(global);
-            events.on('floorplanMode:changed', (value: boolean) => {
-                if (value) {
-                    this.floorplanTool.activate();
-                } else {
-                    this.floorplanTool.deactivate();
                 }
             });
 

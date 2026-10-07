@@ -73,6 +73,5 @@
     "tooltip.artlight-measure": "Measure",
     "tooltip.artlight-area-measure": "Area Measure",
     "tooltip.artlight-flatness": "Flatness",
-    "tooltip.artlight-volume": "Volume",
-    "tooltip.artlight-floorplan": "Floor Plan"
+    "tooltip.artlight-volume": "Volume"
 }

@@ -1,0 +1,546 @@
+// ARTLIGHT (TKT-268, lot 2)
+//
+// Mini-carte de la scène : vue de dessus du niveau où se trouve le visiteur,
+// avec un point et un cône de vue qui suivent la caméra. Un clic l'agrandit :
+// niveau entier, sélecteur de niveau et choix du fond (Photo / Mixte / Murs).
+//
+// Les cartes sont préparées une fois pour toutes par scripts/scene-map.mjs
+// (lot 1) et décrites par le bloc « map » de la scène dans project.json :
+//   "map": { "north": 0, "levels": [ { "id", "name", "floor",
+//            "bounds": [E0, N0, E1, N1], "photo": "./map/<id>.webp",
+//            "walls": "./map/<id>-murs.png" } ] }
+// Chemins relatifs au project.json. bounds en (E, N) du repère source : un
+// point moteur (x, y, z) se place en (−x, z) sur la carte, le nord en haut.
+// Le zéro utilisateur (TKT-226) ne change rien. Une scène sans bloc « map »
+// n'affiche rien.
+
+import { localize } from './localization';
+import { resolveScene } from './project';
+import type { ProjectContext, SceneMap, SceneMapLevel } from './project';
+import { isToolActive } from './tool-utils';
+import type { Global } from './types';
+
+type Background = 'photo' | 'mixed' | 'walls';
+
+// Le niveau suivi est le plus haut sol sous l'œil du visiteur, à 0,8 m près ;
+// l'hystérésis évite de basculer sans cesse sur un palier d'escalier.
+const EYE_ABOVE_FLOOR = 0.8;
+const LEVEL_HYSTERESIS = 0.3;
+
+// Largeur de terrain montrée par la mini-carte, centrée sur le visiteur.
+const COMPACT_SPAN_INDOOR = 16;
+const COMPACT_SPAN_AERIAL = 40;
+
+const BACKGROUND_KEY = 'artlight.map.background';
+
+const COLORS = {
+    dark: '#18181b',
+    paper: '#ecebe8',
+    accent: '#84cc16',
+    visitor: '#facc15',
+    text: '#fafafa'
+};
+
+const readBackground = (): Background => {
+    try {
+        const value = localStorage.getItem(BACKGROUND_KEY);
+        return value === 'photo' || value === 'walls' ? value : 'mixed';
+    } catch {
+        return 'mixed';
+    }
+};
+
+const storeBackground = (value: Background) => {
+    try {
+        localStorage.setItem(BACKGROUND_KEY, value);
+    } catch {
+        // stockage indisponible (navigation privée) : le choix vaut pour la session
+    }
+};
+
+// Un niveau inutilisable est écarté sans bloquer les autres.
+const isValidLevel = (level: SceneMapLevel) => {
+    const b = level?.bounds;
+    return typeof level?.id === 'string' &&
+        typeof level.photo === 'string' &&
+        Number.isFinite(level.floor) &&
+        Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) &&
+        b[2] > b[0] && b[3] > b[1];
+};
+
+// Bloc « map » de la scène active, chemins résolus ; null sans carte.
+const readSceneMap = (): { map: SceneMap, levels: SceneMapLevel[] } | null => {
+    const context = (window as any).sse?.project as ProjectContext | undefined;
+    if (!context?.project?.scenes) {
+        return null;
+    }
+    const scene = resolveScene(context.project, context.sceneId);
+    const map = scene?.map;
+    if (!map || !Array.isArray(map.levels)) {
+        return null;
+    }
+    const base = new URL(context.projectParam, location.href);
+    const levels = map.levels.filter((level) => {
+        if (isValidLevel(level)) return true;
+        console.warn('Carte : niveau ignoré, bloc incomplet', level);
+        return false;
+    }).map(level => ({
+        ...level,
+        photo: new URL(level.photo, base).href,
+        walls: level.walls ? new URL(level.walls, base).href : undefined
+    })).sort((a, b) => a.floor - b.floor);
+
+    return levels.length ? { map, levels } : null;
+};
+
+// Vue d'une carte : centre (E, N) et mètres par pixel CSS.
+type View = { e: number, n: number, mpp: number };
+
+class MiniMap {
+    private global: Global;
+
+    private map: SceneMap;
+
+    private levels: SceneMapLevel[];
+
+    private images = new Map<string, HTMLImageElement | null>();
+
+    private background: Background;
+
+    private root: HTMLDivElement;
+
+    private compact: HTMLButtonElement;
+
+    private compactCanvas: HTMLCanvasElement;
+
+    private panel: HTMLDivElement;
+
+    private panelCanvas: HTMLCanvasElement;
+
+    private levelList: HTMLDivElement;
+
+    private backgroundRow: HTMLDivElement;
+
+    private expanded = false;
+
+    // Niveau choisi dans la vue agrandie ; null = celui du visiteur.
+    private pinnedLevel: number | null = null;
+
+    private visitorLevel = -1;
+
+    private dirty = true;
+
+    private pose = { e: NaN, n: NaN, h: NaN, heading: NaN, fov: NaN };
+
+    private narrow: MediaQueryList;
+
+    /**
+     * Mini-carte de la scène active, ou null si elle n'a pas de bloc « map ».
+     *
+     * @param {Global} global - Le contexte applicatif.
+     * @returns {MiniMap | null} La mini-carte, ou null.
+     */
+    static create(global: Global) {
+        const found = readSceneMap();
+        return found ? new MiniMap(global, found.map, found.levels) : null;
+    }
+
+    private constructor(global: Global, map: SceneMap, levels: SceneMapLevel[]) {
+        this.global = global;
+        this.map = map;
+        this.levels = levels;
+        this.background = readBackground();
+        this.narrow = window.matchMedia('(max-width: 720px)');
+
+        this.buildDom();
+
+        this.narrow.addEventListener('change', () => {
+            this.dirty = true;
+        });
+        new ResizeObserver(() => {
+            this.dirty = true;
+        }).observe(this.root);
+
+        global.app.on('update', () => this.update());
+    }
+
+    private hasWalls(level: SceneMapLevel) {
+        return !!level.walls;
+    }
+
+    private get displayedLevel() {
+        return this.expanded && this.pinnedLevel !== null ? this.pinnedLevel : Math.max(0, this.visitorLevel);
+    }
+
+    // ── DOM ──
+
+    private buildDom() {
+        const tr = (key: string) => localize(`artlight.map.${key}`);
+
+        this.root = document.createElement('div');
+        this.root.id = 'minimap';
+
+        this.compact = document.createElement('button');
+        this.compact.className = 'minimap-compact';
+        this.compact.title = tr('expand');
+        this.compact.setAttribute('aria-label', tr('expand'));
+        this.compactCanvas = document.createElement('canvas');
+        this.compact.appendChild(this.compactCanvas);
+        this.compact.addEventListener('click', () => this.setExpanded(true));
+
+        this.panel = document.createElement('div');
+        this.panel.className = 'minimap-panel hidden';
+
+        const header = document.createElement('div');
+        header.className = 'minimap-header';
+        const title = document.createElement('span');
+        title.className = 'minimap-title';
+        title.textContent = tr('title');
+        const close = document.createElement('button');
+        close.className = 'minimap-close';
+        close.title = tr('close');
+        close.setAttribute('aria-label', tr('close'));
+        close.textContent = '×';
+        close.addEventListener('click', () => this.setExpanded(false));
+        header.append(title, close);
+
+        this.levelList = document.createElement('div');
+        this.levelList.className = 'minimap-levels';
+        // Du plus haut au plus bas, comme les boutons d'un ascenseur.
+        for (let i = this.levels.length - 1; i >= 0; i--) {
+            const level = this.levels[i];
+            const button = document.createElement('button');
+            button.className = 'minimap-level';
+            button.dataset.index = String(i);
+            button.title = `${localize('artlight.map.floor')} ${level.floor >= 0 ? '+' : '−'}${Math.abs(level.floor).toFixed(2).replace('.', ',')} m`;
+            const dot = document.createElement('span');
+            dot.className = 'minimap-here';
+            dot.title = tr('here');
+            const name = document.createElement('span');
+            name.textContent = level.name ?? level.id;
+            button.append(dot, name);
+            button.addEventListener('click', () => {
+                this.pinnedLevel = i === this.visitorLevel ? null : i;
+                this.dirty = true;
+            });
+            this.levelList.appendChild(button);
+        }
+        this.levelList.classList.toggle('hidden', this.levels.length < 2);
+
+        this.backgroundRow = document.createElement('div');
+        this.backgroundRow.className = 'minimap-backgrounds';
+        for (const value of ['photo', 'mixed', 'walls'] as Background[]) {
+            const button = document.createElement('button');
+            button.className = 'minimap-bg';
+            button.dataset.value = value;
+            button.textContent = tr(`background-${value}`);
+            button.addEventListener('click', () => {
+                this.background = value;
+                storeBackground(value);
+                this.dirty = true;
+            });
+            this.backgroundRow.appendChild(button);
+        }
+
+        const canvasWrap = document.createElement('div');
+        canvasWrap.className = 'minimap-canvas';
+        this.panelCanvas = document.createElement('canvas');
+        canvasWrap.appendChild(this.panelCanvas);
+
+        this.panel.append(header, this.levelList, this.backgroundRow, canvasWrap);
+        this.root.append(this.compact, this.panel);
+        document.querySelector('#ui').appendChild(this.root);
+        document.body.classList.add('has-minimap');
+    }
+
+    private setExpanded(value: boolean) {
+        this.expanded = value;
+        this.pinnedLevel = null;
+        this.compact.classList.toggle('hidden', value);
+        this.panel.classList.toggle('hidden', !value);
+        this.dirty = true;
+    }
+
+    private refreshControls(level: SceneMapLevel) {
+        for (const button of Array.from(this.levelList.children) as HTMLElement[]) {
+            const index = Number(button.dataset.index);
+            button.classList.toggle('active', index === this.displayedLevel);
+            button.classList.toggle('visitor', index === this.visitorLevel);
+        }
+        const walls = this.hasWalls(level);
+        this.backgroundRow.classList.toggle('hidden', !walls);
+        for (const button of Array.from(this.backgroundRow.children) as HTMLElement[]) {
+            button.classList.toggle('active', button.dataset.value === this.background);
+        }
+    }
+
+    // ── Suivi de la caméra ──
+
+    private pickLevel(height: number) {
+        let index = 0;
+        for (let i = 0; i < this.levels.length; i++) {
+            if (this.levels[i].floor <= height) index = i;
+        }
+        return index;
+    }
+
+    private followLevel(y: number) {
+        const h = y - EYE_ABOVE_FLOOR;
+        if (this.visitorLevel < 0) {
+            this.visitorLevel = this.pickLevel(h);
+            return;
+        }
+        const up = this.pickLevel(h - LEVEL_HYSTERESIS);
+        const down = this.pickLevel(h + LEVEL_HYSTERESIS);
+        if (up > this.visitorLevel) {
+            this.visitorLevel = up;
+        } else if (down < this.visitorLevel) {
+            this.visitorLevel = down;
+        }
+    }
+
+    private update() {
+        const { app, camera, state } = this.global;
+
+        const hidden = app.xr?.active || (this.narrow.matches && isToolActive(state));
+        this.root.classList.toggle('hidden', hidden);
+        if (hidden) {
+            return;
+        }
+
+        // Pose de la caméra rendue, ramenée sur la carte : (x, y, z) → (−x, z).
+        const p = camera.getPosition();
+        const forward = camera.forward;
+        // Caméra tournée vers le sol : l'avant de la carte est le haut de l'image.
+        const dir = Math.hypot(forward.x, forward.z) > 0.2 ? forward : camera.up;
+        const heading = Math.atan2(-dir.x, dir.z);
+        const cam = camera.camera;
+        const device = app.graphicsDevice;
+        const aspect = device.width / Math.max(1, device.height);
+        const fov = cam.horizontalFov ? cam.fov : 2 * Math.atan(Math.tan(cam.fov * Math.PI / 360) * aspect) * 180 / Math.PI;
+
+        const pose = this.pose;
+        if (Math.abs(pose.e + p.x) > 0.01 || Math.abs(pose.n - p.z) > 0.01 || Math.abs(pose.h - p.y) > 0.01 ||
+            Math.abs(pose.heading - heading) > 0.005 || Math.abs(pose.fov - fov) > 0.2 || Number.isNaN(pose.e)) {
+            pose.e = -p.x;
+            pose.n = p.z;
+            pose.h = p.y;
+            pose.heading = heading;
+            pose.fov = fov;
+            const before = this.visitorLevel;
+            this.followLevel(p.y);
+            if (before !== this.visitorLevel && this.pinnedLevel === this.visitorLevel) {
+                this.pinnedLevel = null;
+            }
+            this.dirty = true;
+        }
+
+        if (this.dirty) {
+            this.dirty = false;
+            this.render();
+        }
+    }
+
+    // ── Images, chargées à la demande ──
+
+    private image(url: string | undefined) {
+        if (!url) return null;
+        if (this.images.has(url)) return this.images.get(url);
+        this.images.set(url, null);
+        const img = new Image();
+        img.decoding = 'async';
+        img.onload = () => {
+            this.images.set(url, img);
+            this.dirty = true;
+        };
+        img.onerror = () => console.warn('Carte : image introuvable', url);
+        img.src = url;
+        return null;
+    }
+
+    // ── Dessin ──
+
+    private render() {
+        const index = this.displayedLevel;
+        const level = this.levels[index];
+        this.refreshControls(level);
+
+        if (this.expanded) {
+            this.draw(this.panelCanvas, level, index === this.visitorLevel, true);
+        } else {
+            this.draw(this.compactCanvas, level, true, false);
+        }
+    }
+
+    private fitCanvas(canvas: HTMLCanvasElement) {
+        const ratio = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        if (canvas.width !== Math.round(w * ratio) || canvas.height !== Math.round(h * ratio)) {
+            canvas.width = Math.round(w * ratio);
+            canvas.height = Math.round(h * ratio);
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        return { ctx, w, h };
+    }
+
+    // Mini-carte : centrée sur le visiteur, sans sortir du niveau quand il
+    // est plus grand que la fenêtre. Vue agrandie : niveau entier.
+    private viewFor(level: SceneMapLevel, w: number, h: number, whole: boolean): View {
+        const [e0, n0, e1, n1] = level.bounds;
+        if (whole) {
+            const mpp = Math.max((e1 - e0) / w, (n1 - n0) / h) * 1.04;
+            return { e: (e0 + e1) / 2, n: (n0 + n1) / 2, mpp };
+        }
+        const span = Math.min(this.hasWalls(level) ? COMPACT_SPAN_INDOOR : COMPACT_SPAN_AERIAL, Math.max(e1 - e0, n1 - n0));
+        const mpp = span / Math.min(w, h);
+        const clamp = (v: number, lo: number, hi: number, half: number) => (
+            hi - lo <= 2 * half ? (lo + hi) / 2 : Math.min(hi - half, Math.max(lo + half, v))
+        );
+        return {
+            e: clamp(this.pose.e, e0, e1, w * mpp / 2),
+            n: clamp(this.pose.n, n0, n1, h * mpp / 2),
+            mpp
+        };
+    }
+
+    private draw(canvas: HTMLCanvasElement, level: SceneMapLevel, showVisitor: boolean, whole: boolean) {
+        const { ctx, w, h } = this.fitCanvas(canvas);
+        if (!w || !h) return;
+
+        const view = this.viewFor(level, w, h, whole);
+        const toX = (e: number) => w / 2 + (e - view.e) / view.mpp;
+        const toY = (n: number) => h / 2 - (n - view.n) / view.mpp;
+
+        const background: Background = this.hasWalls(level) ? this.background : 'photo';
+        ctx.fillStyle = background === 'walls' ? COLORS.paper : COLORS.dark;
+        ctx.fillRect(0, 0, w, h);
+
+        const [e0, n0, e1, n1] = level.bounds;
+        const x = toX(e0);
+        const y = toY(n1);
+        const dw = (e1 - e0) / view.mpp;
+        const dh = (n1 - n0) / view.mpp;
+        ctx.imageSmoothingEnabled = true;
+        if (background !== 'walls') {
+            const photo = this.image(level.photo);
+            if (photo) ctx.drawImage(photo, x, y, dw, dh);
+        }
+        if (background !== 'photo') {
+            const walls = this.image(level.walls);
+            if (walls) {
+                ctx.globalAlpha = background === 'mixed' ? 0.85 : 1;
+                ctx.drawImage(walls, x, y, dw, dh);
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        if (showVisitor) {
+            this.drawVisitor(ctx, toX(this.pose.e), toY(this.pose.n), w, h, whole ? 44 : 30);
+        }
+        if (Number.isFinite(this.map.north)) {
+            this.drawNorth(ctx, w - 16, 18, this.map.north);
+        }
+        if (whole) {
+            this.drawScale(ctx, view.mpp, h, background === 'walls');
+        } else if (this.levels.length > 1) {
+            this.drawLabel(ctx, level.name ?? level.id, w, h);
+        }
+    }
+
+    private drawVisitor(ctx: CanvasRenderingContext2D, px: number, py: number, w: number, h: number, radius: number) {
+        // Hors du cadre (caméra en orbite loin du bâtiment) : le point reste
+        // au bord, évidé, dans la bonne direction.
+        const margin = 7;
+        const inside = px >= margin && px <= w - margin && py >= margin && py <= h - margin;
+        const x = Math.min(w - margin, Math.max(margin, px));
+        const y = Math.min(h - margin, Math.max(margin, py));
+
+        if (inside) {
+            const half = Math.min(this.pose.fov, 170) * Math.PI / 360;
+            // Cap mesuré depuis le nord, dans le sens horaire ; à l'écran le
+            // nord est vers le haut (−y).
+            const a = this.pose.heading - Math.PI / 2;
+            const cone = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            cone.addColorStop(0, 'rgba(250, 204, 21, 0.85)');
+            cone.addColorStop(1, 'rgba(250, 204, 21, 0.2)');
+            ctx.fillStyle = cone;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.arc(x, y, radius, a - half, a + half);
+            ctx.closePath();
+            ctx.fill();
+            // bords du champ, lisibles sur un parquet clair comme sur le noir
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = inside ? '#fff' : COLORS.visitor;
+        ctx.fillStyle = inside ? COLORS.visitor : 'rgba(0, 0, 0, 0.4)';
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    private drawNorth(ctx: CanvasRenderingContext2D, x: number, y: number, north: number) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.rotate(north * Math.PI / 180);
+        ctx.fillStyle = COLORS.text;
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(4, -2);
+        ctx.lineTo(-4, -2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.font = 'bold 9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('N', 0, 4);
+        ctx.restore();
+    }
+
+    private drawLabel(ctx: CanvasRenderingContext2D, text: string, w: number, h: number) {
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        const tw = Math.min(ctx.measureText(text).width, w - 16);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(4, h - 20, tw + 10, 16);
+        ctx.fillStyle = COLORS.text;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, 9, h - 12, w - 16);
+    }
+
+    // Échelle graphique de 1, 2 ou 5 × 10^k m, autour de 80 px.
+    private drawScale(ctx: CanvasRenderingContext2D, mpp: number, h: number, light: boolean) {
+        const target = 80 * mpp;
+        const pow = 10 ** Math.floor(Math.log10(target));
+        const length = [5, 2, 1].map(f => f * pow).find(v => v <= target) ?? pow;
+        const px = length / mpp;
+        const x = 12;
+        const y = h - 14;
+        ctx.strokeStyle = light ? '#27272a' : COLORS.text;
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y - 5);
+        ctx.lineTo(x, y);
+        ctx.lineTo(x + px, y);
+        ctx.lineTo(x + px, y - 5);
+        ctx.stroke();
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`${length} m`, x + px + 8, y + 4);
+    }
+}
+
+export { MiniMap };

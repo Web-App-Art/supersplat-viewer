@@ -60,7 +60,6 @@ type State = {
     // ont été renommés hasCollisionOverlay/collisionOverlayEnabled en amont).
     measureMode: boolean;
     areaMeasureMode: boolean;
-    floorplanMode: boolean;
     flatnessMeasureMode: boolean;
     volumeMeasureMode: boolean;
     pointMode: boolean;                         // ARTLIGHT (TKT-225): outil « Point XYZ »

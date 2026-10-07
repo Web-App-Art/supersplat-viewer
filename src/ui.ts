@@ -271,7 +271,6 @@ const initUI = (global: Global) => {
         'pointXYZ',
         'section',
         'contentMode',
-        'floorplan',
         'tooltip',
         'annotationNav', 'annotationPrev', 'annotationNext', 'annotationInfo', 'annotationNavTitle',
         'viewerTitle', 'appVersionLabel',
@@ -884,15 +883,14 @@ const initUI = (global: Global) => {
     // referme avant que le nouveau s'ouvre : chacun rend le curseur qu'il a
     // trouvé en s'ouvrant.
     type ToolMode = 'measureMode' | 'areaMeasureMode' | 'flatnessMeasureMode' | 'volumeMeasureMode' |
-        'pointMode' | 'sectionMode' | 'floorplanMode';
+        'pointMode' | 'sectionMode';
     const toolButtons: [ToolMode, HTMLElement][] = [
         ['measureMode', dom.measure],
         ['areaMeasureMode', dom.areaMeasure],
         ['flatnessMeasureMode', dom.flatnessMeasure],
         ['volumeMeasureMode', dom.volumeMeasure],
         ['pointMode', dom.pointXYZ],
-        ['sectionMode', dom.section],
-        ['floorplanMode', dom.floorplan]
+        ['sectionMode', dom.section]
     ];
     // ARTLIGHT (TKT-242) : le bouton Outils prend l'icône de l'outil ouvert.
     const toolsMenuIcon = dom.toolsMenuIcon.innerHTML;
