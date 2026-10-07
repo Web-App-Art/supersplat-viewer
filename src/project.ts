@@ -48,6 +48,13 @@ type SceneMapLevel = {
     photo: string;
     /** Carte des murs (PNG gris + alpha), mêmes bounds ; absente pour une vue d'avion. */
     walls?: string;
+    /** Lot 4 : noms de pièces saisis à la préparation, at en (E, N) comme bounds. */
+    rooms?: SceneMapRoom[];
+};
+
+type SceneMapRoom = {
+    name: string;
+    at: [number, number];
 };
 
 type SceneMap = {
@@ -209,5 +216,5 @@ const findPortal = (project: Project, portalId?: string | null): Portal | null =
     return null;
 };
 
-export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene, SceneMap, SceneMapLevel };
+export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene, SceneMap, SceneMapLevel, SceneMapRoom };
 export { findPortal, resolveScene, validateProject };

@@ -2856,6 +2856,34 @@ body.has-minimap #zeroBadge {
     color: $tool-text-strong;
 }
 
+.minimap-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+// ARTLIGHT (TKT-268, lot 4) : repères affichés ou masqués
+.minimap-marks {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: $tool-control-bkg;
+    color: $tool-text-muted;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+        background: $tool-control-bkg-hover;
+        color: $tool-text;
+    }
+
+    &[aria-pressed='true'] {
+        border-color: $tool-accent;
+        color: $tool-text-strong;
+    }
+}
+
 .minimap-close {
     width: 28px;
     height: 28px;

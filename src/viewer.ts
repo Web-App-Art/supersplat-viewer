@@ -411,7 +411,7 @@ class Viewer {
                 this.portals = new Portals(global);
 
                 // ARTLIGHT (TKT-268) : rien sans bloc « map » dans la scène.
-                this.miniMap = MiniMap.create(global);
+                this.miniMap = MiniMap.create(global, this.portals);
             }
 
             this.picker = new Picker(app, camera);

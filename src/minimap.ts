@@ -18,12 +18,23 @@
 // « map:goto », transition de camera-manager.ts), à sol du niveau affiché
 // + 1,60 m, direction conservée ; un clic dans un mur (carte des murs) est
 // refusé. On y zoome et on s'y déplace à la molette, au glisser et au pincer.
+//
+// Lot 4 : repères. Annotations (settings.json, même numéro que dans la scène),
+// vue de départ (cameras[0]), portails (project.json) et noms de pièces
+// (« rooms » d'un niveau, saisis à la préparation). Un repère se place sur le
+// niveau dont le sol est le plus haut sous lui. Dans la vue agrandie, un clic
+// agit comme dans la scène : annotation ouverte, retour à la vue de départ,
+// portail suivi ; un nom de pièce y emmène. Les repères trop proches à l'écran
+// sont regroupés (un clic sur le groupe zoome dessus), les noms de pièces qui
+// se chevauchent sont masqués. Sur la mini-carte compacte, simples points,
+// masqués sur téléphone. Bouton « Repères » pour les masquer.
 
 import { Vec3 } from 'playcanvas';
 
 import { localize } from './localization';
+import type { Portals } from './portals';
 import { resolveScene } from './project';
-import type { ProjectContext, SceneMap, SceneMapLevel } from './project';
+import type { Portal, ProjectContext, SceneMap, SceneMapLevel } from './project';
 import { isToolActive } from './tool-utils';
 import type { Global } from './types';
 
@@ -39,6 +50,7 @@ const COMPACT_SPAN_INDOOR = 16;
 const COMPACT_SPAN_AERIAL = 40;
 
 const BACKGROUND_KEY = 'artlight.map.background';
+const MARKS_KEY = 'artlight.map.marks';
 
 // Navigation par la carte (lot 3).
 const EYE_HEIGHT = 1.6;
@@ -58,6 +70,38 @@ const CLICK_SLOP = 6;
 const MIN_MPP = 0.008;
 const MARK_DURATION = 900;
 
+// Repères (lot 4). Un repère posé jusqu'à PIN_BELOW_FLOOR sous un sol (hotspot
+// posé sur la dalle) compte encore pour ce niveau.
+const PIN_BELOW_FLOOR = 0.3;
+// Rayon dessiné et rayon de la cible de clic (px CSS) ; au doigt, cible de
+// 44 px au moins.
+const PIN_RADIUS = 10;
+const PIN_HIT_MOUSE = 14;
+const PIN_HIT_TOUCH = 22;
+// Deux repères à moins de cet écart (px CSS) sont regroupés, sauf au zoom maximal.
+const CLUSTER_PX = 24;
+// Zoom appliqué au clic sur un groupe.
+const CLUSTER_ZOOM = 3;
+
+type PinKind = 'portal' | 'annotation' | 'view';
+
+type Pin = {
+    kind: PinKind,
+    e: number,
+    n: number,
+    level: number,
+    // dessiné dans le disque (numéro, glyphe), puis texte au survol
+    glyph: string,
+    title: string,
+    // vue de départ : cap de la caméra, dessiné en flèche
+    heading?: number,
+    act: () => void
+};
+
+// Cible de clic de la dernière image de la vue agrandie.
+// close : sur téléphone, la vue agrandie se referme pour laisser voir la scène.
+type Target = { x: number, y: number, r?: number, w?: number, h?: number, title: string, act: () => void, close?: boolean };
+
 type WallData = { alpha: Uint8Array, width: number, height: number };
 type Mark = { e: number, n: number, ok: boolean, level: number, time: number };
 
@@ -70,12 +114,37 @@ const COLORS = {
     text: '#fafafa'
 };
 
+// Couleur du disque par sorte de repère ; le visiteur reste en jaune.
+const PIN_COLORS: Record<PinKind, string> = {
+    portal: COLORS.accent,
+    annotation: '#e5e5e5',
+    view: '#0ea5e9'
+};
+
+const ROOM_FONT = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+
 const readBackground = (): Background => {
     try {
         const value = localStorage.getItem(BACKGROUND_KEY);
         return value === 'photo' || value === 'walls' ? value : 'mixed';
     } catch {
         return 'mixed';
+    }
+};
+
+const readMarks = () => {
+    try {
+        return localStorage.getItem(MARKS_KEY) !== 'off';
+    } catch {
+        return true;
+    }
+};
+
+const storeMarks = (value: boolean) => {
+    try {
+        localStorage.setItem(MARKS_KEY, value ? 'on' : 'off');
+    } catch {
+        // stockage indisponible : le choix vaut pour la session
     }
 };
 
@@ -116,7 +185,12 @@ const readSceneMap = (): { map: SceneMap, levels: SceneMapLevel[] } | null => {
     }).map(level => ({
         ...level,
         photo: new URL(level.photo, base).href,
-        walls: level.walls ? new URL(level.walls, base).href : undefined
+        walls: level.walls ? new URL(level.walls, base).href : undefined,
+        rooms: (Array.isArray(level.rooms) ? level.rooms : []).filter((room) => {
+            if (typeof room?.name === 'string' && room.name && Array.isArray(room.at) && room.at.length === 2 && room.at.every(Number.isFinite)) return true;
+            console.warn('Carte : nom de pièce ignoré', room);
+            return false;
+        })
     })).sort((a, b) => a.floor - b.floor);
 
     return levels.length ? { map, levels } : null;
@@ -180,23 +254,40 @@ class MiniMap {
 
     private marks: Mark[] = [];
 
+    // Repères (lot 4)
+    private pins: Pin[] = [];
+
+    private showPins: boolean;
+
+    private marksButton: HTMLButtonElement;
+
+    private coarse: MediaQueryList;
+
+    private targets: Target[] = [];
+
+    private hover: Target | null = null;
+
     /**
      * Mini-carte de la scène active, ou null si elle n'a pas de bloc « map ».
      *
      * @param {Global} global - Le contexte applicatif.
+     * @param {Portals | null} portals - Les portails de la scène, pour les suivre depuis la carte.
      * @returns {MiniMap | null} La mini-carte, ou null.
      */
-    static create(global: Global) {
+    static create(global: Global, portals: Portals | null = null) {
         const found = readSceneMap();
-        return found ? new MiniMap(global, found.map, found.levels) : null;
+        return found ? new MiniMap(global, found.map, found.levels, portals) : null;
     }
 
-    private constructor(global: Global, map: SceneMap, levels: SceneMapLevel[]) {
+    private constructor(global: Global, map: SceneMap, levels: SceneMapLevel[], portals: Portals | null) {
         this.global = global;
         this.map = map;
         this.levels = levels;
         this.background = readBackground();
+        this.showPins = readMarks();
         this.narrow = window.matchMedia('(max-width: 720px)');
+        this.coarse = window.matchMedia('(pointer: coarse)');
+        this.pins = this.collectPins(portals);
 
         this.buildDom();
 
@@ -208,6 +299,76 @@ class MiniMap {
         }).observe(this.root);
 
         global.app.on('update', () => this.update());
+        global.events.on('showAnnotations:changed', () => {
+            this.dirty = true;
+        });
+    }
+
+    // ── Repères (lot 4) ──
+
+    // Niveau d'un repère : le plus haut sol sous lui, sans hystérésis.
+    private pinLevel(y: number) {
+        return this.pickLevel(y + PIN_BELOW_FLOOR);
+    }
+
+    private collectPins(portals: Portals | null) {
+        const { settings, events } = this.global;
+        const pins: Pin[] = [];
+        const at = (p: ArrayLike<number>) => ({ e: -p[0], n: p[2], level: this.pinLevel(p[1]) });
+        const valid = (p: unknown): p is number[] => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
+
+        // Portails : suivis comme un clic sur le hotspot.
+        for (const portal of portals?.portals ?? [] as Portal[]) {
+            if (!valid(portal.position)) continue;
+            pins.push({
+                kind: 'portal',
+                ...at(portal.position),
+                glyph: portal.glyph ?? '→',
+                title: portal.label ?? portal.to,
+                act: () => portals.travel(portal)
+            });
+        }
+
+        // Annotations : même numéro que le hotspot ; le clic l'ouvre et amène
+        // la caméra sur son point de vue (annotation.navigate, comme « suivant »).
+        (settings.annotations ?? []).forEach((annotation, i) => {
+            if (!valid(annotation?.position)) return;
+            pins.push({
+                kind: 'annotation',
+                ...at(annotation.position),
+                glyph: String(i + 1),
+                title: annotation.title || String(i + 1),
+                act: () => events.fire('annotation.navigate', annotation)
+            });
+        });
+
+        // Vue de départ (seul point de vue enregistré des settings.json) : le
+        // clic fait comme le bouton « réinitialiser la vue ».
+        const start = settings.cameras?.[0]?.initial;
+        if (valid(start?.position) && valid(start?.target)) {
+            const [x, , z] = start.position;
+            const [tx, , tz] = start.target;
+            pins.push({
+                kind: 'view',
+                ...at(start.position),
+                glyph: '',
+                title: localize('artlight.map.start-view'),
+                heading: Math.atan2(-(tx - x), tz - z),
+                act: () => events.fire('inputEvent', 'reset')
+            });
+        }
+        return pins;
+    }
+
+    private hasPins() {
+        return this.pins.length > 0 || this.levels.some(level => level.rooms?.length);
+    }
+
+    // Repères du niveau à dessiner (annotations masquées avec celles de la scène).
+    private levelPins(index: number) {
+        if (!this.showPins) return [];
+        const annotations = this.global.state.showAnnotations;
+        return this.pins.filter(pin => pin.level === index && (pin.kind !== 'annotation' || annotations));
     }
 
     private hasWalls(level: SceneMapLevel) {
@@ -248,7 +409,22 @@ class MiniMap {
         close.setAttribute('aria-label', tr('close'));
         close.textContent = '×';
         close.addEventListener('click', () => this.setExpanded(false));
-        header.append(title, close);
+        const actions = document.createElement('div');
+        actions.className = 'minimap-actions';
+        this.marksButton = document.createElement('button');
+        this.marksButton.className = 'minimap-marks';
+        this.marksButton.textContent = tr('marks');
+        this.marksButton.title = tr('marks-hint');
+        this.marksButton.setAttribute('aria-pressed', String(this.showPins));
+        this.marksButton.classList.toggle('hidden', !this.hasPins());
+        this.marksButton.addEventListener('click', () => {
+            this.showPins = !this.showPins;
+            storeMarks(this.showPins);
+            this.marksButton.setAttribute('aria-pressed', String(this.showPins));
+            this.dirty = true;
+        });
+        actions.append(this.marksButton, close);
+        header.append(title, actions);
 
         this.levelList = document.createElement('div');
         this.levelList.className = 'minimap-levels';
@@ -310,6 +486,7 @@ class MiniMap {
         this.panelView = null;
         this.pointers.clear();
         this.gesture = null;
+        this.hover = null;
         this.compact.classList.toggle('hidden', value);
         this.panel.classList.toggle('hidden', !value);
         this.dirty = true;
@@ -359,6 +536,12 @@ class MiniMap {
         });
 
         canvas.addEventListener('pointermove', (event) => {
+            // survol à la souris : nom du repère et curseur main
+            if (!this.pointers.size && event.pointerType === 'mouse') {
+                const { x, y } = local(event);
+                this.setHover(this.hitTest(x, y));
+                return;
+            }
             if (!this.pointers.has(event.pointerId) || !this.gesture) return;
             this.pointers.set(event.pointerId, local(event));
             const g = this.gesture;
@@ -396,6 +579,7 @@ class MiniMap {
                 startGesture(true);
             }
         };
+        canvas.addEventListener('pointerleave', () => this.setHover(null));
         canvas.addEventListener('pointerup', event => end(event, false));
         canvas.addEventListener('pointercancel', event => end(event, true));
 
@@ -437,6 +621,7 @@ class MiniMap {
             n: Math.min(n1, Math.max(n0, view.n)),
             mpp: view.mpp
         };
+        this.hover = null;
         this.dirty = true;
     }
 
@@ -445,16 +630,51 @@ class MiniMap {
     private clickAt(x: number, y: number) {
         const view = this.drawnView;
         if (!view) return;
+        // un repère sous le clic agit à la place du déplacement (lot 4)
+        const target = this.hitTest(x, y);
+        if (target) {
+            this.setHover(null);
+            target.act();
+            if (target.close && this.narrow.matches) {
+                this.setExpanded(false);
+            }
+            return;
+        }
         const w = this.panelCanvas.clientWidth;
         const h = this.panelCanvas.clientHeight;
         const e = view.e + (x - w / 2) * view.mpp;
         const n = view.n - (y - h / 2) * view.mpp;
+        this.gotoPoint(e, n, HIT_PX * view.mpp);
+    }
+
+    // Cible sous (x, y), la dernière dessinée (au-dessus) d'abord.
+    private hitTest(x: number, y: number) {
+        const reach = this.coarse.matches ? PIN_HIT_TOUCH : PIN_HIT_MOUSE;
+        for (let i = this.targets.length - 1; i >= 0; i--) {
+            const t = this.targets[i];
+            const inside = t.r !== undefined ?
+                Math.hypot(x - t.x, y - t.y) <= Math.max(t.r, reach) :
+                Math.abs(x - t.x) <= t.w / 2 + 4 && Math.abs(y - t.y) <= Math.max(t.h, this.coarse.matches ? 44 : 0) / 2 + 2;
+            if (inside) return t;
+        }
+        return null;
+    }
+
+    private setHover(target: Target | null) {
+        if (target?.title === this.hover?.title && target?.x === this.hover?.x && target?.y === this.hover?.y) return;
+        this.hover = target;
+        this.panelCanvas.style.cursor = target ? 'pointer' : '';
+        this.dirty = true;
+    }
+
+    // Déplacement vers (E, N) du niveau affiché, refusé dans un mur (lot 3).
+    private gotoPoint(e: number, n: number, hit: number) {
         const index = this.displayedLevel;
         const level = this.levels[index];
 
         // Pas de carte des murs (vue d'avion), ou pas encore chargée : aucun refus.
         const walls = this.walls(level.walls);
-        const spot = walls ? this.freeSpot(walls, level, e, n, HIT_PX * view.mpp) : { e, n };
+        const spot = walls ? this.freeSpot(walls, level, e, n, hit) : { e, n };
         const time = performance.now();
         this.marks = this.marks.filter(m => time - m.time < MARK_DURATION);
         if (!spot) {
@@ -465,7 +685,8 @@ class MiniMap {
         this.marks.push({ e: spot.e, n: spot.n, ok: true, level: index, time });
         this.dirty = true;
         // (E, N) → moteur (−E, y, N)
-        this.global.events.fire('map:goto', new Vec3(-spot.e, level.floor + EYE_HEIGHT, spot.n));
+        // Vue d'avion : hauteur prise sur le terrain sous le point (lot 4).
+        this.global.events.fire('map:goto', new Vec3(-spot.e, level.floor + EYE_HEIGHT, spot.n), level.walls ? undefined : EYE_HEIGHT);
         // Sur téléphone, la vue agrandie couvre la scène : on la referme.
         if (this.narrow.matches) {
             this.setExpanded(false);
@@ -641,6 +862,7 @@ class MiniMap {
             if (index !== this.panelViewLevel) {
                 this.panelViewLevel = index;
                 this.panelView = null;
+                this.hover = null;
             }
             // carte des murs chargée d'avance pour contrôler les clics, quel que soit le fond
             this.walls(level.walls);
@@ -716,14 +938,22 @@ class MiniMap {
             }
         }
 
+        const index = this.levels.indexOf(level);
+        if (whole) {
+            this.targets = [];
+            this.drawPins(ctx, level, index, view, toX, toY, w, h);
+        } else if (!this.narrow.matches) {
+            this.drawDots(ctx, index, toX, toY);
+        }
+
         if (showVisitor) {
             this.drawVisitor(ctx, toX(this.pose.e), toY(this.pose.n), w, h, whole ? 44 : 30);
         }
         if (whole) {
-            const index = this.levels.indexOf(level);
             for (const mark of this.marks) {
                 if (mark.level === index) this.drawMark(ctx, toX(mark.e), toY(mark.n), mark);
             }
+            if (this.hover) this.drawTooltip(ctx, this.hover, w);
         }
         if (Number.isFinite(this.map.north)) {
             this.drawNorth(ctx, w - 16, 18, this.map.north);
@@ -733,6 +963,185 @@ class MiniMap {
         } else if (this.levels.length > 1) {
             this.drawLabel(ctx, level.name ?? level.id, w, h);
         }
+    }
+
+    // ── Repères (lot 4) ──
+
+    // Mini-carte compacte : simples points, sans nom ni regroupement.
+    private drawDots(ctx: CanvasRenderingContext2D, index: number, toX: (e: number) => number, toY: (n: number) => number) {
+        for (const pin of this.levelPins(index)) {
+            ctx.beginPath();
+            ctx.arc(toX(pin.e), toY(pin.n), 3, 0, Math.PI * 2);
+            ctx.fillStyle = PIN_COLORS[pin.kind];
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.stroke();
+        }
+    }
+
+    // Vue agrandie : noms de pièces, puis repères regroupés quand ils se
+    // chevauchent ; chaque élément dessiné devient une cible de clic.
+    private drawPins(ctx: CanvasRenderingContext2D, level: SceneMapLevel, index: number, view: View,
+        toX: (e: number) => number, toY: (n: number) => number, w: number, h: number) {
+        const pins = this.levelPins(index)
+        .map(pin => ({ pin, x: toX(pin.e), y: toY(pin.n) }))
+        .filter(p => p.x > -PIN_RADIUS && p.y > -PIN_RADIUS && p.x < w + PIN_RADIUS && p.y < h + PIN_RADIUS);
+
+        // Regroupement : on fusionne la paire la plus proche tant que deux
+        // groupes sont à moins de CLUSTER_PX. Au zoom maximal, plus de groupe
+        // (repères confondus dessinés l'un sur l'autre, le dernier cliquable).
+        const groups = pins.map(p => ({ x: p.x, y: p.y, items: [p] }));
+        if (view.mpp > MIN_MPP * 1.01) {
+            for (;;) {
+                let best: [number, number] | null = null;
+                let bestDist = CLUSTER_PX;
+                for (let i = 0; i < groups.length; i++) {
+                    for (let j = i + 1; j < groups.length; j++) {
+                        const d = Math.hypot(groups[i].x - groups[j].x, groups[i].y - groups[j].y);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            best = [i, j];
+                        }
+                    }
+                }
+                if (!best) break;
+                const [a, b] = [groups[best[0]], groups[best[1]]];
+                a.items.push(...b.items);
+                a.x = a.items.reduce((sum, q) => sum + q.x, 0) / a.items.length;
+                a.y = a.items.reduce((sum, q) => sum + q.y, 0) / a.items.length;
+                groups.splice(best[1], 1);
+            }
+        }
+
+        // Noms de pièces : masqués s'ils chevauchent un repère ou un autre nom.
+        const boxes = groups.map(g => ({ x0: g.x - PIN_RADIUS - 2, y0: g.y - PIN_RADIUS - 2, x1: g.x + PIN_RADIUS + 2, y1: g.y + PIN_RADIUS + 2 }));
+        if (this.showPins) {
+            ctx.font = ROOM_FONT;
+            for (const room of level.rooms ?? []) {
+                const x = toX(room.at[0]);
+                const y = toY(room.at[1]);
+                const tw = ctx.measureText(room.name).width + 12;
+                const box = { x0: x - tw / 2, y0: y - 10, x1: x + tw / 2, y1: y + 10 };
+                if (box.x1 < 0 || box.y1 < 0 || box.x0 > w || box.y0 > h) continue;
+                if (boxes.some(b => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1)) continue;
+                boxes.push(box);
+                this.drawRoom(ctx, room.name, x, y, tw);
+                const [e, n] = room.at;
+                this.targets.push({ x, y, w: tw, h: 20, title: room.name, act: () => this.gotoPoint(e, n, 0) });
+            }
+        }
+
+        for (const group of groups) {
+            if (group.items.length === 1) {
+                const { pin, x, y } = group.items[0];
+                this.drawPin(ctx, pin, x, y);
+                this.targets.push({ x, y, r: PIN_RADIUS + 2, title: pin.title, act: pin.act, close: true });
+            } else {
+                this.drawCluster(ctx, group.x, group.y, group.items.length);
+                const items = group.items.map(p => p.pin);
+                const title = `${items.length} ${localize('artlight.map.marks-group')}`;
+                this.targets.push({
+                    x: group.x,
+                    y: group.y,
+                    r: PIN_RADIUS + 4,
+                    title,
+                    act: () => this.zoomOn(items, view)
+                });
+            }
+        }
+    }
+
+    // Clic sur un groupe : zoom ×3 centré sur ses repères.
+    private zoomOn(items: Pin[], view: View) {
+        const e = items.reduce((s, p) => s + p.e, 0) / items.length;
+        const n = items.reduce((s, p) => s + p.n, 0) / items.length;
+        this.setPanelView({ e, n, mpp: this.clampMpp(view.mpp / CLUSTER_ZOOM) });
+    }
+
+    // Même dessin sur les trois fonds : disque plein, liseré blanc et ombre.
+    private drawPin(ctx: CanvasRenderingContext2D, pin: Pin, x: number, y: number) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = PIN_COLORS[pin.kind];
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = pin.kind === 'annotation' ? COLORS.dark : '#fff';
+        ctx.stroke();
+        if (pin.kind === 'view') {
+            // flèche du cap de la vue de départ
+            ctx.translate(x, y);
+            ctx.rotate(pin.heading);
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(0, -6);
+            ctx.lineTo(5, 4);
+            ctx.lineTo(0, 1.5);
+            ctx.lineTo(-5, 4);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            ctx.fillStyle = COLORS.dark;
+            ctx.font = `bold ${pin.glyph.length > 1 ? 10 : 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(pin.glyph, x, y + 0.5);
+        }
+        ctx.restore();
+    }
+
+    private drawCluster(ctx: CanvasRenderingContext2D, x: number, y: number, count: number) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, PIN_RADIUS + 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(24, 24, 27, 0.9)';
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        ctx.fillStyle = COLORS.text;
+        ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(count), x, y + 0.5);
+        ctx.restore();
+    }
+
+    private drawRoom(ctx: CanvasRenderingContext2D, name: string, x: number, y: number, tw: number) {
+        ctx.fillStyle = 'rgba(24, 24, 27, 0.72)';
+        ctx.beginPath();
+        ctx.roundRect(x - tw / 2, y - 10, tw, 20, 10);
+        ctx.fill();
+        ctx.fillStyle = COLORS.text;
+        ctx.font = ROOM_FONT;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(name, x, y + 0.5);
+    }
+
+    // Nom du repère survolé à la souris.
+    private drawTooltip(ctx: CanvasRenderingContext2D, target: Target, w: number) {
+        if (target.r === undefined) return;
+        ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        const tw = Math.min(ctx.measureText(target.title).width + 12, w - 8);
+        const x = Math.min(w - tw - 4, Math.max(4, target.x - tw / 2));
+        const above = target.y - target.r - 28 >= 0;
+        const y = above ? target.y - target.r - 28 : target.y + target.r + 6;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.beginPath();
+        ctx.roundRect(x, y, tw, 22, 6);
+        ctx.fill();
+        ctx.fillStyle = COLORS.text;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(target.title, x + 6, y + 11.5, tw - 12);
     }
 
     private drawVisitor(ctx: CanvasRenderingContext2D, px: number, py: number, w: number, h: number, radius: number) {

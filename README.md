@@ -326,6 +326,17 @@ node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
 # Au-delà d'environ 800 px, splat-transform v3.3.3 perdait des splats sans prévenir sur une tranche dense
 # (corrigé en v3.10.0) : le script rend donc en tuiles de 640 px au plus, sans effet sur le résultat en v3.10.0. Relancer build après chaque modification de levels.json.
 
+## Étape 4 (facultative) : noms de pièces
+# Sur la planche construite (map/controle.html), cliquer au milieu d'une pièce, taper son nom ; le bloc
+#   "rooms": [ {"name": "Cuisine", "at": [E, N]} ]
+# est tenu à jour sous la carte (bouton « Copier le bloc ») : le recopier dans l'entrée du niveau de
+# map/levels.json, puis relancer build. Il est recopié dans le niveau du bloc "map". Sans "rooms", les sorties
+# sont identiques. Le visualisateur affiche aussi, sans rien préparer : annotations (settings.json), vue de
+# départ (cameras[0]) et portails (project.json), sur le niveau dont le sol est le plus haut sous eux.
+# Contrôles du 07/10/2026 (lot 4) : belgentier extérieur (vue d'avion seule), intérieur (n1 « Rez-de-jardin »,
+# n2 « Étage », n3 toit écarté), studio (n1, n2 plafond écarté). Son project.json écrit « 1.380 » : le bloc
+# a été recopié à la main (le script ne réécrit qu'un fichier au format JSON.stringify(…, 2)).
+
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
 # et chargée seulement si l'utilisateur choisit « Altitude NGF ». Déployer public/geoid/ avec le viewer.

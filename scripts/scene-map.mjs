@@ -21,6 +21,9 @@
 //    project.json :
 //      "map": { "north": 0, "levels": [ { "id", "name", "floor",
 //               "bounds": [E0, N0, E1, N1], "photo", "walls" } ] }
+//    Noms de pièces (facultatifs, lot 4) : "rooms": [{ "name", "at": [E, N] }]
+//    dans une entrée de levels.json, recopié tel quel dans le niveau du bloc.
+//    La planche les fait saisir d'un clic sur la carte construite.
 //    bounds est dans le repère source (E, N) de coordinates.ts : un point du
 //    moteur (x, y, z) tombe sur la carte en (−x, z). north vaut 0 (nord du
 //    quadrillage en haut) pour une scène géoréférencée ; absent sinon.
@@ -634,6 +637,64 @@ const checkRegistration = (s, { bounds, floor, cut, webp }) => {
 
 const escapeHtml = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Saisie des noms de pièces sur la planche, sans dépendance : un clic sur la
+// carte ajoute un point (E, N), le nom se tape dessous, le bloc « rooms » à
+// recopier dans levels.json est tenu à jour.
+const ROOMS_EDITOR = `
+const r2 = v => Math.round(v * 100) / 100;
+for (const section of document.querySelectorAll('section.map[data-bounds]')) {
+    const [e0, n0, e1, n1] = JSON.parse(section.dataset.bounds);
+    const rooms = JSON.parse(section.dataset.rooms);
+    const svg = section.querySelector('svg.rooms');
+    const [, , w, h] = svg.getAttribute('viewBox').split(' ').map(Number);
+    const editor = section.querySelector('.rooms-editor');
+    const list = document.createElement('ol');
+    const out = document.createElement('pre');
+    const copy = document.createElement('button');
+    copy.textContent = 'Copier le bloc';
+    copy.onclick = () => navigator.clipboard?.writeText(out.textContent).then(() => { copy.textContent = 'Copié'; setTimeout(() => { copy.textContent = 'Copier le bloc'; }, 1200); });
+    editor.append(list, out, copy);
+    const text = (x, y, size, t) => { const el = document.createElementNS('http://www.w3.org/2000/svg', 'text'); el.setAttribute('x', x); el.setAttribute('y', y); el.setAttribute('font-size', size); el.setAttribute('text-anchor', 'middle'); el.setAttribute('fill', '#fff'); el.setAttribute('stroke', '#000'); el.setAttribute('stroke-width', size / 6); el.setAttribute('paint-order', 'stroke'); el.textContent = t; return el; };
+    const render = () => {
+        svg.replaceChildren();
+        const size = Math.max(w, h) / 45;
+        rooms.forEach((room, i) => {
+            const x = (room.at[0] - e0) / (e1 - e0) * w, y = (n1 - room.at[1]) / (n1 - n0) * h;
+            const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', size / 3); dot.setAttribute('fill', '#84cc16'); dot.setAttribute('stroke', '#000');
+            svg.append(dot, text(x, y - size * 0.6, size, room.name || '#' + (i + 1)));
+        });
+        list.replaceChildren(...rooms.map((room, i) => {
+            const li = document.createElement('li');
+            const input = document.createElement('input');
+            input.value = room.name;
+            input.placeholder = 'nom de la pièce';
+            input.oninput = () => { room.name = input.value; render.light(); };
+            const del = document.createElement('button');
+            del.textContent = 'Retirer';
+            del.onclick = () => { rooms.splice(i, 1); render(); };
+            li.append(input, ' E ' + room.at[0].toFixed(2) + ' ; N ' + room.at[1].toFixed(2) + ' ', del);
+            return li;
+        }));
+        render.light();
+    };
+    render.light = () => {
+        const kept = rooms.filter(r => r.name.trim());
+        out.textContent = '"rooms": [' + kept.map(r => '\\n  ' + JSON.stringify({ name: r.name.trim(), at: r.at })).join(',') + (kept.length ? '\\n' : '') + ']';
+        svg.querySelectorAll('text').forEach((t, i) => { t.textContent = rooms[i].name || '#' + (i + 1); });
+    };
+    svg.addEventListener('click', (event) => {
+        const rect = svg.getBoundingClientRect();
+        const e = r2(e0 + (event.clientX - rect.left) / rect.width * (e1 - e0));
+        const n = r2(n1 - (event.clientY - rect.top) / rect.height * (n1 - n0));
+        rooms.push({ name: '', at: [e, n] });
+        render();
+        list.lastChild.querySelector('input').focus();
+    });
+    render();
+}
+`;
+
 const writeControl = () => {
     const levels = JSON.parse(readFileSync(levelsPath, 'utf-8'));
     const proposal = JSON.parse(readFileSync(proposePath, 'utf-8'));
@@ -666,10 +727,15 @@ const writeControl = () => {
     const maps = built ? built.levels.map((b) => {
         const check = `${b.check.ok ? 'recalage OK' : '<b class="bad">RECALAGE DOUTEUX</b>'} : meilleur décalage E ${fmt(b.check.shiftE)} m, N ${fmt(b.check.shiftN)} m ` +
             `(corrélation ${fmt(b.check.score, 3)} sans décalage, ${fmt(b.check.best, 3)} au mieux, case ${fmt(b.check.cell * 100, 0)} cm)`;
-        return `<section class="map"><h3>${escapeHtml(b.id)} — ${escapeHtml(b.name)}</h3>` +
-            `<div class="stack" style="aspect-ratio:${b.width} / ${b.height}; width:min(100%, calc(85vh * ${b.width} / ${b.height}))"><img src="${escapeHtml(b.photoFile)}" alt="">${b.wallsFile ? `<img class="walls" src="${escapeHtml(b.wallsFile)}" alt="">` : ''}</div>` +
+        // Noms de pièces (lot 4) : saisis d'un clic sur la carte, à recopier dans levels.json.
+        const bounds = built.map.levels.find(m => m.id === b.id)?.bounds;
+        const rooms = entries.find(l => l.id === b.id)?.rooms ?? [];
+        const roomsData = bounds ? ` data-level="${escapeHtml(b.id)}" data-bounds="${escapeHtml(JSON.stringify(bounds))}" data-rooms="${escapeHtml(JSON.stringify(rooms))}"` : '';
+        return `<section class="map"${roomsData}><h3>${escapeHtml(b.id)} — ${escapeHtml(b.name)}</h3>` +
+            `<div class="stack" style="aspect-ratio:${b.width} / ${b.height}; width:min(100%, calc(85vh * ${b.width} / ${b.height}))"><img src="${escapeHtml(b.photoFile)}" alt="">${b.wallsFile ? `<img class="walls" src="${escapeHtml(b.wallsFile)}" alt="">` : ''}` +
+            `<svg class="rooms" viewBox="0 0 ${b.width} ${b.height}" preserveAspectRatio="none"></svg></div>` +
             `<p>${b.width} × ${b.height} px (${fmt(b.px * 100, 1)} cm/px), photo ${fmt(b.photoBytes / 1024, 0)} Ko en ${fmt(b.seconds, 1)} s, ${b.tiles} tuile(s)` +
-            `${b.wallsFile ? `, murs ${fmt(b.wallsBytes / 1024, 0)} Ko` : ''}. ${check}.</p></section>`;
+            `${b.wallsFile ? `, murs ${fmt(b.wallsBytes / 1024, 0)} Ko` : ''}. ${check}.</p><div class="rooms-editor"></div></section>`;
     }).join('') : '';
 
     const html = `<!doctype html>
@@ -691,6 +757,9 @@ tr.drop td { color: var(--muted); text-decoration: line-through; } tr.drop td:la
 .thumb.drop img { opacity: .45; } .thumb .none { padding: 24px; border: 1px dashed var(--line); }
 .stack { position: relative; max-width: 100%; background: #fff; border: 1px solid var(--line); }
 .stack img { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: none; }
+.stack svg.rooms { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: none; cursor: crosshair; }
+.rooms-editor ol { padding-left: 24px; } .rooms-editor li { margin: 4px 0; } .rooms-editor input { font: inherit; width: 14em; }
+.rooms-editor pre { padding: 8px; border: 1px solid var(--line); overflow-x: auto; font-size: 13px; }
 .stack img.walls { opacity: var(--walls, 1); filter: brightness(0) invert(13%) sepia(97%) saturate(7400%) hue-rotate(4deg); } .bad { color: var(--drop); }
 label { color: var(--muted); }
 </style></head><body><main>
@@ -708,7 +777,10 @@ ${built ? `Cartes construites le ${escapeHtml(built.date)}.` : 'Cartes pas encor
 <div class="sides">${proposal.sides.map(side).join('')}</div>
 <h2>Vignettes (vue de dessus, sol − 0,2 à sol + coupe, nord en haut)</h2>
 <div class="thumbs">${thumbs}</div>
-${built ? `<h2>Cartes</h2><p><label><input type="checkbox" checked onchange="document.body.style.setProperty('--walls', this.checked ? 1 : 0)"> murs (en rouge sur la planche) par-dessus la photo</label></p>${maps}` : ''}
+${built ? `<h2>Cartes</h2><p><label><input type="checkbox" checked onchange="document.body.style.setProperty('--walls', this.checked ? 1 : 0)"> murs (en rouge sur la planche) par-dessus la photo</label></p>
+<p>Noms de pièces (facultatif) : cliquer au milieu d'une pièce sur la carte, taper son nom, puis recopier le bloc <code>"rooms"</code> obtenu dans
+l'entrée du niveau de <code>levels.json</code> et relancer l'étape build. Les noms déjà saisis sont repris.</p>${maps}
+<script>${ROOMS_EDITOR}</script>` : ''}
 </main></body></html>
 `;
     writeFileSync(join(mapDir, 'controle.html'), html);
@@ -831,6 +903,10 @@ const build = () => {
         if (ids.has(l.id)) fail(`id « ${l.id} » en double`);
         ids.add(l.id);
         if (!Number.isFinite(l.floor)) fail(`niveau ${l.id} : floor manquant`);
+        if (l.rooms !== undefined && (!Array.isArray(l.rooms) || !l.rooms.every(r => typeof r?.name === 'string' && r.name.trim() &&
+            Array.isArray(r.at) && r.at.length === 2 && r.at.every(Number.isFinite)))) {
+            fail(`niveau ${l.id} : rooms attendu [{ "name": "Cuisine", "at": [E, N] }]`);
+        }
         if (!Array.isArray(l.bounds) || l.bounds.length !== 4 || !(l.bounds[2] > l.bounds[0] && l.bounds[3] > l.bounds[1])) {
             fail(`niveau ${l.id} : bounds attendu [E0, N0, E1, N1]`);
         }
@@ -875,6 +951,11 @@ const build = () => {
             result.wallsFile = `${l.id}-murs.png`;
             result.wallsBytes = readFileSync(walls).length;
             entry.walls = `./${relative(projectDir, walls)}`;
+        }
+        if (l.rooms?.length) {
+            entry.rooms = l.rooms.map(r => ({ name: r.name.trim(), at: [round(r.at[0]), round(r.at[1])] }));
+            const outside = entry.rooms.filter(r => r.at[0] < bounds[0] || r.at[0] > bounds[2] || r.at[1] < bounds[1] || r.at[1] > bounds[3]);
+            if (outside.length) console.log(`${l.id} : pièce(s) hors de l'emprise : ${outside.map(r => r.name).join(', ')}`);
         }
         result.check = checkRegistration(s, { bounds, floor: l.floor, cut: aerial ? null : cut, webp: photo });
         const check = `${result.check.ok ? 'recalage OK' : 'RECALAGE DOUTEUX'} (décalage E ${fmt(result.check.shiftE)} m, N ${fmt(result.check.shiftN)} m, corrélation ${fmt(result.check.score, 3)})`;

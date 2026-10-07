@@ -127,6 +127,29 @@ class CameraManager {
         controllers.fly.collision = collision;
         controllers.walk.collision = collision;
 
+        // ARTLIGHT (TKT-268, lot 4) : sol de la colonne (x, z). La zone libre
+        // de la collision descend aussi sous le terrain : le sol est le premier
+        // passage plein → libre, en montant, suivi d'au moins `clearance` de
+        // vide (sous une pergola ou un arbre, pas sur leur toit). null sans
+        // collision ou sans sol trouvé.
+        const groundAt = (x: number, z: number, clearance: number) => {
+            if (!collision) return null;
+            const step = collision.voxelResolution;
+            const top = bbox.getMax().y;
+            let solid = false;
+            let start: number | null = null;
+            for (let y = bbox.getMin().y; y <= top; y += step) {
+                if (!collision.isFreeAt(x, y, z)) {
+                    solid = true;
+                    start = null;
+                } else if (solid) {
+                    start ??= y;
+                    if (y - start >= clearance) return start;
+                }
+            }
+            return start;
+        };
+
         const walkSource = new WalkSource();
         const flySource = new FlySource();
         const sourcesByMode: Partial<Record<CameraMode, TargetSource>> = {
@@ -365,7 +388,14 @@ class CameraManager {
         // rejoint le point en gardant sa direction ; en orbite, la cible s'y
         // déplace et la caméra la suit, même recul, même angle. Transition
         // habituelle (~1 s).
-        events.on('map:goto', (position: Vec3) => {
+        //
+        // Lot 4 : vue d'avion (aboveGround défini), le sol est cherché dans la
+        // collision, sous le point cliqué : terrain en pente (Belgentier).
+        events.on('map:goto', (position: Vec3, aboveGround?: number) => {
+            if (aboveGround !== undefined) {
+                const ground = groundAt(position.x, position.z, aboveGround + 0.2);
+                if (ground !== null) position.y = ground + aboveGround;
+            }
             sourcesByMode[state.cameraMode]?.cancel();
             events.fire('navTarget:clear');
             events.fire('orbitTarget:clear');
