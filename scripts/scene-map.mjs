@@ -26,7 +26,7 @@
 //    quadrillage en haut) pour une scène géoréférencée ; absent sinon.
 //
 // Les splats sont lus au LOD 1 (un .sog tel quel), exportés en PLY binaire par
-// splat-transform v3.3.3 dans un dossier temporaire. Le PLY est en (E, −H, N).
+// splat-transform (v3.10.0) dans un dossier temporaire. Le PLY est en (E, −H, N).
 // PIÈGE : le filtre -B et le rendu .webp de splat-transform travaillent dans le
 // repère du moteur, (−E, H, N). D'où la caméra en −E et la boîte en H positif.
 
@@ -436,8 +436,9 @@ const footprint = (s, { bounds, floor, cut, cell }) => {
 // Vue de dessus quasi orthographique : caméra à 2 km au-dessus du sol, nord en
 // haut, champ vertical = hauteur du cadre. Fond transparent (hors scan).
 // En repère moteur (−E, H, N) : caméra en x = −E du centre, boîte en H.
-// Au-delà d'environ 800 px, splat-transform v3.3.3 perd des splats sans
-// prévenir sur une tranche dense (image presque vide) : on rend donc en tuiles
+// Au-delà d'environ 800 px, splat-transform v3.3.3 perdait des splats sans
+// prévenir sur une tranche dense (image presque vide ; corrigé en v3.10.0,
+// mêmes résultats avec les tuiles) : on rend donc en tuiles
 // de 640 px au plus, depuis la tranche exportée une fois en PLY, et une tuile
 // nettement moins couverte que l'emprise des splats est recoupée en quatre.
 const renderTop = ({ bounds, floor, cut, px, out, lod = opts.lod, splats = null }) => {

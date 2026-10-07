@@ -5,7 +5,7 @@
 //
 // Le moteur travaille en Y vers le haut. Le repère « source » est celui du
 // scan : X = Est, Y = Nord, Z = Haut. Avec le pipeline actuel (.lcc converti
-// par splat-transform v3.3.3 sans -r, ce qui donne (E, −H, N) dans les
+// par splat-transform v3.3.3 ou v3.10.0 sans -r, ce qui donne (E, −H, N) dans les
 // fichiers, puis 180° sur Z au chargement dans index.ts), un point (E, N, H)
 // du .lcc arrive dans le moteur en (−E, H, N).
 // La matrice par défaut défait cet enchaînement. Une scène issue d'un autre

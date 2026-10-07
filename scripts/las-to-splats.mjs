@@ -21,7 +21,7 @@
 //   --keep-noise        garde les classes 7 et 18 (bruit), retirées par défaut
 //
 // Chaque niveau est écrit en PLY 3DGS (lod0.ply, lod1.ply…), offset retiré,
-// dans le repère où splat-transform v3.3.3 place un .lcc (sans -r, son lecteur
+// dans le repère où splat-transform (v3.3.3 et v3.10.0) place un .lcc (sans -r, son lecteur
 // .lcc l'oriente déjà) : (E, N, H) → (E, −H, N). Le viewer garde donc son
 // sourceFromWorld par défaut. La commande splat-transform à lancer est affichée
 // à la fin.

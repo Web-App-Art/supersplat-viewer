@@ -225,7 +225,10 @@ type ExperienceSettings = {
 pm2 start npm --name "splatviewer" -- run serve
 
 
-# Syntaxe splat-transform v3.x (npm install -g @playcanvas/splat-transform@latest)
+# Syntaxe splat-transform v3.x, version de référence v3.10.0 (npm install -g @playcanvas/splat-transform@3.10.0).
+# v3.10.0 depuis le 07/10/2026 : lecteur .lcc identique à la v3.3.3 (mêmes plages x/y/z), rendu .webp corrigé
+# (la v3.3.3 perdait des splats au-delà d'environ 800 px), lod-meta.json sans tables d'erreur LOD (depuis v3.8.0,
+# le viewer ne les lit pas). Après une mise à jour, refaire le contrôle --stats ci-dessous sur une scène connue.
 # Renommages v3.0.0 : -O -> -L (--select-lod), -C <n> -> --lod-chunk-count <n>, -F <n%> -> -d <n%> (--decimate)
 # Les actions (-r, -N, -H, -d…) s'appliquent au fichier qui les précède : placées avant l'entrée, elles sont
 # ignorées sans message (-H 1 laissait 3 bandes SH). Une seule entrée : les mettre après l'entrée.
@@ -233,13 +236,14 @@ pm2 start npm --name "splatviewer" -- run serve
 # (après une seule entrée, le build échoue : « inputs must share … SH band count »).
 # Les options globales (-w, -L, -i, --lod-chunk-count) restent avant l'entrée.
 # -N retire les splats à valeur NaN ou infinie ; sans lui, les .lcc récents (Callian, Immeuble Toulon)
-# font échouer le build des LOD (« non-finite opacity »). En v3.3.3, -N ne nettoie qu'un niveau à la fois.
+# font échouer le build des LOD (« non-finite opacity »). En v3.3.3, -N ne nettoyait qu'un niveau à la fois (non revérifié
+# en v3.10.0) : garder un PLY par niveau.
 
-# ===== Générer une scène depuis un .lcc (splat-transform v3.3.3) =====
+# ===== Générer une scène depuis un .lcc (splat-transform v3.10.0) =====
 # Commandes lancées depuis le dossier du projet, ex. public/projects/immeuble-toulon
 # (guillemets autour des chemins avec espaces : "lcc/lcc-result/Immeuble Full.lcc").
 
-# ROTATION : PAS DE -r en v3.3.3. Le lecteur .lcc oriente déjà le modèle dans le repère attendu par le
+# ROTATION : PAS DE -r (v3.3.3 comme v3.10.0). Le lecteur .lcc oriente déjà le modèle dans le repère attendu par le
 # viewer, (E, N, H) → (E, −H, N). Ajouter -r 90,0,0 le remet couché (erreur faite sur Belgentier,
 # Saint-Jean-Cap-Ferrat, Callian et Immeuble Toulon). L'effet de -r varie selon le chemin et les actions
 # (-r 180,0,0 était juste sur Callian, faux sur Toulon) : ne jamais en ajouter, toujours contrôler.
@@ -287,7 +291,7 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # Outil : scripts/scene-map.mjs. Fond de la mini-carte, calculé une fois ici : par niveau, une vue de dessus
 # des splats coupée de sol − 0,2 à sol + 1,8 m (map/<id>.webp) et la carte des murs (map/<id>-murs.png) ;
 # pour un extérieur (Callian, parking), une « vue d'avion » entière, sans murs. Nord en haut.
-# Prérequis : splat-transform v3.3.3, brew install webp (cwebp / dwebp). Pas de Python.
+# Prérequis : splat-transform v3.10.0 (v3.3.3 marche aussi), brew install webp (cwebp / dwebp). Pas de Python.
 # La scène doit avoir un project.json : en créer un minimal si besoin (id, name, content, settings),
 # comme public/projects/callian/project.json ou appartement-yannick/project.json (un .sog marche tel quel).
 # Les cartes sont écrites dans map/ à côté du project.json (map/<id scène>/ si le projet a plusieurs scènes),
@@ -319,8 +323,8 @@ node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
 # La planche est complétée (photo + murs en rouge) avec un contrôle du recalage photo / splats :
 # « RECALAGE DOUTEUX » si le meilleur décalage dépasse 10 cm ou si la corrélation est faible. Relire la planche.
 # Pièges : le filtre -B et le rendu .webp de splat-transform sont en (−E, H, N), le PLY en (E, −H, N).
-# Au-delà d'environ 800 px, splat-transform perd des splats sans prévenir sur une tranche dense : le script
-# rend donc en tuiles de 640 px au plus. Relancer build après chaque modification de levels.json.
+# Au-delà d'environ 800 px, splat-transform v3.3.3 perdait des splats sans prévenir sur une tranche dense
+# (corrigé en v3.10.0) : le script rend donc en tuiles de 640 px au plus, sans effet sur le résultat en v3.10.0. Relancer build après chaque modification de levels.json.
 
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
