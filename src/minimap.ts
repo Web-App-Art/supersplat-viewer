@@ -13,6 +13,13 @@
 // point moteur (x, y, z) se place en (−x, z) sur la carte, le nord en haut.
 // Le zéro utilisateur (TKT-226) ne change rien. Une scène sans bloc « map »
 // n'affiche rien.
+//
+// Lot 3 : un clic dans la vue agrandie y emmène le visiteur (événement
+// « map:goto », transition de camera-manager.ts), à sol du niveau affiché
+// + 1,60 m, direction conservée ; un clic dans un mur (carte des murs) est
+// refusé. On y zoome et on s'y déplace à la molette, au glisser et au pincer.
+
+import { Vec3 } from 'playcanvas';
 
 import { localize } from './localization';
 import { resolveScene } from './project';
@@ -33,11 +40,33 @@ const COMPACT_SPAN_AERIAL = 40;
 
 const BACKGROUND_KEY = 'artlight.map.background';
 
+// Navigation par la carte (lot 3).
+const EYE_HEIGHT = 1.6;
+// Case de la carte des murs comptée comme mur : toutes les tranches de
+// sol + 0,3 à sol + 2,0 occupées (alpha 255, cf. writeWalls de scene-map.mjs).
+const WALL_ALPHA = 250;
+// Un clic trop près d'un mur est reporté, sans traverser de mur, sur la case
+// la plus proche dégagée de CLEARANCE, cherchée jusqu'à SNAP_RADIUS.
+const CLEARANCE = 0.2;
+const SNAP_RADIUS = 0.4;
+// Un clic à moins de HIT_PX (px CSS) d'une case de mur est un clic dans le
+// mur : les murs pleins n'ont souvent qu'une ou deux cases d'épaisseur.
+const HIT_PX = 3;
+// Au-delà de ce déplacement (px CSS), le geste est un glisser, pas un clic.
+const CLICK_SLOP = 6;
+// Zoom maximal de la vue agrandie (m par px CSS).
+const MIN_MPP = 0.008;
+const MARK_DURATION = 900;
+
+type WallData = { alpha: Uint8Array, width: number, height: number };
+type Mark = { e: number, n: number, ok: boolean, level: number, time: number };
+
 const COLORS = {
     dark: '#18181b',
     paper: '#ecebe8',
     accent: '#84cc16',
     visitor: '#facc15',
+    refused: '#ef4444',
     text: '#fafafa'
 };
 
@@ -133,6 +162,23 @@ class MiniMap {
     private pose = { e: NaN, n: NaN, h: NaN, heading: NaN, fov: NaN };
 
     private narrow: MediaQueryList;
+
+    // Vue agrandie : zoom et déplacement choisis à la main ; null = niveau
+    // entier. Remise à zéro quand le niveau affiché change.
+    private panelView: View | null = null;
+
+    private panelViewLevel = -1;
+
+    // Dernière vue dessinée dans la vue agrandie, pour ramener un clic en (E, N).
+    private drawnView: View | null = null;
+
+    private pointers = new Map<number, { x: number, y: number }>();
+
+    private gesture: { view: View, x: number, y: number, dist: number, moved: boolean } | null = null;
+
+    private wallData = new Map<string, WallData | null>();
+
+    private marks: Mark[] = [];
 
     /**
      * Mini-carte de la scène active, ou null si elle n'a pas de bloc « map ».
@@ -245,10 +291,15 @@ class MiniMap {
         const canvasWrap = document.createElement('div');
         canvasWrap.className = 'minimap-canvas';
         this.panelCanvas = document.createElement('canvas');
+        this.panelCanvas.title = tr('goto-hint');
         canvasWrap.appendChild(this.panelCanvas);
+        this.bindGestures();
 
         this.panel.append(header, this.levelList, this.backgroundRow, canvasWrap);
         this.root.append(this.compact, this.panel);
+        // Molette : jamais transmise à la caméra (cf. ui.ts) ni à la page.
+        this.root.addEventListener('wheel', event => event.preventDefault(), { passive: false });
+
         document.querySelector('#ui').appendChild(this.root);
         document.body.classList.add('has-minimap');
     }
@@ -256,6 +307,9 @@ class MiniMap {
     private setExpanded(value: boolean) {
         this.expanded = value;
         this.pinnedLevel = null;
+        this.panelView = null;
+        this.pointers.clear();
+        this.gesture = null;
         this.compact.classList.toggle('hidden', value);
         this.panel.classList.toggle('hidden', !value);
         this.dirty = true;
@@ -272,6 +326,217 @@ class MiniMap {
         for (const button of Array.from(this.backgroundRow.children) as HTMLElement[]) {
             button.classList.toggle('active', button.dataset.value === this.background);
         }
+    }
+
+    // ── Gestes de la vue agrandie (lot 3) ──
+
+    private bindGestures() {
+        const canvas = this.panelCanvas;
+        const local = (event: PointerEvent | WheelEvent) => {
+            const rect = canvas.getBoundingClientRect();
+            return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        };
+        // Point de départ du geste : un doigt (glisser) ou le milieu de deux (pincer).
+        const startGesture = (moved: boolean) => {
+            const points = Array.from(this.pointers.values());
+            const view = this.drawnView;
+            if (!view || !points.length) {
+                this.gesture = null;
+                return;
+            }
+            const x = points.reduce((s, p) => s + p.x, 0) / points.length;
+            const y = points.reduce((s, p) => s + p.y, 0) / points.length;
+            const dist = points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0;
+            this.gesture = { view: { ...view }, x, y, dist, moved };
+        };
+
+        canvas.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0 || this.pointers.size >= 2) return;
+            canvas.setPointerCapture(event.pointerId);
+            this.pointers.set(event.pointerId, local(event));
+            // un second doigt transforme le geste en pincer, jamais en clic
+            startGesture(this.pointers.size > 1);
+        });
+
+        canvas.addEventListener('pointermove', (event) => {
+            if (!this.pointers.has(event.pointerId) || !this.gesture) return;
+            this.pointers.set(event.pointerId, local(event));
+            const g = this.gesture;
+            const points = Array.from(this.pointers.values());
+            const x = points.reduce((s, p) => s + p.x, 0) / points.length;
+            const y = points.reduce((s, p) => s + p.y, 0) / points.length;
+            if (!g.moved && Math.hypot(x - g.x, y - g.y) < CLICK_SLOP) return;
+            g.moved = true;
+            canvas.classList.add('dragging');
+
+            let mpp = g.view.mpp;
+            if (points.length > 1 && g.dist > 0) {
+                const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+                mpp = this.clampMpp(g.view.mpp * g.dist / Math.max(1, dist));
+            }
+            // le point de la carte sous le geste au départ reste sous le geste
+            const w = canvas.clientWidth;
+            const h = canvas.clientHeight;
+            const e = g.view.e + (g.x - w / 2) * g.view.mpp;
+            const n = g.view.n - (g.y - h / 2) * g.view.mpp;
+            this.setPanelView({ e: e - (x - w / 2) * mpp, n: n + (y - h / 2) * mpp, mpp });
+        });
+
+        const end = (event: PointerEvent, cancelled: boolean) => {
+            if (!this.pointers.has(event.pointerId)) return;
+            const click = !cancelled && this.pointers.size === 1 && this.gesture && !this.gesture.moved;
+            const at = local(event);
+            this.pointers.delete(event.pointerId);
+            canvas.classList.remove('dragging');
+            if (click) {
+                this.gesture = null;
+                this.clickAt(at.x, at.y);
+            } else {
+                // reste un doigt après un pincer : il continue à glisser
+                startGesture(true);
+            }
+        };
+        canvas.addEventListener('pointerup', event => end(event, false));
+        canvas.addEventListener('pointercancel', event => end(event, true));
+
+        canvas.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            const view = this.drawnView;
+            if (!view) return;
+            const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+            // pincer du pavé tactile (ctrlKey) : petits deltas, réponse plus vive
+            const k = event.ctrlKey ? 0.01 : 0.0015;
+            const mpp = this.clampMpp(view.mpp * Math.exp(event.deltaY * scale * k));
+            const { x, y } = local(event);
+            const w = canvas.clientWidth;
+            const h = canvas.clientHeight;
+            const e = view.e + (x - w / 2) * view.mpp;
+            const n = view.n - (y - h / 2) * view.mpp;
+            this.setPanelView({ e: e - (x - w / 2) * mpp, n: n + (y - h / 2) * mpp, mpp });
+        }, { passive: false });
+    }
+
+    // Vue du niveau entier dans la vue agrandie : zoom arrière maximal.
+    private wholeView(level: SceneMapLevel, w: number, h: number): View {
+        const [e0, n0, e1, n1] = level.bounds;
+        const mpp = Math.max((e1 - e0) / w, (n1 - n0) / h) * 1.04;
+        return { e: (e0 + e1) / 2, n: (n0 + n1) / 2, mpp };
+    }
+
+    private clampMpp(mpp: number) {
+        const level = this.levels[this.displayedLevel];
+        const max = this.wholeView(level, this.panelCanvas.clientWidth || 1, this.panelCanvas.clientHeight || 1).mpp;
+        return Math.min(max, Math.max(Math.min(MIN_MPP, max), mpp));
+    }
+
+    // Le centre reste dans l'emprise du niveau.
+    private setPanelView(view: View) {
+        const [e0, n0, e1, n1] = this.levels[this.displayedLevel].bounds;
+        this.panelView = {
+            e: Math.min(e1, Math.max(e0, view.e)),
+            n: Math.min(n1, Math.max(n0, view.n)),
+            mpp: view.mpp
+        };
+        this.dirty = true;
+    }
+
+    // ── Clic dans la vue agrandie : s'y rendre (lot 3) ──
+
+    private clickAt(x: number, y: number) {
+        const view = this.drawnView;
+        if (!view) return;
+        const w = this.panelCanvas.clientWidth;
+        const h = this.panelCanvas.clientHeight;
+        const e = view.e + (x - w / 2) * view.mpp;
+        const n = view.n - (y - h / 2) * view.mpp;
+        const index = this.displayedLevel;
+        const level = this.levels[index];
+
+        // Pas de carte des murs (vue d'avion), ou pas encore chargée : aucun refus.
+        const walls = this.walls(level.walls);
+        const spot = walls ? this.freeSpot(walls, level, e, n, HIT_PX * view.mpp) : { e, n };
+        const time = performance.now();
+        this.marks = this.marks.filter(m => time - m.time < MARK_DURATION);
+        if (!spot) {
+            this.marks.push({ e, n, ok: false, level: index, time });
+            this.dirty = true;
+            return;
+        }
+        this.marks.push({ e: spot.e, n: spot.n, ok: true, level: index, time });
+        this.dirty = true;
+        // (E, N) → moteur (−E, y, N)
+        this.global.events.fire('map:goto', new Vec3(-spot.e, level.floor + EYE_HEIGHT, spot.n));
+        // Sur téléphone, la vue agrandie couvre la scène : on la referme.
+        if (this.narrow.matches) {
+            this.setExpanded(false);
+        }
+    }
+
+    // Alpha de la carte des murs, lu une fois l'image chargée.
+    private walls(url: string | undefined): WallData | null {
+        if (!url) return null;
+        if (this.wallData.has(url)) return this.wallData.get(url);
+        const img = this.image(url);
+        if (!img) return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0);
+        const rgba = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const alpha = new Uint8Array(canvas.width * canvas.height);
+        for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
+        const data = { alpha, width: canvas.width, height: canvas.height };
+        this.wallData.set(url, data);
+        return data;
+    }
+
+    // Point libre où poser le visiteur, ou null si le clic tombe dans un mur.
+    private freeSpot(walls: WallData, level: SceneMapLevel, e: number, n: number, hit: number) {
+        const [e0, n0, e1, n1] = level.bounds;
+        const { alpha, width, height } = walls;
+        const cell = (e1 - e0) / width;
+        const isWall = (cx: number, cy: number) => (
+            cx >= 0 && cy >= 0 && cx < width && cy < height && alpha[cy * width + cx] >= WALL_ALPHA
+        );
+        const cx = Math.floor((e - e0) / cell);
+        const cy = Math.floor((n1 - n) / ((n1 - n0) / height));
+        const free = (x: number, y: number, r: number) => {
+            for (let dy = -r; dy <= r; dy++) {
+                for (let dx = -r; dx <= r; dx++) {
+                    if (dx * dx + dy * dy <= r * r && isWall(x + dx, y + dy)) return false;
+                }
+            }
+            return true;
+        };
+        if (!free(cx, cy, Math.round(hit / cell))) return null;
+
+        const r = Math.ceil(CLEARANCE / cell);
+        const clear = (x: number, y: number) => free(x, y, r);
+        if (clear(cx, cy)) return { e, n };
+
+        // sans traverser de mur entre le clic et la case retenue
+        const reachable = (x: number, y: number) => {
+            const steps = Math.max(Math.abs(x - cx), Math.abs(y - cy));
+            for (let s = 1; s <= steps; s++) {
+                if (isWall(Math.round(cx + (x - cx) * s / steps), Math.round(cy + (y - cy) * s / steps))) return false;
+            }
+            return true;
+        };
+        const R = Math.ceil(SNAP_RADIUS / cell);
+        let best: { x: number, y: number, d: number } | null = null;
+        for (let dy = -R; dy <= R; dy++) {
+            for (let dx = -R; dx <= R; dx++) {
+                const d = dx * dx + dy * dy;
+                if (d > R * R || (best && d >= best.d)) continue;
+                if (clear(cx + dx, cy + dy) && reachable(cx + dx, cy + dy)) {
+                    best = { x: cx + dx, y: cy + dy, d };
+                }
+            }
+        }
+        // Passage plus étroit que 2 × CLEARANCE : on garde le clic tel quel.
+        if (!best) return { e, n };
+        return { e: e0 + (best.x + 0.5) * cell, n: n1 - (best.y + 0.5) * cell };
     }
 
     // ── Suivi de la caméra ──
@@ -335,6 +600,13 @@ class MiniMap {
             this.dirty = true;
         }
 
+        // repères de clic en cours d'effacement
+        if (this.marks.length) {
+            const now = performance.now();
+            this.marks = this.marks.filter(m => now - m.time < MARK_DURATION);
+            this.dirty = true;
+        }
+
         if (this.dirty) {
             this.dirty = false;
             this.render();
@@ -366,6 +638,12 @@ class MiniMap {
         this.refreshControls(level);
 
         if (this.expanded) {
+            if (index !== this.panelViewLevel) {
+                this.panelViewLevel = index;
+                this.panelView = null;
+            }
+            // carte des murs chargée d'avance pour contrôler les clics, quel que soit le fond
+            this.walls(level.walls);
             this.draw(this.panelCanvas, level, index === this.visitorLevel, true);
         } else {
             this.draw(this.compactCanvas, level, true, false);
@@ -390,8 +668,9 @@ class MiniMap {
     private viewFor(level: SceneMapLevel, w: number, h: number, whole: boolean): View {
         const [e0, n0, e1, n1] = level.bounds;
         if (whole) {
-            const mpp = Math.max((e1 - e0) / w, (n1 - n0) / h) * 1.04;
-            return { e: (e0 + e1) / 2, n: (n0 + n1) / 2, mpp };
+            const full = this.wholeView(level, w, h);
+            // zoom gardé, borné si la fenêtre a changé de taille
+            return this.panelView ? { ...this.panelView, mpp: Math.min(full.mpp, this.panelView.mpp) } : full;
         }
         const span = Math.min(this.hasWalls(level) ? COMPACT_SPAN_INDOOR : COMPACT_SPAN_AERIAL, Math.max(e1 - e0, n1 - n0));
         const mpp = span / Math.min(w, h);
@@ -410,6 +689,7 @@ class MiniMap {
         if (!w || !h) return;
 
         const view = this.viewFor(level, w, h, whole);
+        if (whole) this.drawnView = view;
         const toX = (e: number) => w / 2 + (e - view.e) / view.mpp;
         const toY = (n: number) => h / 2 - (n - view.n) / view.mpp;
 
@@ -438,6 +718,12 @@ class MiniMap {
 
         if (showVisitor) {
             this.drawVisitor(ctx, toX(this.pose.e), toY(this.pose.n), w, h, whole ? 44 : 30);
+        }
+        if (whole) {
+            const index = this.levels.indexOf(level);
+            for (const mark of this.marks) {
+                if (mark.level === index) this.drawMark(ctx, toX(mark.e), toY(mark.n), mark);
+            }
         }
         if (Number.isFinite(this.map.north)) {
             this.drawNorth(ctx, w - 16, 18, this.map.north);
@@ -484,6 +770,43 @@ class MiniMap {
         ctx.fillStyle = inside ? COLORS.visitor : 'rgba(0, 0, 0, 0.4)';
         ctx.fill();
         ctx.stroke();
+    }
+
+    // Repère d'un clic : anneau vert qui s'élargit (accepté), croix rouge
+    // et « Mur » (refusé). Il s'efface en MARK_DURATION.
+    private drawMark(ctx: CanvasRenderingContext2D, x: number, y: number, mark: Mark) {
+        const t = Math.min(1, (performance.now() - mark.time) / MARK_DURATION);
+        ctx.save();
+        ctx.globalAlpha = 1 - t * t;
+        ctx.lineWidth = 2.5;
+        if (mark.ok) {
+            ctx.strokeStyle = COLORS.accent;
+            ctx.beginPath();
+            ctx.arc(x, y, 6 + 14 * t, 0, Math.PI * 2);
+            ctx.stroke();
+        } else {
+            const s = 7;
+            ctx.strokeStyle = COLORS.refused;
+            ctx.beginPath();
+            ctx.moveTo(x - s, y - s);
+            ctx.lineTo(x + s, y + s);
+            ctx.moveTo(x + s, y - s);
+            ctx.lineTo(x - s, y + s);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(x, y, 12, 0, Math.PI * 2);
+            ctx.stroke();
+            const text = localize('artlight.map.in-wall');
+            ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            const tw = ctx.measureText(text).width;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(x + 16, y - 10, tw + 10, 20);
+            ctx.fillStyle = COLORS.text;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, x + 21, y);
+        }
+        ctx.restore();
     }
 
     private drawNorth(ctx: CanvasRenderingContext2D, x: number, y: number, north: number) {

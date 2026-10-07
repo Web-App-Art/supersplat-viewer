@@ -360,6 +360,30 @@ class CameraManager {
         events.on('navigateComplete', () => {
             events.fire('navTarget:clear');
         });
+
+        // ARTLIGHT (TKT-268, lot 3) : clic sur la carte. En drone, la caméra
+        // rejoint le point en gardant sa direction ; en orbite, la cible s'y
+        // déplace et la caméra la suit, même recul, même angle. Transition
+        // habituelle (~1 s).
+        events.on('map:goto', (position: Vec3) => {
+            sourcesByMode[state.cameraMode]?.cancel();
+            events.fire('navTarget:clear');
+            events.fire('orbitTarget:clear');
+            if (state.cameraMode === 'orbit') {
+                tmpCamera.copy(this.camera);
+                tmpCamera.calcFocusPoint(tmpv);
+                tmpCamera.position.add(tmpv.sub2(position, tmpv));
+                controllers.orbit.goto(tmpCamera);
+            } else {
+                if (state.cameraMode !== 'fly') {
+                    state.cameraMode = 'fly';
+                }
+                tmpCamera.copy(this.camera);
+                tmpCamera.position.copy(position);
+                controllers.fly.goto(tmpCamera);
+            }
+            startTransition();
+        });
     }
 }
 

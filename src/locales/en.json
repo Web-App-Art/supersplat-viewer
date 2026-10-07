@@ -581,6 +581,8 @@
     "artlight.map.background-photo": "Photo",
     "artlight.map.background-mixed": "Mixed",
     "artlight.map.background-walls": "Walls",
+    "artlight.map.goto-hint": "Click to go there; scroll, drag or pinch to zoom and move the map",
+    "artlight.map.in-wall": "Wall",
     "artlight.speed.label": "Movement speed",
     "artlight.speed.level-1": "Very slow",
     "artlight.speed.level-2": "Slow",

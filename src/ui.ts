@@ -319,6 +319,9 @@ const initUI = (global: Global) => {
         // ARTLIGHT (TKT-236) : au-dessus d'un panneau qui défile, la molette
         // fait défiler le panneau au lieu de zoomer la caméra.
         if (scrollsItself(event.target as HTMLElement)) return;
+        // ARTLIGHT (TKT-268, lot 3) : la carte garde sa molette (zoom de la
+        // vue agrandie), voir src/minimap.ts.
+        if ((event.target as HTMLElement | null)?.closest?.('#minimap')) return;
         event.preventDefault();
         const forwarded = new WheelEvent(event.type, event);
         const src = event as WheelEvent & {
