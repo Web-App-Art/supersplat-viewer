@@ -473,6 +473,7 @@ const drawPanel = (page: PdfPage, r: Rect, image: PdfImage | null, tables: PdfSh
 const layerStyles = (doc: PdfDocument, L: DrawingLayers): Record<string, PdfLayerStyle> => ({
     [L.points]: { layer: doc.layer(L.points), color: '#8a8a94', width: 0.18, dot: 0.2, clip: true },
     [L.lines]: { layer: doc.layer(L.lines), color: INK, width: 0.35, clip: true },
+    [L.details]: { layer: doc.layer(L.details), color: '#9a9aa2', width: 0.18, clip: true },
     [L.grid]: { layer: doc.layer(L.grid), color: MUTED, width: 0.18 },
     [L.dims]: { layer: doc.layer(L.dims), color: '#4d7c0f', width: 0.25, thin: 0.18 },
     [L.measure]: { layer: doc.layer(L.measure), color: '#c2410c', width: 0.25, thin: 0.18 },
@@ -480,7 +481,7 @@ const layerStyles = (doc: PdfDocument, L: DrawingLayers): Record<string, PdfLaye
     [L.title]: { layer: doc.layer(L.title), color: INK, width: 0.25 }
 });
 
-const layerOrder = (L: DrawingLayers) => [L.points, L.grid, L.lines, L.dims, L.measure, L.rule, L.title];
+const layerOrder = (L: DrawingLayers) => [L.points, L.grid, L.details, L.lines, L.dims, L.measure, L.rule, L.title];
 
 interface Context {
     doc: PdfDocument;

@@ -12,7 +12,9 @@ import { subsample } from './tool-utils';
 //
 // Calques (noms traduits, couleur AutoCAD entre parenthèses) :
 // - points de la tranche (7 : noir sur fond blanc, blanc sur fond noir) ;
-// - traits de coupe, les polylignes (3, vert, 0,35 mm) ;
+// - traits de coupe : murs et courbes redressés (3, vert, 0,35 mm) ;
+// - traits de détail : le reste du nuage, mobilier, escaliers (9, gris
+//   clair, 0,18 mm), masquable seul (TKT-264) ;
 // - cotes : A et B, cotes de A à B, cotes de niveau, pente (1, rouge) ;
 // - mesure faite sur le profil (30, orange) ;
 // - règle : la plus défavorable, ses appuis, sa flèche cotée (5, bleu) ;
@@ -28,6 +30,7 @@ export type DrawingKind = 'profile' | 'plan' | 'plane';
 export interface DrawingLayers {
     points: string;
     lines: string;
+    details: string;
     dims: string;
     measure: string;
     rule: string;
@@ -57,6 +60,7 @@ export interface SectionDrawing {
     points: Float64Array;       // x, y, z alternés
     count: number;
     lines: { points: number[]; closed: boolean }[];
+    details: { points: number[]; closed: boolean }[];   // calque des détails
     z: number;                  // altitude des traits, cotes et textes
     ends?: { a: Vec2; b: Vec2; levels?: [string, string] };
     dims: DrawingDimension[];
@@ -144,7 +148,7 @@ export const contentBox = (d: SectionDrawing): Box => {
         box.y0 = Math.min(box.y0, p[1]);
         box.y1 = Math.max(box.y1, p[1]);
     };
-    for (const line of d.lines) {
+    for (const line of [...d.lines, ...d.details]) {
         for (let i = 0; i < line.points.length; i += 2) include([line.points[i], line.points[i + 1]]);
     }
     if (d.ends) {
@@ -243,11 +247,15 @@ export const drawSection = (d: SectionDrawing, w: DrawingTarget, opts: LayoutOpt
     if (opts.points ?? true) {
         for (let i = 0; i < d.count; i++) w.point(L.points, d.points[i * 3], d.points[i * 3 + 1] * ky, d.points[i * 3 + 2]);
     }
-    for (const line of d.lines) {
-        let xy: ArrayLike<number> = line.points;
-        if (ky !== 1) xy = line.points.map((v, i) => (i % 2 ? v * ky : v));
-        w.polyline(L.lines, xy, line.closed, z);
-    }
+    const polylines = (layer: string, lines: SectionDrawing['lines']) => {
+        for (const line of lines) {
+            let xy: ArrayLike<number> = line.points;
+            if (ky !== 1) xy = line.points.map((v, i) => (i % 2 ? v * ky : v));
+            w.polyline(layer, xy, line.closed, z);
+        }
+    };
+    polylines(L.details, d.details);
+    polylines(L.lines, d.lines);
 
     // Cadre gradué, aligné sur le pas des graduations (DXF) ou serré sur le
     // contenu (PDF : le dessin tient à plus grande échelle). Chaque axe a son
@@ -366,6 +374,7 @@ export const sectionDxf = (d: SectionDrawing): Blob => {
     const w = new DxfWriter([
         { name: L.points, color: 7 },
         { name: L.lines, color: 3, lineweight: 35 },
+        ...(d.details.length ? [{ name: L.details, color: 9, lineweight: 18 }] : []),
         { name: L.dims, color: 1 },
         { name: L.measure, color: 30 },
         ...(d.rule ? [{ name: L.rule, color: 5, lineweight: 35 }] : []),

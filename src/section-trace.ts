@@ -119,9 +119,12 @@ interface Edge {
  *
  * @param {Float32Array} points - Points de la tranche (s, t alternés).
  * @param {number} total - Nombre de points.
+ * @param {number} cellMax - Taille de case maximale (m). Les détails des
+ * traits redressés (section-lines.ts) la bornent : leurs points, clairsemés,
+ * faisaient grandir les cases jusqu'à relier des amas à travers le vide.
  * @returns {TraceResult} Polylignes, taille des cases et tolérance.
  */
-export const traceSection = (points: Float32Array, total: number): TraceResult => {
+export const traceSection = (points: Float32Array, total: number, cellMax = CELL_MAX): TraceResult => {
     const empty: TraceResult = { lines: [], cell: CELL_MIN, tolerance: CELL_MIN / 2 };
     if (total < 10) return empty;
 
@@ -213,8 +216,8 @@ export const traceSection = (points: Float32Array, total: number): TraceResult =
         return total ? long / total : 1;
     };
     rasterize();
-    while (cell < CELL_MAX && continuity() < CONTINUOUS_SHARE) {
-        cell = Math.min(CELL_MAX, cell * 1.25);
+    while (cell < cellMax && continuity() < CONTINUOUS_SHARE) {
+        cell = Math.min(cellMax, cell * 1.25);
         rasterize();
     }
 

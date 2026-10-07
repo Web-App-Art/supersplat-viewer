@@ -6,13 +6,13 @@ import { sectionDxf } from './section-drawing';
 import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-drawing';
 import { SectionFolder, captureView } from './section-folder';
 import type { FolderItem } from './section-folder';
+import { fitSectionLines } from './section-lines';
 import { PdfDialog, sectionReportPdf } from './section-pdf';
 import type { PdfSettings, PdfSheet } from './section-pdf';
 import { DARK_THEME, LIGHT_THEME, ProfileView, paintProfile, profileToScreen, scaleBarLength } from './section-profile';
 import type { ProfileData, ProfileMeasure, ProfilePoint, ProfileRule, ProfileWindow } from './section-profile';
 import { computeRule, spanFrame, spanIsUpright } from './section-rule';
 import type { RuleOk, RuleResult } from './section-rule';
-import { traceSection } from './section-trace';
 import { SplatSectionHighlight } from './splat-highlight';
 import {
     translator, formatNumber, formatCount, formatLength, readStoredNumber, storeNumber, readStoredText, storeText,
@@ -3076,12 +3076,16 @@ class SectionTool {
             sMax = Math.max(sMax, section.points[i * 2]);
         }
 
-        const trace = traceSection(section.points, section.count);
-        const lines = trace.lines.map((line) => {
+        // Traits redressés (TKT-264) : murs et courbes, et le reste en
+        // détails. Coupe verticale : sols horizontaux, murs verticaux.
+        const fit = fitSectionLines(section.points, section.count, { square: frame.kind === 'vertical' ? 0 : undefined });
+        const toDrawing = (line: { points: number[]; closed: boolean }) => {
             const out: number[] = [];
             for (let i = 0; i < line.points.length; i += 2) out.push(...at({ s: line.points[i], t: line.points[i + 1] }));
             return { points: out, closed: line.closed };
-        });
+        };
+        const lines = fit.lines.map(toDrawing);
+        const details = fit.details.map(toDrawing);
 
         // A et B : cote de A à B ; en hauteur, ses composantes si AB est en
         // biais, les cotes de niveau et la pente.
@@ -3170,7 +3174,8 @@ class SectionTool {
                 tr(format === 'pdf' ? 'pdf.points-decimated' : 'dxf.points-decimated', { n: formatCount(count), total: formatCount(section.count), step: stride }) :
                 formatCount(count)]);
         }
-        rows.push([tr('dxf.lines'), tr('dxf.lines-value', { n: formatCount(lines.length), tolerance: formatLength(trace.tolerance) })]);
+        rows.push([tr('dxf.lines'), tr('dxf.lines-value', { walls: formatCount(fit.walls), curves: formatCount(fit.curves) })]);
+        if (details.length) rows.push([tr('dxf.details'), tr('dxf.details-value', { n: formatCount(details.length), tolerance: formatLength(fit.tolerance) })]);
         const tables = [...this.summarySections(k), { title: tr('dxf.drawing'), rows }];
 
         const drawing: SectionDrawing = {
@@ -3178,6 +3183,7 @@ class SectionTool {
             points,
             count,
             lines,
+            details,
             z: kind === 'plan' && !turned ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
             ends,
             dims,
@@ -3195,6 +3201,7 @@ class SectionTool {
             layers: {
                 points: tr('dxf.layer.points'),
                 lines: tr('dxf.layer.lines'),
+                details: tr('dxf.layer.details'),
                 dims: tr('dxf.layer.dims'),
                 measure: tr('dxf.layer.measure'),
                 rule: tr('dxf.layer.rule'),
