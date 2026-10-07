@@ -158,6 +158,19 @@ export class DxfWriter implements DrawingTarget {
         this.entities.push(this.head('CIRCLE', layer, this.model) + tags(100, 'AcDbCircle') + xyz(c[0], c[1], z) + tags(40, num(r)));
     }
 
+    // Arc (TKT-264) : angles en degrés, de a0 à a1 dans le sens
+    // trigonométrique, ramenés dans [0, 360[ comme les écrit AutoCAD. Un tour
+    // complet s'écrit en cercle.
+    arc(layer: string, c: Vec2, r: number, a0: number, a1: number, z = 0) {
+        if (a1 - a0 >= 360 - 1e-9) {
+            this.circle(layer, c, r, z);
+            return;
+        }
+        const deg = (a: number) => ((a % 360) + 360) % 360;
+        this.entities.push(this.head('ARC', layer, this.model) + tags(100, 'AcDbCircle') + xyz(c[0], c[1], z) + tags(40, num(r)) +
+            tags(100, 'AcDbArc', 50, num(deg(a0)), 51, num(deg(a1))));
+    }
+
     // Triangle ou quadrilatère plein (sommets dans l'ordre du DXF : 1, 2, 3, 4).
     solid(layer: string, pts: Vec2[], z = 0) {
         this.entities.push(this.solidEntity(layer, this.model, pts, z, false));

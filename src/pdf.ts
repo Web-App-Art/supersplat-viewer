@@ -169,6 +169,21 @@ const circleOps = (cx: number, cy: number, r: number) => {
         `${n(cx + k)} ${n(cy - r)} ${n(cx + r)} ${n(cy - k)} ${n(cx + r)} ${n(cy)} c h\n`;
 };
 
+// Arc (TKT-264) : centre, rayon, de a0 à a1 (radians, sens
+// trigonométrique), en arcs de Bézier d'un quart de tour au plus (écart au
+// cercle sous 0,03 % du rayon). Sans fermeture ni tracé.
+const arcOps = (cx: number, cy: number, r: number, a0: number, a1: number) => {
+    const count = Math.max(1, Math.ceil((a1 - a0) / (Math.PI / 2) - 1e-9));
+    const step = (a1 - a0) / count, k = 4 / 3 * Math.tan(step / 4) * r;
+    let ops = `${n(cx + r * Math.cos(a0))} ${n(cy + r * Math.sin(a0))} m`;
+    for (let i = 0; i < count; i++) {
+        const t0 = a0 + i * step, t1 = t0 + step;
+        const c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
+        ops += ` ${n(cx + r * c0 - k * s0)} ${n(cy + r * s0 + k * c0)} ${n(cx + r * c1 + k * s1)} ${n(cy + r * s1 - k * c1)} ${n(cx + r * c1)} ${n(cy + r * s1)} c`;
+    }
+    return ops;
+};
+
 export interface PdfLayer {
     id: string;                 // nom de la ressource (/OC /L1)
     name: string;
@@ -585,6 +600,14 @@ export class PdfDrawing implements DrawingTarget {
         const style = this.styles[layer];
         this.width(layer, buffer, style.thin ?? style.width);
         buffer.push(`${circleOps(this.ox + c[0] * this.s, this.oy + c[1] * this.s, r * this.s)}S\n`);
+    }
+
+    arc(layer: string, c: Vec2, r: number, a0: number, a1: number) {
+        const buffer = this.buffer(layer);
+        if (!buffer) return;
+        this.width(layer, buffer, this.styles[layer].width);
+        const rad = Math.PI / 180;
+        buffer.push(`${arcOps(this.ox + c[0] * this.s, this.oy + c[1] * this.s, r * this.s, a0 * rad, a1 * rad)} S\n`);
     }
 
     solid(layer: string, pts: Vec2[]) {

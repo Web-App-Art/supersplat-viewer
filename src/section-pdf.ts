@@ -165,6 +165,12 @@ class BoundsTarget implements DrawingTarget {
         this.add(c[0] + r, c[1] + r);
     }
 
+    // Bouts de l'arc, et les points cardinaux qu'il franchit.
+    arc(_layer: string, c: Vec2, r: number, a0: number, a1: number) {
+        for (const a of [a0, a1]) this.add(c[0] + r * Math.cos(a * Math.PI / 180), c[1] + r * Math.sin(a * Math.PI / 180));
+        for (let q = Math.ceil(a0 / 90) * 90; q <= a1; q += 90) this.add(c[0] + r * Math.cos(q * Math.PI / 180), c[1] + r * Math.sin(q * Math.PI / 180));
+    }
+
     solid(_layer: string, pts: Vec2[]) {
         for (const p of pts) this.add(p[0], p[1]);
     }

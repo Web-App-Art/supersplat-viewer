@@ -12,7 +12,8 @@ import { subsample } from './tool-utils';
 //
 // Calques (noms traduits, couleur AutoCAD entre parenthèses) :
 // - points de la tranche (7 : noir sur fond blanc, blanc sur fond noir) ;
-// - traits de coupe : murs et courbes redressés (3, vert, 0,35 mm) ;
+// - traits de coupe : murs et courbes redressés, les courbes en vrais arcs
+//   (3, vert, 0,35 mm) ;
 // - traits de détail : le reste du nuage, mobilier, escaliers (9, gris
 //   clair, 0,18 mm), masquable seul (TKT-264) ;
 // - cotes : A et B, cotes de A à B, cotes de niveau, pente (1, rouge) ;
@@ -55,11 +56,32 @@ export interface DrawingRule {
     gapText: string;
 }
 
+// Arc de cercle : de a0 à a1 (degrés, sens trigonométrique, a1 > a0 ;
+// a1 − a0 = 360 : cercle entier).
+export interface DrawingArc {
+    c: Vec2;
+    r: number;
+    a0: number;
+    a1: number;
+}
+
+// Sommets d'un arc, à 2 mm près (pour un dessin déformé, profil exagéré).
+const arcVertices = (a: DrawingArc): Vec2[] => {
+    const rad = Math.PI / 180;
+    const step = 2 * Math.acos(Math.max(-1, 1 - 0.002 / a.r)) / rad;
+    const n = Math.max(4, Math.ceil((a.a1 - a.a0) / step));
+    return Array.from({ length: n + 1 }, (_, k) => {
+        const t = (a.a0 + (a.a1 - a.a0) * k / n) * rad;
+        return [a.c[0] + a.r * Math.cos(t), a.c[1] + a.r * Math.sin(t)] as Vec2;
+    });
+};
+
 export interface SectionDrawing {
     kind: DrawingKind;
     points: Float64Array;       // x, y, z alternés
     count: number;
     lines: { points: number[]; closed: boolean }[];
+    arcs: DrawingArc[];         // courbes, sur le calque des traits (TKT-264)
     details: { points: number[]; closed: boolean }[];   // calque des détails
     z: number;                  // altitude des traits, cotes et textes
     ends?: { a: Vec2; b: Vec2; levels?: [string, string] };
@@ -151,6 +173,7 @@ export const contentBox = (d: SectionDrawing): Box => {
     for (const line of [...d.lines, ...d.details]) {
         for (let i = 0; i < line.points.length; i += 2) include([line.points[i], line.points[i + 1]]);
     }
+    for (const a of d.arcs) for (const p of arcVertices(a)) include(p);
     if (d.ends) {
         include(d.ends.a);
         include(d.ends.b);
@@ -256,6 +279,17 @@ export const drawSection = (d: SectionDrawing, w: DrawingTarget, opts: LayoutOpt
     };
     polylines(L.details, d.details);
     polylines(L.lines, d.lines);
+    // Courbes : vrais arcs ; dans un profil exagéré, l'arc devient une
+    // ellipse, écrite en polyligne.
+    for (const a of d.arcs) {
+        if (ky === 1) {
+            w.arc(L.lines, a.c, a.r, a.a0, a.a1, z);
+        } else {
+            const full = a.a1 - a.a0 >= 360 - 1e-9;
+            const xy = arcVertices(a).slice(0, full ? -1 : undefined).flatMap(p => [p[0], p[1] * ky]);
+            w.polyline(L.lines, xy, full, z);
+        }
+    }
 
     // Cadre gradué, aligné sur le pas des graduations (DXF) ou serré sur le
     // contenu (PDF : le dessin tient à plus grande échelle). Chaque axe a son

@@ -22,6 +22,9 @@ export interface DrawingTarget {
     // Sommets x, y alternés.
     polyline(layer: string, xy: ArrayLike<number>, closed?: boolean, z?: number): void;
     circle(layer: string, c: Vec2, r: number, z?: number): void;
+    // Arc de cercle, de a0 à a1 (degrés, sens trigonométrique, comme
+    // l'entité ARC du DXF ; a1 > a0).
+    arc(layer: string, c: Vec2, r: number, a0: number, a1: number, z?: number): void;
     // Triangle ou quadrilatère plein (sommets dans l'ordre du DXF : 1, 2, 3, 4).
     solid(layer: string, pts: Vec2[], z?: number): void;
     text(layer: string, at: Vec2, height: number, text: string, opts?: TextOptions, z?: number): void;

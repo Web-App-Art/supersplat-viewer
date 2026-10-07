@@ -3,7 +3,7 @@ import { Mat4, Vec3 } from 'playcanvas';
 import { formatCoordsInline } from './coordinates';
 import { getLocale } from './localization';
 import { sectionDxf } from './section-drawing';
-import type { DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-drawing';
+import type { DrawingArc, DrawingDimension, DrawingKind, DrawingRule, SectionDrawing } from './section-drawing';
 import { SectionFolder, captureView } from './section-folder';
 import type { FolderItem } from './section-folder';
 import { fitSectionLines } from './section-lines';
@@ -3086,6 +3086,22 @@ class SectionTool {
         };
         const lines = fit.lines.map(toDrawing);
         const details = fit.details.map(toDrawing);
+        // Courbes : le passage au repère du dessin ne déforme pas (rotation,
+        // translation, parfois symétrie) ; l'arc y garde son rayon, et va du
+        // début à la fin, ou de la fin au début si la symétrie l'a retourné.
+        const arcs = fit.arcs.map((a): DrawingArc => {
+            const c = at({ s: a.cx, t: a.cy });
+            const on = (ang: number) => at({ s: a.cx + a.r * Math.cos(ang), t: a.cy + a.r * Math.sin(ang) });
+            const p0 = on(a.a0), pm = on((a.a0 + a.a1) / 2), p1 = on(a.a1);
+            const r = Math.hypot(p0[0] - c[0], p0[1] - c[1]);
+            if (a.a1 - a.a0 >= 2 * Math.PI - 1e-9) return { c, r, a0: 0, a1: 360 };
+            const deg = (p: [number, number]) => Math.atan2(p[1] - c[1], p[0] - c[0]) * 180 / Math.PI;
+            const direct = (p0[0] - c[0]) * (pm[1] - c[1]) - (p0[1] - c[1]) * (pm[0] - c[0]) > 0;
+            const a0 = deg(direct ? p0 : p1);
+            let a1 = deg(direct ? p1 : p0);
+            while (a1 <= a0) a1 += 360;
+            return { c, r, a0, a1 };
+        });
 
         // A et B : cote de A à B ; en hauteur, ses composantes si AB est en
         // biais, les cotes de niveau et la pente.
@@ -3183,6 +3199,7 @@ class SectionTool {
             points,
             count,
             lines,
+            arcs,
             details,
             z: kind === 'plan' && !turned ? this.drawingPoint(frame, kind, 0, 0)[2] : 0,
             ends,

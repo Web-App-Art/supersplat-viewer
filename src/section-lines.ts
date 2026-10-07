@@ -16,20 +16,37 @@ import type { TracedLine } from './section-trace';
 // 3. Équerre (directions ramenées sur la direction principale ou sa
 //    perpendiculaire), traînes de bruit écartées, faces colinéaires ou
 //    doublées fusionnées.
-// 4. Courbes : cordes courtes qui tournent toujours du même côté, remplacées
-//    par un arc de cercle (écrit en polyligne fine).
+// 4. Courbes (lot 2) : les points orientés hors des murs d'équerre votent
+//    pour les centres des cercles qui leur sont tangents ; chaque centre
+//    candidat donne un cercle ajusté de proche en proche, gardé s'il
+//    explique les points nettement mieux qu'une droite ou que deux (coin),
+//    puis écrit en vrai arc. Les droites qui n'en étaient que des cordes
+//    sont retirées.
 // 5. Traits courts en biais ou en travers d'un mur écartés (meubles,
-//    encombrement), puis coins : les bouts sont prolongés ou raccourcis
-//    jusqu'au trait voisin, si le raccord passe sur des points et ne coupe
-//    aucun autre trait. Enfin, deux traits qui se croisent sont raccourcis
-//    ou le plus court est écarté, et les doublons sont retirés.
+//    encombrement), puis coins en L et raccords en T (mur qui bute au milieu
+//    d'un autre) : les bouts sont prolongés ou raccourcis jusqu'au trait
+//    voisin, si le raccord passe sur des points et ne coupe aucun autre
+//    trait. Enfin, deux traits (droites ou arcs) qui se croisent sont
+//    raccourcis ou le plus court est écarté, les bouts des arcs sont
+//    raccordés aux droites voisines, et les doublons sont retirés.
 // 6. Reste : les points qu'aucun trait n'explique (mobilier, escaliers,
 //    terrain) sont tracés par traceSection, pour un calque à part.
 //
 // Les traits sont tracés dans le repère du profil (s, t), sans exagération.
 
+// Arc de cercle, de a0 à a1 (radians, sens trigonométrique, a0 < a1 ≤ a0 + 2π ;
+// a1 − a0 = 2π : cercle entier).
+export interface SectionArc {
+    cx: number;
+    cy: number;
+    r: number;
+    a0: number;
+    a1: number;
+}
+
 export interface SectionLines {
-    lines: TracedLine[];        // murs (polylignes à 2 points) et courbes
+    lines: TracedLine[];        // murs (polylignes à 2 points)
+    arcs: SectionArc[];         // courbes
     details: TracedLine[];      // reste du nuage, tracé par traceSection
     walls: number;
     curves: number;
@@ -124,19 +141,92 @@ const MERGE_PARALLEL = 0.08;
 const MERGE_OVERLAP = 0.3;
 
 // ── 4. Courbes ──
-// Au moins 3 cordes non d'équerre de moins de 1 m, bout à bout (moins de
-// 20 cm), qui tournent du même côté de 4 à 50° chacune et de 30° en tout.
-// Cercle de Kåsa sur leurs points, gardé si l'écart quadratique moyen est
-// sous 2,4 cm (0,6 fois le bruit d'une face) et le rayon sous 10 m. Arc écrit
-// en polyligne, à 5 mm près.
-const ARC_CHORD = 1;
-const ARC_JOIN = 0.2;
-const ARC_MIN_CHORDS = 3;
-const ARC_TURN_MIN = 4;
-const ARC_TURN_MAX = 50;
-const ARC_TOTAL = 30;
-const ARC_RMS = 0.024;
-const ARC_RADIUS = 10;
+// Les cordes d'une courbe ne suffisent pas à la trouver (une baie clairsemée
+// donne des droites tronquées, un poteau aucune). Chaque point orienté qui
+// n'est ni sur un mur d'équerre ni sur un long mur (2 m) vote pour les
+// centres des cercles qui lui sont tangents : à la distance r, de part et d'autre, pour 35 rayons de 8 cm
+// à 10 m (pas de 15 %). Les votes d'un arc tombent dans la même case, ceux
+// d'un mur droit s'étalent le long d'une parallèle. Cases de 12 % du rayon
+// (l'orientation locale d'une courbe clairsemée est juste à 10° près, et on
+// réunit 3 × 3 cases), 2 cm au moins. Un votant par case de 4 cm, au plus
+// 4 000 (un sur n au-delà), 60 candidats d'au moins 12 votes, maximums
+// locaux en position et en rayon.
+const ARC_POOL_LONG = 2;
+const ARC_R_MIN = 0.08;
+const ARC_R_MAX = 10;
+const ARC_R_STEP = 1.15;
+const ARC_CELL = 0.12;
+const ARC_CELL_MIN = 0.02;
+const ARC_VOTER_CELL = 0.04;
+const ARC_VOTERS = 4000;
+const ARC_VOTES = 12;
+const ARC_CANDIDATES = 60;
+// Candidats : la partie du cercle où sont leurs votants (le complément du
+// plus grand trou entre leurs angles). La longueur que couvrent les votants
+// (tranches de 10 cm) en fait au moins 25 % : les quatre murs d'une pièce
+// votent pour un cercle centré dans la pièce, mais par quatre paquets
+// étroits (un poteau couvre 90 % de son tour, une pièce 10 % de son
+// cercle). Leurs orientations suivent la tangente mieux que leur moyenne
+// (ARC_BETTER) : un mur droit vote beaucoup pour un grand rayon, mais avec
+// une seule orientation. Classement : nombre de tranches de 10° occupées
+// par les votants, multiplié par cette part (un poteau passe ainsi devant
+// les grands cercles de hasard, plus riches en votes).
+const ARC_VOTE_FILL = 0.25;
+const ARC_VOTE_BIN = 10;
+// Les votants d'un candidat couvrent au moins les trois quarts de
+// l'ouverture et de la longueur minimales d'un arc.
+const ARC_VOTE_SPAN = 0.75;
+// Ajustement, sur les points à ±8 cm du cercle dont l'orientation suit la
+// tangente à 20° près (ou sans orientation) : tolérance comme pour une face
+// (2,5 σ, 2 à 6 cm), cercle géométrique (Gauss-Newton). On part du plus
+// fourni des tronçons de la partie des votants, puis, en 4 tours au plus,
+// la fenêtre s'étend de 1 m de chaque côté et garde les tronçons qui
+// touchent les précédents ; fini quand le cercle bouge de moins de 5 mm.
+// Validation : un arc garde au moins 25 cm, 10 points, un point tous les
+// 5 cm, une flèche de 2,5 cm (sinon c'est une droite) et 20° d'ouverture.
+// Dans un coin ou du mobilier, un cercle trouve des points mais pas leurs
+// orientations : 70 % des points orientés de l'arc doivent suivre la
+// tangente. Ses côtés sont contrôlés comme ceux d'une face (FLANK_*).
+const ARC_TANGENT = 20;
+const ARC_MIN_LENGTH = 0.25;
+const ARC_MIN_SPAN = 20;
+const ARC_AGREE = 0.7;
+const ARC_ITERATIONS = 4;
+const ARC_GROW = 1;
+const ARC_STABLE = 0.005;
+// Trous : 30 cm (une courbe clairsemée se lit par paquets). Occupation :
+// 60 % des tranches de 10 cm, une tranche comptant si elle a 2 points et
+// 15 % du nombre moyen par tranche (un paquet serré relié par quelques
+// points épars n'est pas un arc).
+const ARC_GAP = 0.3;
+const ARC_STEP = 0.1;
+const ARC_EVEN = 0.15;
+// Mieux qu'une droite : l'écart moyen des orientations à la tangente sous
+// 0,5 fois celui à la droite ajustée sur les mêmes points, et l'écart
+// quadratique moyen des distances au cercle sous 0,35 fois celui à la
+// droite. Une bande de mur bruitée prise pour un grand arc, un coin arrondi
+// par le bruit ou un amas de mobilier n'y arrivent pas (0,4 à 0,6 en
+// distance) ; un poteau est à 0,1, la baie de l'Immeuble Toulon à 0,05.
+const ARC_BETTER = 0.5;
+const ARC_CLOSER = 0.35;
+// Nuage clairsemé (arbres, végétation, bruit) : au moins 55 % des points de
+// l'arc sont orientés et suivent la tangente, et l'écart quadratique
+// moyen au cercle est sous 6 % du rayon (1,5 cm au moins). Poteau : 85 % et
+// 1,1 cm pour 13,6 cm ; baie de Toulon : 86 % et 3,1 cm pour 1,9 m ; cercles
+// de hasard : 3 cm pour 30 cm, ou des points sans orientation.
+const ARC_ORIENTED = 0.55;
+const ARC_THIN = 0.06;
+const ARC_THIN_MIN = 0.015;
+// Coin arrondi par le bruit : deux droites (coupées au mieux) font au moins
+// aussi bien que le cercle, en écart quadratique. Sur un vrai arc de plus de
+// 30°, les deux cordes laissent une flèche.
+const ARC_CORNER = 1;
+// Droite dont les deux bouts et le milieu sont sur un arc (à sa tolérance
+// plus 3 cm) : une corde de l'arc, écartée. Droite dont la moitié des points
+// sont pris par un arc : écartée aussi.
+const ARC_CHORD_BAND = 0.03;
+// Arc suivi en polyligne à 5 mm près pour marquer les points qu'il explique
+// (le reste) ; le dessin, lui, l'écrit en vrai arc.
 const ARC_SAGITTA = 0.005;
 
 // ── 5. Encombrement et coins ──
@@ -153,15 +243,23 @@ const CROSSING_BAND = 0.12;
 // sur sa longueur, est un doublon : écarté.
 const SWALLOW_BAND = 0.08;
 // Coin : bout prolongé ou raccourci jusqu'à l'intersection avec un trait à
-// plus de 30°, à moins de 35 cm, sans raccourcir un trait de plus de moitié.
+// plus de 30°, à moins de 45 cm (35 cm au lot 1 : trop de coins restaient
+// ouverts), sans raccourcir un trait de plus de moitié.
 // Un prolongement de plus de 10 cm doit passer sur des points (la moitié des
 // tranches de 5 cm à moins de 5 cm du raccord) : pas de raccord à travers une
 // porte ou un vide.
-const CORNER = 0.35;
+const CORNER = 0.45;
 const CORNER_SIN = Math.sin(30 * Math.PI / 180);
 const CORNER_FREE = 0.1;
 const CORNER_REACH = 0.05;
 const CORNER_SUPPORT = 0.5;
+// En T : l'autre trait dépasse le croisement de plus de 10 cm et son bout
+// est à moins de 10 cm d'un troisième trait (l'autre face du mur où il
+// bute) ; il ne bouge pas, seul le trait qui bute est prolongé. Sans ce
+// troisième trait, c'est un coin en L : dans un coin, chaque face dépasse
+// de 10 à 20 cm dans la bande de l'autre mur.
+const T_OVERHANG = 0.1;
+const T_ANCHOR = 0.1;
 // Deux traits qui se touchent ne se « coupent » pas : marge de 1 cm.
 const CROSS_MARGIN = 0.01;
 
@@ -201,13 +299,32 @@ interface Segment {
     square: boolean;
 }
 
-interface Arc {
-    cx: number;
-    cy: number;
-    r: number;
-    a0: number;                 // de a0 à a1 > a0, sens trigonométrique
-    a1: number;
-}
+
+const TAU = 2 * Math.PI;
+
+// Angle ramené dans [lo, lo + 2π).
+const wrap = (a: number, lo: number) => a - TAU * Math.floor((a - lo) / TAU);
+
+// Ensemble de cases (colonne, rangée) de la grille, pour au plus n cases :
+// table de hachage ouverte (un Set de clés numériques coûte cher au
+// ramasse-miettes sur 250 000 points). Renvoie vrai si la case est nouvelle.
+// Clé sans collision sous ±2·10⁹ cases.
+const cellSet = (n: number) => {
+    let capacity = 1024;
+    while (capacity < 2 * n) capacity *= 2;
+    const mask = capacity - 1;
+    const keys = new Float64Array(capacity).fill(NaN);
+    return (ix: number, iy: number) => {
+        const key = ix * 4294967296 + iy;
+        let h = (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663)) & mask;
+        while (!Number.isNaN(keys[h])) {
+            if (keys[h] === key) return false;
+            h = (h + 1) & mask;
+        }
+        keys[h] = key;
+        return true;
+    };
+};
 
 // Écart entre deux directions, modulo π.
 const angleDiff = (a: number, b: number) => {
@@ -237,6 +354,25 @@ const intersect = (p1: Vec, p2: Vec, q1: Vec, q2: Vec): [number, number] | null 
 };
 
 /**
+ * Sommets d'un arc (x, y alternés), à `sagitta` près : pour un format ou une
+ * déformation (profil exagéré) qui n'a pas d'arc.
+ *
+ * @param {SectionArc} a - Arc.
+ * @param {number} sagitta - Écart maximal entre l'arc et ses cordes.
+ * @returns {number[]} Sommets, du début à la fin de l'arc.
+ */
+export const arcPoints = (a: SectionArc, sagitta: number): number[] => {
+    const step = 2 * Math.acos(Math.max(-1, 1 - sagitta / a.r));
+    const n = Math.max(4, Math.ceil((a.a1 - a.a0) / step));
+    const p: number[] = [];
+    for (let k = 0; k <= n; k++) {
+        const ang = a.a0 + (a.a1 - a.a0) * k / n;
+        p.push(a.cx + a.r * Math.cos(ang), a.cy + a.r * Math.sin(ang));
+    }
+    return p;
+};
+
+/**
  * Traits redressés de la coupe, dans le repère du profil.
  *
  * @param {Float32Array} points - Points de la tranche (s, t alternés).
@@ -245,24 +381,19 @@ const intersect = (p1: Vec, p2: Vec, q1: Vec, q2: Vec): [number, number] | null 
  * @returns {SectionLines} Murs et courbes, détails, et leurs nombres.
  */
 export const fitSectionLines = (points: Float32Array, total: number, options: SectionLinesOptions = {}): SectionLines => {
-    const empty: SectionLines = { lines: [], details: [], walls: 0, curves: 0, tolerance: 0 };
+    const empty: SectionLines = { lines: [], arcs: [], details: [], walls: 0, curves: 0, tolerance: 0 };
     if (total < 10) return empty;
 
     // Tranche très fournie : un point par case de 1 cm, puis un point sur n
     // au-delà de 100 000.
     let pts = points, count = total;
     if (total > FIT_POINTS) {
-        const seen = new Set<number>();
+        const seen = cellSet(Math.min(total, MAX_POINTS));
         const kept: number[] = [];
         const stride = Math.max(1, total / MAX_POINTS);
         for (let k = 0; k < Math.min(total, MAX_POINTS); k++) {
             const i = Math.floor(k * stride);
-            const s = points[i * 2], t = points[i * 2 + 1];
-            // Clé numérique de la case (sans collision sous 50 km).
-            const key = Math.floor(s / THIN_CELL) * 1e7 + Math.floor(t / THIN_CELL);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            kept.push(i);
+            if (seen(Math.floor(points[i * 2] / THIN_CELL), Math.floor(points[i * 2 + 1] / THIN_CELL))) kept.push(i);
         }
         const step = Math.max(1, kept.length / FIT_POINTS);
         count = Math.min(kept.length, FIT_POINTS);
@@ -630,84 +761,444 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
     });
 
     // ── 4. Courbes ──
-    const circleFit = (ids: number[]) => {
-        // Kåsa : x² + y² + D x + E y + F = 0, moindres carrés, autour du
-        // premier point (sommes mieux conditionnées).
-        const ox = pts[ids[0] * 2], oy = pts[ids[0] * 2 + 1];
-        let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sz = 0, sxz = 0, syz = 0;
-        const n = ids.length;
-        for (const i of ids) {
-            const x = pts[i * 2] - ox, y = pts[i * 2 + 1] - oy, z = x * x + y * y;
-            sx += x;
-            sy += y;
-            sxx += x * x;
-            syy += y * y;
-            sxy += x * y;
-            sz += z;
-            sxz += x * z;
-            syz += y * z;
-        }
-        const sol = solve3([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]], [-sxz, -syz, -sz]);
-        if (!sol) return null;
-        const cx = -sol[0] / 2, cy = -sol[1] / 2, r2 = cx * cx + cy * cy - sol[2];
-        if (!(r2 > 0)) return null;
-        const r = Math.sqrt(r2);
-        let e = 0;
-        for (const i of ids) e += (Math.hypot(pts[i * 2] - ox - cx, pts[i * 2 + 1] - oy - cy) - r) ** 2;
-        return { cx: cx + ox, cy: cy + oy, r, rms: Math.sqrt(e / n) };
-    };
-    const arcs: (Arc & { ids: number[] })[] = [];
+    let arcs: (SectionArc & { ids: number[]; tol: number })[] = [];
     {
-        const short = segments.filter(s => !s.square && length(s) < ARC_CHORD);
-        const near = (p: Vec, q: Vec) => Math.hypot(p[0] - q[0], p[1] - q[1]) < ARC_JOIN;
-        const dir = (s: Segment) => Math.atan2(s.b[1] - s.a[1], s.b[0] - s.a[0]);
-        const turnOf = (a: Segment, b: Segment) => Math.atan2(Math.sin(dir(b) - dir(a)), Math.cos(dir(b) - dir(a)));
-        const taken = new Set<Segment>();
-        for (const s0 of short) {
-            if (taken.has(s0)) continue;
-            // Chaîne dans les deux sens à partir de s0 ; une corde peut être
-            // retournée pour se raccorder.
-            const chain: Segment[] = [s0];
-            for (const forward of [true, false]) {
-                for (;;) {
-                    const tip = forward ? chain[chain.length - 1] : chain[0];
-                    const end = forward ? tip.b : tip.a;
-                    let next: Segment | null = null;
-                    for (const q of short) {
-                        if (chain.includes(q) || taken.has(q)) continue;
-                        if (near(end, forward ? q.a : q.b)) {
-                            next = q;
-                        } else if (near(end, forward ? q.b : q.a)) {
-                            [q.a, q.b] = [q.b, q.a];
-                            next = q;
-                        }
-                        if (next) break;
+        const pool = new Uint8Array(count).fill(1);
+        for (const s of segments) if (s.square || length(s) >= ARC_POOL_LONG) for (const i of s.ids) pool[i] = 0;
+        const radii: number[] = [];
+        for (let r = ARC_R_MIN; r <= ARC_R_MAX; r *= ARC_R_STEP) radii.push(r);
+        const cellOfRadius = radii.map(r => Math.max(ARC_CELL_MIN, ARC_CELL * r));
+
+        // Un votant par case de 4 cm : chaque longueur de trait pèse autant,
+        // qu'il soit dense (près du scanner) ou clairsemé (vitrage).
+        const voters: number[] = [];
+        const voterCells = cellSet(count);
+        for (let i = 0; i < count; i++) {
+            if (pool[i] && !Number.isNaN(theta[i]) && voterCells(Math.floor(pts[i * 2] / ARC_VOTER_CELL), Math.floor(pts[i * 2 + 1] / ARC_VOTER_CELL))) voters.push(i);
+        }
+        const stride = Math.max(1, voters.length / ARC_VOTERS);
+        // Votes, rangés dans une table de hachage ouverte : clé (rayon,
+        // colonne, rangée), sans collision sous ±10 km.
+        const voteCount = Math.ceil(voters.length / stride) * radii.length * 2;
+        let capacity = 1024;
+        while (capacity < 1.5 * voteCount) capacity *= 2;
+        const mask = capacity - 1, OFFSET = 2 ** 20, SPAN = 2 ** 21;
+        const keys = new Float64Array(capacity).fill(-1);
+        const tally = new Int32Array(capacity);
+        const slot = (b: number, ix: number, iy: number, insert: boolean) => {
+            const key = (b * SPAN + ix) * SPAN + iy;
+            let h = (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ Math.imul(b, 83492791)) & mask;
+            while (keys[h] !== -1 && keys[h] !== key) h = (h + 1) & mask;
+            if (keys[h] === -1) {
+                if (!insert) return -1;
+                keys[h] = key;
+            }
+            return h;
+        };
+        // Chaque votant, pour chaque rayon, des deux côtés : f(case, votant).
+        const vote = (f: (h: number, i: number) => void, insert: boolean) => {
+            for (let k = 0; k < voters.length; k += stride) {
+                const i = voters[Math.floor(k)];
+                const x = pts[i * 2], y = pts[i * 2 + 1], nx = -Math.sin(theta[i]), ny = Math.cos(theta[i]);
+                for (let b = 0; b < radii.length; b++) {
+                    const r = radii[b], c = cellOfRadius[b];
+                    for (let side = -1; side <= 1; side += 2) {
+                        const h = slot(b, Math.floor((x + side * r * nx) / c) + OFFSET, Math.floor((y + side * r * ny) / c) + OFFSET, insert);
+                        if (h >= 0) f(h, i);
                     }
-                    if (!next) break;
-                    const turn = forward ? turnOf(tip, next) : turnOf(next, tip);
-                    if (Math.abs(turn) < ARC_TURN_MIN * DEG || Math.abs(turn) > ARC_TURN_MAX * DEG) break;
-                    // Toujours du même côté.
-                    if (chain.length >= 2 && Math.sign(turn) !== Math.sign(turnOf(chain[0], chain[1]))) break;
-                    if (forward) chain.push(next);
-                    else chain.unshift(next);
                 }
             }
-            if (chain.length < ARC_MIN_CHORDS) continue;
-            let totalTurn = 0;
-            for (let k = 1; k < chain.length; k++) totalTurn += turnOf(chain[k - 1], chain[k]);
-            if (Math.abs(totalTurn) < ARC_TOTAL * DEG) continue;
-            const ids = chain.flatMap(s => s.ids);
-            const c = circleFit(ids);
-            if (!c || c.rms > ARC_RMS || c.r > ARC_RADIUS) continue;
-            const first = Math.atan2(chain[0].a[1] - c.cy, chain[0].a[0] - c.cx);
-            const last = Math.atan2(chain[chain.length - 1].b[1] - c.cy, chain[chain.length - 1].b[0] - c.cx);
-            let a0 = totalTurn > 0 ? first : last, a1 = totalTurn > 0 ? last : first;
-            while (a1 < a0) a1 += 2 * Math.PI;
-            if (a1 - a0 > 2 * Math.PI - 1e-6) a0 = a1 - 2 * Math.PI;
-            arcs.push({ cx: c.cx, cy: c.cy, r: c.r, a0, a1, ids });
-            for (const s of chain) taken.add(s);
+        };
+        vote((h) => {
+            tally[h]++;
+        }, true);
+        // Cases candidates : maximum local, votes des 3 × 3 cases voisines
+        // réunis (centre pondéré).
+        const need = Math.max(3, ARC_VOTES / stride);
+        type Candidate = { cx: number; cy: number; r: number; band: number; votes: number; voters: number[]; rank: number };
+        const candidates: Candidate[] = [];
+        const owner = new Int32Array(capacity).fill(-1);
+        const decode = (key: number) => {
+            const iy = key % SPAN, rest = (key - iy) / SPAN, ix = rest % SPAN;
+            return [(rest - ix) / SPAN, ix, iy];
+        };
+        // Votes des 3 × 3 cases autour de (x, y), pour le rayon b.
+        const around = (b: number, x: number, y: number) => {
+            if (b < 0 || b >= radii.length) return 0;
+            const c = cellOfRadius[b], ix = Math.floor(x / c) + OFFSET, iy = Math.floor(y / c) + OFFSET;
+            let n = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const g = slot(b, ix + dx, iy + dy, false);
+                    if (g >= 0) n += tally[g];
+                }
+            }
+            return n;
+        };
+        const peaks: { b: number; ix: number; iy: number; cx: number; cy: number; score: number }[] = [];
+        for (let h = 0; h < capacity; h++) {
+            const v = tally[h];
+            if (v < need / 4) continue;
+            const [b, ix, iy] = decode(keys[h]);
+            let score = 0, wx = 0, wy = 0, peak = true;
+            for (let dy = -1; dy <= 1 && peak; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const g = slot(b, ix + dx, iy + dy, false);
+                    const w = g < 0 ? 0 : tally[g];
+                    if (w > v || (w === v && g > h)) {
+                        peak = false;
+                        break;
+                    }
+                    score += w;
+                    wx += w * dx;
+                    wy += w * dy;
+                }
+            }
+            if (!peak || score < need) continue;
+            const c = cellOfRadius[b];
+            peaks.push({ b, ix, iy, cx: (ix - OFFSET + 0.5 + wx / score) * c, cy: (iy - OFFSET + 0.5 + wy / score) * c, score });
         }
-        segments = segments.filter(s => !taken.has(s));
+        // Maximum aussi d'un rayon au suivant (même centre).
+        for (const p of peaks) {
+            if (p.score < around(p.b - 1, p.cx, p.cy) || p.score < around(p.b + 1, p.cx, p.cy)) continue;
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const g = slot(p.b, p.ix + dx, p.iy + dy, false);
+                    if (g >= 0 && owner[g] < 0) owner[g] = candidates.length;
+                }
+            }
+            const c = cellOfRadius[p.b];
+            candidates.push({ cx: p.cx, cy: p.cy, r: radii[p.b], band: Math.max(FACE_REACH, c), votes: p.score, voters: [], rank: 0 });
+        }
+        // Votants des candidats : la partie du cercle où ils sont, et ce
+        // qu'ils en couvrent.
+        vote((h, i) => {
+            if (owner[h] >= 0) candidates[owner[h]].voters.push(i);
+        }, false);
+        // Écart entre l'orientation du point i et la tangente au cercle.
+        const tangentGap = (i: number, cx: number, cy: number) => angleDiff(theta[i], Math.atan2(pts[i * 2 + 1] - cy, pts[i * 2] - cx) + Math.PI / 2);
+        const windows = new Map<Candidate, [number, number]>();
+        for (const cand of candidates) {
+            if (cand.voters.length < 2) continue;
+            const angles = cand.voters.map(i => wrap(Math.atan2(pts[i * 2 + 1] - cand.cy, pts[i * 2] - cand.cx), 0)).sort((p, q) => p - q);
+            // Le complément du plus grand trou entre les angles des votants.
+            let gap = angles[0] + TAU - angles[angles.length - 1], lo = angles[0], hi = angles[angles.length - 1];
+            for (let k = 1; k < angles.length; k++) {
+                if (angles[k] - angles[k - 1] > gap) {
+                    gap = angles[k] - angles[k - 1];
+                    lo = angles[k];
+                    hi = angles[k - 1] + TAU;
+                }
+            }
+            if ((TAU - gap) < ARC_VOTE_SPAN * ARC_MIN_SPAN * DEG || (TAU - gap) * cand.r < ARC_VOTE_SPAN * ARC_MIN_LENGTH) continue;
+            // Longueur couverte par les votants (tranches de 10 cm), et sa
+            // part dans leur fenêtre.
+            const covered = new Set(angles.map(a => Math.floor(wrap(a, lo) * cand.r / ARC_STEP))).size * ARC_STEP;
+            const fill = covered / ((hi - lo) * cand.r + ARC_STEP);
+            if (fill < ARC_VOTE_FILL) continue;
+            // Orientations des votants : mieux expliquées par la tangente
+            // que par leur moyenne (pas un mur droit).
+            let sc = 0, ss = 0;
+            for (const i of cand.voters) {
+                sc += Math.cos(2 * theta[i]);
+                ss += Math.sin(2 * theta[i]);
+            }
+            const mean = Math.atan2(ss, sc) / 2;
+            let arcTurn = 0, lineTurn = 0;
+            for (const i of cand.voters) {
+                arcTurn += tangentGap(i, cand.cx, cand.cy);
+                lineTurn += angleDiff(theta[i], mean);
+            }
+            if (arcTurn > ARC_BETTER * lineTurn) continue;
+            const grow = ARC_GAP / cand.r;
+            cand.rank = new Set(angles.map(a => Math.floor(a / (ARC_VOTE_BIN * DEG)))).size * fill;
+            windows.set(cand, gap * cand.r <= 2 * ARC_GAP ? [0, TAU] : [lo - grow, hi + grow]);
+        }
+        const kept = candidates.filter(c => windows.has(c)).sort((p, q) => q.rank - p.rank).slice(0, ARC_CANDIDATES);
+
+        const taken = new Uint8Array(count);
+        const seen = new Int32Array(count);
+        let seenGeneration = 0;
+        // Points (du réservoir et libres, ou tous) à moins de `band` du
+        // cercle, entre les angles lo et hi : cordes du cercle parcourues par
+        // visit.
+        const ring = (c: { cx: number; cy: number; r: number }, band: number, lo: number, hi: number, all: boolean, f: (i: number) => void) => {
+            const { cx, cy, r } = c;
+            const full = hi - lo >= TAU;
+            const stamp = ++seenGeneration;
+            const open = full ? TAU : hi - lo, from = full ? 0 : lo;
+            const n = Math.max(2, Math.ceil(open * r / R));
+            for (let k = 0; k < n; k++) {
+                const t0 = from + open * k / n, t1 = from + open * (k + 1) / n;
+                visit([cx + r * Math.cos(t0), cy + r * Math.sin(t0)], [cx + r * Math.cos(t1), cy + r * Math.sin(t1)], band + R / 4, (i) => {
+                    if (seen[i] === stamp || (!all && (!pool[i] || taken[i]))) return;
+                    seen[i] = stamp;
+                    const x = pts[i * 2] - cx, y = pts[i * 2 + 1] - cy;
+                    if (Math.abs(Math.hypot(x, y) - r) >= band) return;
+                    if (full || wrap(Math.atan2(y, x), lo) <= hi) f(i);
+                });
+            }
+        };
+        const tangent = (i: number, cx: number, cy: number) => Number.isNaN(theta[i]) || tangentGap(i, cx, cy) < ARC_TANGENT * DEG;
+        const distance = (i: number, c: { cx: number; cy: number; r: number }) => Math.abs(Math.hypot(pts[i * 2] - c.cx, pts[i * 2 + 1] - c.cy) - c.r);
+        // Cercle géométrique (Gauss-Newton sur les distances), depuis c.
+        // Chaque tranche de 10 cm de l'arc pèse autant : un paquet de points
+        // serrés (scanner tout proche) ne tire pas le cercle à lui.
+        const refine = (ids: number[], c: { cx: number; cy: number; r: number }) => {
+            let { cx, cy, r } = c;
+            const bins = new Map<number, number>();
+            const binOf = ids.map(i => Math.floor(wrap(Math.atan2(pts[i * 2 + 1] - c.cy, pts[i * 2] - c.cx), 0) * c.r / ARC_STEP));
+            for (const b of binOf) bins.set(b, (bins.get(b) ?? 0) + 1);
+            const weight = binOf.map(b => 1 / bins.get(b));
+            for (let it = 0; it < 6; it++) {
+                const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], v = [0, 0, 0];
+                for (let k = 0; k < ids.length; k++) {
+                    const i = ids[k];
+                    const dx = pts[i * 2] - cx, dy = pts[i * 2 + 1] - cy, d = Math.hypot(dx, dy);
+                    if (d < 1e-9) continue;
+                    const J = [-dx / d, -dy / d, -1], e = d - r, w = weight[k];
+                    for (let a = 0; a < 3; a++) {
+                        v[a] -= w * J[a] * e;
+                        for (let b = 0; b < 3; b++) M[a][b] += w * J[a] * J[b];
+                    }
+                }
+                const step = solve3(M, v);
+                if (!step) return null;
+                cx += step[0];
+                cy += step[1];
+                r += step[2];
+                if (Math.hypot(step[0], step[1], step[2]) < 1e-5) break;
+            }
+            return r > 0 ? { cx, cy, r } : null;
+        };
+        // Tronçons d'un cercle : points triés par angle, coupés aux trous de
+        // plus de ARC_GAP ; le premier et le dernier se rejoignent s'il n'y a
+        // pas de trou en passant par 0. Ouverture de a0 à a1 (2π : tour
+        // complet).
+        const runsOf = (ids: number[], c: { cx: number; cy: number; r: number }) => {
+            const ang = new Float64Array(ids.length);
+            ids.forEach((i, k) => {
+                ang[k] = wrap(Math.atan2(pts[i * 2 + 1] - c.cy, pts[i * 2] - c.cx), 0);
+            });
+            const order = Array.from(ids.keys()).sort((p, q) => ang[p] - ang[q]);
+            const runs: { ids: number[]; a0: number; a1: number }[] = [];
+            let cur: number[] = [], first = 0, last = 0;
+            for (const k of order) {
+                if (cur.length && (ang[k] - last) * c.r > ARC_GAP) {
+                    runs.push({ ids: cur, a0: first, a1: last });
+                    cur = [];
+                }
+                if (!cur.length) first = ang[k];
+                cur.push(ids[k]);
+                last = ang[k];
+            }
+            if (cur.length) runs.push({ ids: cur, a0: first, a1: last });
+            if (!runs.length) return runs;
+            const wrapGap = (runs[0].a0 + TAU - runs[runs.length - 1].a1) * c.r;
+            if (runs.length === 1 && wrapGap <= ARC_GAP) {
+                runs[0].a0 = 0;
+                runs[0].a1 = TAU;
+            } else if (runs.length > 1 && wrapGap <= ARC_GAP) {
+                const tail = runs.pop();
+                runs[0] = { ids: tail.ids.concat(runs[0].ids), a0: tail.a0, a1: runs[0].a1 + TAU };
+            }
+            return runs;
+        };
+
+        // Tronçon d'un cercle déjà ajusté, contrôlé.
+        const accept = (c: { cx: number; cy: number; r: number }, tol: number, run: { ids: number[]; a0: number; a1: number }) => {
+            const { cx, cy, r } = c, { ids, a0, a1 } = run;
+            const open = a1 - a0, len = open * r;
+            if (len < ARC_MIN_LENGTH || open < ARC_MIN_SPAN * DEG || ids.length < MIN_POINTS || ids.length < len / STEP) return false;
+            if (r * (1 - Math.cos(Math.min(open, Math.PI) / 2)) < CURVE_SAGITTA) return false;
+            // Occupation : une tranche compte si elle a 2 points, et 15 % du
+            // nombre moyen par tranche (un paquet serré relié par quelques
+            // points épars n'est pas un arc).
+            const bins = Math.ceil(len / ARC_STEP - 1e-9);
+            const perBin = new Map<number, number>();
+            for (const i of ids) {
+                const k = Math.floor((wrap(Math.atan2(pts[i * 2 + 1] - cy, pts[i * 2] - cx), a0) - a0) * r / ARC_STEP);
+                perBin.set(k, (perBin.get(k) ?? 0) + 1);
+            }
+            const least = Math.max(2, ARC_EVEN * ids.length / bins);
+            let occupied = 0;
+            for (const n of perBin.values()) if (n >= least) occupied++;
+            if (occupied < COVERAGE * bins) return false;
+            // Orientations : tous les points orientés de la bande, pas
+            // seulement ceux qui suivent la tangente ; et mieux qu'une droite,
+            // en orientation comme en distance (droite des moindres carrés
+            // totaux sur les points de l'arc).
+            let mx = 0, my = 0;
+            for (const i of ids) {
+                mx += pts[i * 2];
+                my += pts[i * 2 + 1];
+            }
+            mx /= ids.length;
+            my /= ids.length;
+            let sxx = 0, sxy = 0, syy = 0;
+            for (const i of ids) {
+                const dx = pts[i * 2] - mx, dy = pts[i * 2 + 1] - my;
+                sxx += dx * dx;
+                sxy += dx * dy;
+                syy += dy * dy;
+            }
+            const lineTh = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+            const lx = Math.cos(lineTh), ly = Math.sin(lineTh);
+            let oriented = 0, agree = 0, arcTurn = 0, lineTurn = 0, arcDist = 0, lineDist = 0;
+            ring(c, tol, a0, a1, false, (i) => {
+                const x = pts[i * 2], y = pts[i * 2 + 1];
+                arcDist += (Math.hypot(x - cx, y - cy) - r) ** 2;
+                lineDist += (-(x - mx) * ly + (y - my) * lx) ** 2;
+                if (Number.isNaN(theta[i])) return;
+                oriented++;
+                const g = tangentGap(i, cx, cy);
+                if (g < ARC_TANGENT * DEG) agree++;
+                arcTurn += g;
+                lineTurn += angleDiff(theta[i], lineTh);
+            });
+            if (agree < ARC_AGREE * oriented || arcTurn > ARC_BETTER * lineTurn || arcDist > ARC_CLOSER * ARC_CLOSER * lineDist) return false;
+            // Nuage clairsemé : un cercle passe toujours par quelques points
+            // épars, mais peu sont orientés, ou la bande est large pour le
+            // rayon.
+            let rms = 0;
+            for (const i of ids) rms += (Math.hypot(pts[i * 2] - cx, pts[i * 2 + 1] - cy) - r) ** 2;
+            rms = Math.sqrt(rms / ids.length);
+            if (agree < ARC_ORIENTED * ids.length || rms > Math.max(ARC_THIN_MIN, ARC_THIN * r)) return false;
+            // Coin : sur tous les points à ±8 cm de l'arc (les points
+            // retenus par le cercle sont choisis courbes), deux droites
+            // coupées au meilleur endroit (de 20 à 80 % des points pris dans
+            // l'ordre de l'arc) font aussi bien que le cercle. Sommes
+            // cumulées : écart quadratique d'une droite des moindres carrés
+            // totaux = plus petite valeur propre de la dispersion.
+            if (open < Math.PI * 1.5) {
+                const band: number[] = [];
+                ring(c, FACE_REACH, a0, a1, true, i => band.push(i));
+                const angle = new Map(band.map(i => [i, wrap(Math.atan2(pts[i * 2 + 1] - cy, pts[i * 2] - cx), a0)]));
+                band.sort((p, q) => angle.get(p) - angle.get(q));
+                const n = band.length;
+                const acc = new Float64Array((n + 1) * 5);
+                let circle = 0;
+                band.forEach((i, k) => {
+                    const x = pts[i * 2] - cx, y = pts[i * 2 + 1] - cy;
+                    circle += (Math.hypot(x, y) - r) ** 2;
+                    const o = k * 5, q = o + 5;
+                    acc[q] = acc[o] + x;
+                    acc[q + 1] = acc[o + 1] + y;
+                    acc[q + 2] = acc[o + 2] + x * x;
+                    acc[q + 3] = acc[o + 3] + x * y;
+                    acc[q + 4] = acc[o + 4] + y * y;
+                });
+                const sse = (from: number, to: number) => {
+                    const m = to - from, A = to * 5, B = from * 5;
+                    const sx = acc[A] - acc[B], sy = acc[A + 1] - acc[B + 1];
+                    const a = acc[A + 2] - acc[B + 2] - sx * sx / m, b = acc[A + 3] - acc[B + 3] - sx * sy / m, d = acc[A + 4] - acc[B + 4] - sy * sy / m;
+                    return (a + d) / 2 - Math.sqrt(Math.max(0, (a - d) * (a - d) / 4 + b * b));
+                };
+                let best = Infinity;
+                for (let f = 0.2; f <= 0.8 + 1e-9; f += 0.05) {
+                    const k = Math.round(n * f);
+                    if (k >= 3 && n - k >= 3) best = Math.min(best, sse(0, k) + sse(k, n));
+                }
+                if (best <= ARC_CORNER * circle) return false;
+            }
+            // Côtés : tous les points (y compris ceux des droites), dans deux
+            // anneaux de part et d'autre de l'arc.
+            const lo = tol + FLANK_GAP, hi = lo + FLANK_WIDTH, mid = (lo + hi) / 2;
+            let inner = 0, outer = 0;
+            ring({ cx, cy, r: r + mid }, FLANK_WIDTH / 2, a0, a1, true, () => outer++);
+            if (r > lo) ring({ cx, cy, r: r - mid }, FLANK_WIDTH / 2, a0, a1, true, () => inner++);
+            const density = ids.length / (2 * tol * len);
+            const outerArea = open / 2 * ((r + hi) ** 2 - (r + lo) ** 2);
+            const innerArea = open / 2 * (Math.max(0, r - lo) ** 2 - Math.max(0, r - hi) ** 2);
+            const di = innerArea > 1e-6 ? inner / innerArea : 0, dout = outer / outerArea;
+            return Math.min(di, dout) <= FLANK_RATIO * density && Math.max(di, dout) <= FLANK_DENSER * density;
+        };
+
+        // Cercles déjà essayés (départ et arrivée) : plusieurs candidats
+        // voisins mènent au même cercle.
+        const tried: { cx: number; cy: number; r: number }[] = [];
+        for (const cand of kept) {
+            if (tried.some(t => Math.hypot(t.cx - cand.cx, t.cy - cand.cy) < cand.band && Math.abs(t.r - cand.r) < cand.band)) continue;
+            tried.push(cand);
+            // Cercle ajusté sur les points qui suivent la tangente : d'abord
+            // le plus fourni des tronçons de la partie du cercle des votants,
+            // puis de proche en proche (la fenêtre s'étend de 1 m de chaque
+            // côté et garde les tronçons qui touchent les précédents).
+            // Tolérance tirée des écarts, comme pour une face.
+            let [lo, hi] = windows.get(cand);
+            let c: { cx: number; cy: number; r: number } = cand, band = cand.band, tol = FACE_TOL_MAX;
+            let ids: number[] = [], span = 0;
+            for (let it = 0; it < ARC_ITERATIONS && c; it++) {
+                const cc = c, grow = it ? ARC_GROW / cc.r : 0;
+                const from = hi - lo + 2 * grow >= TAU ? 0 : lo - grow, to = hi - lo + 2 * grow >= TAU ? TAU : hi + grow;
+                const near: number[] = [];
+                ring(cc, band, from, to, false, (i) => {
+                    if (tangent(i, cc.cx, cc.cy)) near.push(i);
+                });
+                if (near.length < MIN_POINTS) {
+                    c = null;
+                    break;
+                }
+                const dev = near.map(i => distance(i, cc)).sort((p, q) => p - q);
+                const tolerance = Math.min(FACE_TOL_MAX, Math.max(FACE_TOL_MIN, FACE_TOL_MAD * dev[dev.length >> 1]));
+                tol = tolerance;
+                let runs = runsOf(near.filter(i => distance(i, cc) < tolerance), cc);
+                if (it === 0) {
+                    runs = runs.length ? [runs.reduce((p, q) => (q.ids.length > p.ids.length ? q : p))] : [];
+                    // Graine trop courte pour faire un arc, même prolongée.
+                    if (runs.length && (runs[0].a1 - runs[0].a0) * cc.r < ARC_VOTE_SPAN * ARC_MIN_LENGTH) runs = [];
+                } else {
+                    const [wLo, wHi] = [lo, hi];
+                    runs = runs.filter(run => run.a1 - run.a0 >= TAU || wrap(run.a0, wLo) <= wHi || wrap(wLo, run.a0) <= run.a1);
+                }
+                if (!runs.length) {
+                    c = null;
+                    break;
+                }
+                ids = runs.flatMap(run => run.ids);
+                if (runs.some(run => run.a1 - run.a0 >= TAU)) {
+                    lo = 0;
+                    hi = TAU;
+                } else {
+                    // Étendue des tronçons gardés, depuis le premier.
+                    const first = runs.reduce((p, q) => (wrap(q.a0, from) < wrap(p.a0, from) ? q : p));
+                    lo = first.a0;
+                    hi = lo;
+                    for (const run of runs) hi = Math.max(hi, wrap(run.a0, lo) + run.a1 - run.a0);
+                }
+                c = ids.length >= MIN_POINTS ? refine(ids, cc) : null;
+                band = FACE_REACH;
+                if (c && (c.r < ARC_R_MIN || c.r > ARC_R_MAX)) c = null;
+                // Stable (5 mm) et la fenêtre ne grandit plus : fini.
+                if (c && it > 0 && Math.hypot(c.cx - cc.cx, c.cy - cc.cy, c.r - cc.r) < ARC_STABLE && (hi - lo) * c.r <= span + ARC_GAP) break;
+                span = (hi - lo) * cc.r;
+            }
+            if (!c) continue;
+            const fit = c;
+            if (tried.some(t => t !== cand && Math.hypot(t.cx - fit.cx, t.cy - fit.cy) < cand.band / 2 && Math.abs(t.r - fit.r) < cand.band / 2)) continue;
+            tried.push(fit);
+            ids = [];
+            const margin = ARC_GAP / fit.r;
+            ring(fit, tol, hi - lo + 2 * margin >= TAU ? 0 : lo - margin, hi - lo + 2 * margin >= TAU ? TAU : hi + margin, false, (i) => {
+                if (tangent(i, fit.cx, fit.cy)) ids.push(i);
+            });
+            for (const run of runsOf(ids, fit)) {
+                if (!accept(fit, tol, run)) continue;
+                arcs.push({ ...fit, a0: run.a0, a1: run.a1, ids: run.ids, tol });
+                for (const i of run.ids) taken[i] = 1;
+            }
+        }
+
+        // Droites remplacées : cordes d'un arc, ou dont la moitié des points
+        // sont pris.
+        const onArc = (p: Vec) => arcs.some(a => Math.abs(Math.hypot(p[0] - a.cx, p[1] - a.cy) - a.r) < a.tol + ARC_CHORD_BAND &&
+            wrap(Math.atan2(p[1] - a.cy, p[0] - a.cx), a.a0 - ARC_GAP / a.r) <= a.a1 + ARC_GAP / a.r);
+        segments = segments.filter((s) => {
+            let n = 0;
+            for (const i of s.ids) n += taken[i];
+            if (n >= 0.5 * s.ids.length) return false;
+            return !(onArc(s.a) && onArc(s.b) && onArc([(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2]));
+        });
     }
 
     // ── 5. Encombrement et coins ──
@@ -723,6 +1214,27 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
         const ls = length(s);
         return ls >= CROSSING_MAX || !inside(s.a, ls) || !inside(s.b, ls);
     });
+
+    // Paramètres t (sur p q) des points où la droite p q coupe l'arc a, à
+    // plus de `margin` de ses bouts.
+    const arcHits = (p: Vec, q: Vec, a: SectionArc, margin: number) => {
+        const dx = q[0] - p[0], dy = q[1] - p[1], fx = p[0] - a.cx, fy = p[1] - a.cy;
+        const A = dx * dx + dy * dy, B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - a.r * a.r;
+        const disc = B * B - 4 * A * C;
+        if (A < 1e-12 || disc <= 0) return [];
+        const hits: number[] = [];
+        const m = margin / a.r, full = a.a1 - a.a0 >= TAU - 1e-9;
+        for (const t of [(-B - Math.sqrt(disc)) / (2 * A), (-B + Math.sqrt(disc)) / (2 * A)]) {
+            const ang = wrap(Math.atan2(p[1] + t * dy - a.cy, p[0] + t * dx - a.cx), a.a0);
+            if (full || (ang > a.a0 + m && ang < a.a1 - m)) hits.push(t);
+        }
+        return hits;
+    };
+    const arcLength = (a: SectionArc) => a.r * (a.a1 - a.a0);
+    const arcEnd = (a: SectionArc, end: 0 | 1): Vec => {
+        const ang = end ? a.a1 : a.a0;
+        return [a.cx + a.r * Math.cos(ang), a.cy + a.r * Math.sin(ang)];
+    };
 
     // Le raccord p → q passe-t-il sur des points ?
     const supported = (p: Vec, q: Vec) => {
@@ -746,6 +1258,7 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
     const crosses = (p: Vec, q: Vec, skip: Segment[]) => {
         const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
         if (len < CROSS_MARGIN) return false;
+        if (arcs.some(a => arcHits(p, q, a, CROSS_MARGIN).some(t => t > CROSS_MARGIN / len && t <= 1))) return true;
         for (const o of segments) {
             if (skip.includes(o)) continue;
             const x = intersect(p, q, o.a, o.b);
@@ -754,6 +1267,12 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
             if (x[0] > CROSS_MARGIN / len && x[0] <= 1 && x[1] > CROSS_MARGIN / lo && x[1] < 1 - CROSS_MARGIN / lo) return true;
         }
         return false;
+    };
+    // Le point p est-il à moins de `band` du trait o ?
+    const near = (p: Vec, o: Segment, band: number) => {
+        const lo = length(o), ux = (o.b[0] - o.a[0]) / lo, uy = (o.b[1] - o.a[1]) / lo;
+        const x = p[0] - o.a[0], y = p[1] - o.a[1], u = Math.max(0, Math.min(lo, x * ux + y * uy));
+        return Math.hypot(x - u * ux, y - u * uy) < band;
     };
     // Coins candidats : bout de s et bout de q (coin en L), ou bout de s et
     // milieu de q (en T). Du plus court au plus long, un bout ne sert
@@ -773,15 +1292,22 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
             const x: Vec = [s.a[0] + t[0] * sx, s.a[1] + t[0] * sy];
             for (const se of ['a', 'b'] as End[]) {
                 const ds = Math.hypot(x[0] - s[se][0], x[1] - s[se][1]);
-                // Le bout le plus proche de x seulement, à moins de 35 cm, et
+                // Le bout le plus proche de x seulement, à moins de 45 cm, et
                 // le trait raccourci de moitié au plus.
                 if (ds >= CORNER || (se === 'a') !== (t[0] < 0.5)) continue;
                 if (Math.hypot(x[0] - s[other(se)][0], x[1] - s[other(se)][1]) < 0.5 * ls) continue;
                 const qe: End = t[1] < 0.5 ? 'a' : 'b';
                 const dq = Math.hypot(x[0] - q[qe][0], x[1] - q[qe][1]);
-                if (dq < CORNER && Math.hypot(x[0] - q[other(qe)][0], x[1] - q[other(qe)][1]) >= 0.5 * lq) {
-                    if (s !== q && segments.indexOf(s) < segments.indexOf(q)) candidates.push({ s, se, q, qe, x, d: ds + dq });
-                } else if (t[1] > 0 && t[1] < 1) {
+                // q dépasse nettement le croisement et s'appuie au-delà sur un
+                // autre trait (l'autre face du mur) : en T, q ne bouge pas.
+                const inside = t[1] > 0 && t[1] < 1;
+                if (inside && dq > T_OVERHANG && segments.some(o => o !== s && o !== q && near(q[qe], o, T_ANCHOR))) {
+                    candidates.push({ s, se, q, qe: null, x, d: ds });
+                } else if (dq < CORNER && Math.hypot(x[0] - q[other(qe)][0], x[1] - q[other(qe)][1]) >= 0.5 * lq) {
+                    if (segments.indexOf(s) < segments.indexOf(q)) candidates.push({ s, se, q, qe, x, d: ds + dq });
+                    // Si l'un des deux bouts sert déjà ailleurs : en T.
+                    if (inside) candidates.push({ s, se, q, qe: null, x, d: ds + CORNER });
+                } else if (inside) {
                     candidates.push({ s, se, q, qe: null, x, d: ds });
                 }
             }
@@ -812,7 +1338,7 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
         }
     }
     // Croisements : deux murs ne se traversent pas. Un trait qui dépasse
-    // l'autre de moins de 35 cm est raccourci au croisement ; sinon le plus
+    // l'autre de moins de 45 cm est raccourci au croisement ; sinon le plus
     // court des deux est écarté (ses points vont au reste).
     for (let changed = true, guard = 0; changed && guard < 4 * segments.length; guard++) {
         changed = false;
@@ -830,6 +1356,95 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
                 if (d < CORNER && d < 0.5 * lg) g[e] = x;
                 else segments.splice(ls < lq ? i : j, 1);
                 changed = true;
+            }
+        }
+    }
+    // Arcs et droites ne se traversent pas non plus : une droite qui dépasse
+    // un arc de moins de 45 cm (et de moins de sa moitié) est raccourcie au
+    // croisement ; sinon le plus court des deux est écarté. Deux arcs qui se
+    // coupent : le plus court est écarté.
+    for (const a of arcs) {
+        for (const s of segments.slice()) {
+            if (!arcs.includes(a)) break;
+            const ls = length(s);
+            const hits = arcHits(s.a, s.b, a, CROSS_MARGIN).filter(t => t > CROSS_MARGIN / ls && t < 1 - CROSS_MARGIN / ls);
+            if (!hits.length) continue;
+            // Deux croisements : la droite traverse l'arc de part en part.
+            const t = hits[0];
+            const x: Vec = [s.a[0] + t * (s.b[0] - s.a[0]), s.a[1] + t * (s.b[1] - s.a[1])];
+            if (hits.length === 1 && t * ls < CORNER && t < 0.5) s.a = x;
+            else if (hits.length === 1 && (1 - t) * ls < CORNER && t > 0.5) s.b = x;
+            else if (ls < arcLength(a)) segments.splice(segments.indexOf(s), 1);
+            else arcs = arcs.filter(o => o !== a);
+        }
+    }
+    for (const a of arcs.slice()) {
+        for (const b of arcs.slice()) {
+            if (a === b || !arcs.includes(a) || !arcs.includes(b)) continue;
+            const d = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+            if (d < 1e-9 || d > a.r + b.r || d < Math.abs(a.r - b.r)) continue;
+            const along = (a.r * a.r - b.r * b.r + d * d) / (2 * d), h = Math.sqrt(Math.max(0, a.r * a.r - along * along));
+            const mx = a.cx + along * (b.cx - a.cx) / d, my = a.cy + along * (b.cy - a.cy) / d;
+            const hit = [-1, 1].some((k) => {
+                const px = mx - k * h * (b.cy - a.cy) / d, py = my + k * h * (b.cx - a.cx) / d;
+                const on = (o: SectionArc) => {
+                    const m = CROSS_MARGIN / o.r, ang = wrap(Math.atan2(py - o.cy, px - o.cx), o.a0);
+                    return o.a1 - o.a0 >= TAU - 1e-9 || (ang > o.a0 + m && ang < o.a1 - m);
+                };
+                return on(a) && on(b);
+            });
+            if (hit) arcs = arcs.filter(o => o !== (arcLength(a) < arcLength(b) ? a : b));
+        }
+    }
+    // Bouts d'un arc : le bout de droite le plus proche (à moins de 45 cm)
+    // est prolongé ou raccourci, sur sa ligne, jusqu'au cercle, et l'arc
+    // jusqu'au même point (de 45 cm au plus, sans perdre la moitié de sa
+    // longueur). Raccord sur des points, sans couper d'autre trait.
+    {
+        const used = new Set<Segment>();
+        for (const a of arcs) {
+            if (a.a1 - a.a0 >= TAU - 1e-9) continue;
+            for (const end of [0, 1] as const) {
+                const e = arcEnd(a, end);
+                let best: { s: Segment; se: End; x: Vec; ang: number } | null = null, bestD = CORNER;
+                for (const s of segments) {
+                    if (used.has(s)) continue;
+                    for (const se of ['a', 'b'] as End[]) {
+                        const p = s[se], o = s[other(se)];
+                        if (Math.hypot(p[0] - e[0], p[1] - e[1]) >= CORNER) continue;
+                        // Croisements de la ligne du trait avec le cercle
+                        // (paramètre sur o → p), le plus proche du bout.
+                        const dx = p[0] - o[0], dy = p[1] - o[1], fx = o[0] - a.cx, fy = o[1] - a.cy;
+                        const A = dx * dx + dy * dy, B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - a.r * a.r;
+                        const disc = B * B - 4 * A * C;
+                        if (disc < 0) continue;
+                        for (const t of [(-B - Math.sqrt(disc)) / (2 * A), (-B + Math.sqrt(disc)) / (2 * A)]) {
+                            if (t < 0.5) continue;
+                            const x: Vec = [o[0] + t * dx, o[1] + t * dy];
+                            const d = Math.hypot(x[0] - p[0], x[1] - p[1]) + Math.hypot(x[0] - e[0], x[1] - e[1]);
+                            if (d >= bestD || Math.hypot(x[0] - e[0], x[1] - e[1]) >= CORNER) continue;
+                            // Nouvel angle du bout de l'arc, au plus près de l'ancien.
+                            const old = end ? a.a1 : a.a0;
+                            let ang = Math.atan2(x[1] - a.cy, x[0] - a.cx);
+                            ang -= TAU * Math.round((ang - old) / TAU);
+                            const open = end ? ang - a.a0 : a.a1 - ang;
+                            if (open < 0.5 * (a.a1 - a.a0) || open >= TAU) continue;
+                            best = { s, se, x, ang };
+                            bestD = d;
+                        }
+                    }
+                }
+                if (!best) continue;
+                const { s, se, x, ang } = best;
+                const p = s[se], o = s[other(se)];
+                const grows = Math.hypot(x[0] - o[0], x[1] - o[1]) > Math.hypot(p[0] - o[0], p[1] - o[1]);
+                if (grows && (!supported(p, x) || crosses(p, x, [s]))) continue;
+                // L'arc prolongé passe aussi sur des points.
+                if (!supported(e, x)) continue;
+                s[se] = x;
+                if (end) a.a1 = ang;
+                else a.a0 = ang;
+                used.add(s);
             }
         }
     }
@@ -867,17 +1482,8 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
             if (u >= -e && u <= len + e && Math.abs(-x * uy + y * ux) <= e) explained[i] = 1;
         });
     }
-    // Arcs en polylignes, à 5 mm près.
-    const curves = arcs.map((a) => {
-        const step = 2 * Math.acos(Math.max(-1, 1 - ARC_SAGITTA / a.r));
-        const n = Math.max(4, Math.ceil((a.a1 - a.a0) / step));
-        const p: number[] = [];
-        for (let k = 0; k <= n; k++) {
-            const ang = a.a0 + (a.a1 - a.a0) * k / n;
-            p.push(a.cx + a.r * Math.cos(ang), a.cy + a.r * Math.sin(ang));
-        }
-        return p;
-    });
+    // Bruit d'un arc, le long de sa polyligne.
+    const curves = arcs.map(a => arcPoints(a, ARC_SAGITTA));
     arcs.forEach((a, k) => {
         const p = curves[k];
         for (let j = 2; j < p.length; j += 2) {
@@ -903,6 +1509,12 @@ export const fitSectionLines = (points: Float32Array, total: number, options: Se
     const trace = traceSection(rest, restCount, detailCell);
 
     const lines: TracedLine[] = segments.map(s => ({ points: [s.a[0], s.a[1], s.b[0], s.b[1]], closed: false }));
-    for (const p of curves) lines.push({ points: p, closed: false });
-    return { lines, details: trace.lines, walls: segments.length, curves: arcs.length, tolerance: trace.tolerance };
+    return {
+        lines,
+        arcs: arcs.map(({ cx, cy, r, a0, a1 }) => ({ cx, cy, r, a0, a1 })),
+        details: trace.lines,
+        walls: segments.length,
+        curves: arcs.length,
+        tolerance: trace.tolerance
+    };
 };
