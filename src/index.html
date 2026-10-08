@@ -205,6 +205,11 @@
                     </div>
 
                     <div class="buttonGroup">
+                        <!-- ARTLIGHT (TKT-270) : qualité d'affichage, HD ou SD selon la qualité effective -->
+                        <button id="qualityMenu" class="controlButton menuButton" aria-haspopup="true" aria-expanded="false" aria-controls="qualityBar">
+                            <span id="qualityBadge" class="qualityBadge">HD</span>
+                            <svg class="menuChevron" xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><path d="M1 5.5l3-3 3 3"/></svg>
+                        </button>
                         <button id="info" class="controlButton">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
                                 <g class='stroke'><use href="#infoIcon"/></g>
@@ -289,6 +294,22 @@
                         </div>
                     </div>
 
+                    <!-- ARTLIGHT (TKT-270) : barre Qualité -->
+                    <div id="qualityBar" class="subBar hidden">
+                        <div id="qualitySetting" class="subBarGroup">
+                            <div class="speedLabel">
+                                <span data-i18n="artlight.quality.label">Display quality</span>
+                                <span id="qualityStatus"></span>
+                            </div>
+                            <div id="qualityChoices" class="tool-seg">
+                                <button class="tool-seg-btn" data-quality="auto" data-i18n="artlight.quality.auto">Auto</button>
+                                <button class="tool-seg-btn" data-quality="standard" data-i18n="artlight.quality.standard">Standard</button>
+                                <button class="tool-seg-btn" data-quality="high" data-i18n="artlight.quality.high">High</button>
+                            </div>
+                            <div id="qualityHelp" class="qualityHelp"></div>
+                        </div>
+                    </div>
+
                     <!-- ARTLIGHT (TKT-242) : barre Outils -->
                     <div id="toolsBar" class="subBar hidden">
                         <button id="measure" class="subBarItem">
@@ -356,14 +377,10 @@
 
             <div id="walkHint" class="walkHint hidden"></div>
             <div id="speedHint" class="walkHint speedHint hidden"></div>
+            <div id="qualityHint" class="walkHint speedHint hidden"></div>
 
             <!-- Settings Panel -->
             <div id="settingsPanel" class="hidden">
-                <div id="performanceModeRow" class="settingsRow">
-                    <div id="performanceModeOption" data-i18n="settings.performance-mode">Performance Mode</div>
-                    <div id="performanceModeCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>
-                </div>
-                <div id="gamingControlsDivider" class="divider"></div>
                 <div id="gamingControlsRow" class="settingsRow">
                     <div id="gamingControlsOption" data-i18n="settings.gaming-controls">Gaming Controls</div>
                     <div id="gamingControlsCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>

@@ -24,6 +24,7 @@ import { observe } from './core/observe';
 import { initLocalization } from './localization';
 import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
 import { applyArrivalPose } from './portals';
+import { FrameRateWatch, isReducedQuality, loadQualityChoice, saveQualityChoice } from './quality'; // ARTLIGHT (TKT-270)
 import { importSettings } from './settings';
 import type { Config, Global } from './types';
 import { initPoster, initUI } from './ui';
@@ -264,20 +265,18 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // create events
     const events = new EventHandler();
 
-    // migrate legacy `retinaDisplay` preference (inverted) to `performanceMode`
-    const legacyRetina = localStorage.getItem('retinaDisplay');
-    if (legacyRetina !== null && localStorage.getItem('performanceMode') === null) {
-        localStorage.setItem('performanceMode', String(legacyRetina === 'false'));
-        localStorage.removeItem('retinaDisplay');
-    }
-    const storedPerformanceMode = localStorage.getItem('performanceMode');
+    // ARTLIGHT (TKT-270) : l'ancien interrupteur « Mode performance » est
+    // remplacé par le choix de qualité Auto / Standard / Haute.
+    const qualityChoice = loadQualityChoice();
 
     const sceneUrl = config.splatsUrl ?? config.contentUrl;
     const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
 
     const state = observe(events, {
         loaded: false,
-        performanceMode: storedPerformanceMode !== null ? storedPerformanceMode === 'true' : platform.mobile,
+        performanceMode: isReducedQuality(qualityChoice, false, platform.mobile),
+        qualityChoice,
+        qualityAutoReduced: false,
         progress: 0,
         inputMode: platform.mobile ? 'touch' : 'desktop',
         cameraMode: 'orbit',
@@ -308,6 +307,28 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // ARTLIGHT (TKT-241) : le niveau choisi reste celui de la scène pour la
     // session (même clé que le zéro, pour que le nuage de points la partage).
     events.on('speedLevel:changed', (level: number) => saveSpeedLevel(sceneKey, level));
+
+    // ARTLIGHT (TKT-270) : qualité d'affichage. Choisir Auto redonne sa chance
+    // à la haute qualité ; en Auto sur ordinateur, des saccades pendant les
+    // déplacements la font passer en Standard pour le reste de la visite.
+    const updateQuality = () => {
+        state.performanceMode = isReducedQuality(state.qualityChoice, state.qualityAutoReduced, platform.mobile);
+    };
+    events.on('qualityChoice:changed', (choice) => {
+        saveQualityChoice(choice);
+        state.qualityAutoReduced = false;
+        updateQuality();
+    });
+    events.on('qualityAutoReduced:changed', updateQuality);
+
+    const frameRateWatch = new FrameRateWatch();
+    app.on('framerender', () => {
+        if (!state.loaded || state.performanceMode || state.qualityChoice !== 'auto' || app.xr?.active) {
+            frameRateWatch.reset();
+        } else if (frameRateWatch.feed(performance.now())) {
+            state.qualityAutoReduced = true;
+        }
+    });
 
     // ARTLIGHT: quand on arrive par un portail, sa pose d'arrivée remplace la
     // caméra initiale de la scène. Appliqué ici, sur les réglages déjà migrés,

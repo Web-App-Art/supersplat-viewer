@@ -305,6 +305,25 @@ button {
                     }
                 }
 
+                // ARTLIGHT (TKT-270) : HD ou SD, en petites capitales encadrées
+                > .qualityBadge {
+                    display: block;
+                    min-width: 22px;
+                    padding: 1px 3px;
+                    border: 1.5px solid currentColor;
+                    border-radius: 4px;
+                    font-size: 10px;
+                    font-weight: 700;
+                    line-height: 12px;
+                    letter-spacing: 0.5px;
+                    text-align: center;
+                }
+
+                // qualité Standard : badge atténué
+                &.reduced > .qualityBadge {
+                    opacity: 0.6;
+                }
+
                 // un outil est ouvert : son icône sur fond vert
                 &.active {
                     color: $clr-text;
@@ -468,6 +487,41 @@ button {
                 padding: 5px 2px;
                 font-size: 12px;
                 font-variant-numeric: tabular-nums;
+            }
+        }
+
+        // ARTLIGHT (TKT-270) : menu Qualité. Même gabarit que la vitesse :
+        // libellé et état au-dessus, Auto / Standard / Haute, une ligne d'aide.
+        #qualitySetting {
+            width: 250px;
+            padding: 2px 8px;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+
+            > .speedLabel {
+                display: flex;
+                justify-content: space-between;
+                gap: 10px;
+                font-size: 11px;
+                white-space: nowrap;
+                color: $clr-text-dark;
+
+                > #qualityStatus {
+                    color: $clr-text;
+                }
+            }
+
+            .tool-seg-btn {
+                padding: 5px 2px;
+                font-size: 12px;
+            }
+
+            > .qualityHelp {
+                font-size: 11px;
+                line-height: 1.35;
+                color: $clr-text-dark;
+                white-space: normal;
             }
         }
 

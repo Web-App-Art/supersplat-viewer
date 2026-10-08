@@ -598,5 +598,21 @@
     "tooltip.artlight-tools": "Measuring tools",
     "artlight.nav.orbit": "Orbit",
     "artlight.nav.fly": "Drone",
-    "artlight.tools.area": "Area"
+    "artlight.tools.area": "Area",
+    "tooltip.artlight-quality": "Display quality",
+    "artlight.quality.label": "Display quality",
+    "artlight.quality.auto": "Auto",
+    "artlight.quality.standard": "Standard",
+    "artlight.quality.high": "High",
+    "artlight.quality.badge-high": "HD",
+    "artlight.quality.badge-standard": "SD",
+    "artlight.quality.auto-status": "Auto: {quality}",
+    "artlight.quality.reason-slow": "display too slow",
+    "artlight.quality.reason-mobile": "mobile",
+    "artlight.quality.help-auto": "Best quality your device can display smoothly.",
+    "artlight.quality.help-standard": "Lighter image, smoother on modest devices.",
+    "artlight.quality.help-high": "Full resolution and more detail, even if the display slows down.",
+    "artlight.quality.hint-reduced": "Display too slow: switched to standard quality (HD menu to change)",
+    "artlight.quality.status-high": "high quality",
+    "artlight.quality.status-standard": "standard quality"
 }

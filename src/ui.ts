@@ -250,8 +250,7 @@ const initUI = (global: Global) => {
         'settings', 'settingsPanel',
         'annotationsRow', 'annotationsOption', 'annotationsCheck',
         'orbitCamera', 'flyCamera', 'fpsCamera',
-        'performanceModeRow', 'performanceModeCheck', 'performanceModeOption',
-        'gamingControlsDivider', 'gamingControlsRow', 'gamingControlsCheck', 'gamingControlsOption',
+        'gamingControlsRow', 'gamingControlsCheck', 'gamingControlsOption',
         'desktopFlyClickToFly', 'desktopFlyGamingControls', 'desktopClickToWalk', 'desktopGamingControls',
         'touchFlyClickToWalk', 'touchFlyGamingControls',
         'touchClickToWalk', 'touchGamingControls',
@@ -263,6 +262,7 @@ const initUI = (global: Global) => {
         'desktopShowCollisionHelp',
         // ARTLIGHT
         'navMenu', 'navBar', 'toolsMenu', 'toolsMenuIcon', 'toolsBar',
+        'qualityMenu', 'qualityBadge', 'qualityBar', 'qualityStatus', 'qualityChoices', 'qualityHelp', 'qualityHint',
         'collisionRow', 'collisionCheck',
         'measure',
         'areaMeasure',
@@ -402,16 +402,51 @@ const initUI = (global: Global) => {
     //     dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
     // });
 
-    // Performance mode toggle
-    dom.performanceModeRow.addEventListener('click', () => {
-        state.performanceMode = !state.performanceMode;
+    // ARTLIGHT (TKT-270) : qualité d'affichage Auto / Standard / Haute. Le
+    // bouton affiche HD ou SD selon la qualité effective ; en Auto, la ligne
+    // d'état dit ce qu'Auto a retenu et pourquoi.
+    const trQuality = translator('artlight.quality');
+    const qualityButtons = Array.from(dom.qualityChoices.querySelectorAll<HTMLButtonElement>('button'));
+    qualityButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            state.qualityChoice = button.dataset.quality as typeof state.qualityChoice;
+        });
     });
 
-    const updatePerformanceMode = () => {
-        dom.performanceModeCheck.classList.toggle('active', state.performanceMode);
+    const updateQuality = () => {
+        qualityButtons.forEach((button) => {
+            const active = button.dataset.quality === state.qualityChoice;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+        const effective = state.performanceMode ? 'standard' : 'high';
+        dom.qualityBadge.textContent = trQuality(`badge-${effective}`);
+        dom.qualityMenu.classList.toggle('reduced', state.performanceMode);
+        let status = trQuality(`status-${effective}`);
+        if (state.qualityChoice === 'auto') {
+            // en Auto, Standard vient soit des saccades, soit d'un appareil mobile
+            const reason = state.qualityAutoReduced ? 'slow' : (state.performanceMode ? 'mobile' : null);
+            status = trQuality('auto-status', { quality: status }) + (reason ? ` (${trQuality(`reason-${reason}`)})` : '');
+        } else {
+            status = status.charAt(0).toUpperCase() + status.slice(1);
+        }
+        dom.qualityStatus.textContent = status;
+        dom.qualityHelp.textContent = trQuality(`help-${state.qualityChoice}`);
     };
-    events.on('performanceMode:changed', updatePerformanceMode);
-    updatePerformanceMode();
+    events.on('qualityChoice:changed', updateQuality);
+    events.on('qualityAutoReduced:changed', updateQuality);
+    events.on('performanceMode:changed', updateQuality);
+    updateQuality();
+
+    // Auto passe en Standard : un bandeau le signale quelques secondes.
+    let qualityHintTimeout: ReturnType<typeof setTimeout> | null = null;
+    events.on('qualityAutoReduced:changed', (reduced: boolean) => {
+        if (!reduced) return;
+        dom.qualityHint.textContent = trQuality('hint-reduced');
+        dom.qualityHint.classList.remove('hidden');
+        clearTimeout(qualityHintTimeout);
+        qualityHintTimeout = setTimeout(() => dom.qualityHint.classList.add('hidden'), 5000);
+    });
 
     // ARTLIGHT (TKT-241): vitesse de déplacement, 5 niveaux
     const trSpeed = translator('artlight.speed');
@@ -460,7 +495,6 @@ const initUI = (global: Global) => {
 
     const updateGamingSettingsVisibility = () => {
         const isDesktop = state.inputMode === 'desktop';
-        dom.gamingControlsDivider.classList.toggle('hidden', isDesktop);
         dom.gamingControlsRow.classList.toggle('hidden', isDesktop);
     };
     events.on('inputMode:changed', updateGamingSettingsVisibility);
@@ -497,7 +531,6 @@ const initUI = (global: Global) => {
     updateAnnotationsVisibility();
 
     // persist user preferences on change (never at startup, so defaults are not written into storage)
-    events.on('performanceMode:changed', (value: boolean) => localStorage.setItem('performanceMode', String(value)));
     events.on('gamingControls:changed', (value: boolean) => localStorage.setItem('gamingControls', String(value)));
     events.on('showAnnotations:changed', (value: boolean) => localStorage.setItem('showAnnotations', String(value)));
 
@@ -584,7 +617,8 @@ const initUI = (global: Global) => {
     type Menu = { button: HTMLElement, bar: HTMLElement };
     const menus: Menu[] = [
         { button: dom.navMenu, bar: dom.navBar },
-        { button: dom.toolsMenu, bar: dom.toolsBar }
+        { button: dom.toolsMenu, bar: dom.toolsBar },
+        { button: dom.qualityMenu, bar: dom.qualityBar } // ARTLIGHT (TKT-270)
     ];
     let openMenu: Menu | null = null;
 
@@ -985,6 +1019,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.navMenu, localize('tooltip.artlight-navigation'), 'top');
     tooltip.register(dom.toolsMenu, localize('tooltip.artlight-tools'), 'top');
     tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
+    tooltip.register(dom.qualityMenu, localize('tooltip.artlight-quality'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');
     tooltip.register(dom.arMode, localize('tooltip.enter-ar'), 'top');

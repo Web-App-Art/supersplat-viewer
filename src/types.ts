@@ -1,6 +1,7 @@
 import type { Entity, EventHandler, AppBase } from 'playcanvas';
 
 import type { CoordinateSystem } from './coordinates';
+import type { QualityChoice } from './quality';
 import type { ExperienceSettings } from './settings';
 
 type CameraMode = 'orbit' | 'anim' | 'fly' | 'walk';
@@ -42,7 +43,9 @@ type Config = {
 // observable state that can change at runtime
 type State = {
     loaded: boolean;                            // true once first frame is rendered
-    performanceMode: boolean;
+    performanceMode: boolean;                   // qualité Standard effective (déduite de qualityChoice, TKT-270)
+    qualityChoice: QualityChoice;               // ARTLIGHT (TKT-270): Auto, Standard ou Haute
+    qualityAutoReduced: boolean;                // ARTLIGHT (TKT-270): Auto est passé en Standard (saccades)
     progress: number;                           // content loading progress 0-100
     inputMode: InputMode;
     cameraMode: CameraMode;
