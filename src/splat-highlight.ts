@@ -1,5 +1,6 @@
-import type { Entity, GSplatComponent, Vec3 } from 'playcanvas';
+import type { GSplatComponent, Vec3 } from 'playcanvas';
 
+import { findShownGsplat, releaseWorkBufferModifier } from './interior'; // ARTLIGHT (TKT-272)
 import type { Global } from './types';
 
 // ARTLIGHT: surbrillance des splats dont le centre est dans une boîte orientée
@@ -84,7 +85,7 @@ class SplatBoxHighlight {
     // Met en surbrillance les splats de la boîte : centre, axes horizontaux
     // (la verticale est l'axe Y monde) et demi-dimensions sur ces axes.
     set(center: Vec3, axisX: Vec3, axisZ: Vec3, halfExtents: Vec3) {
-        const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+        const entity = findShownGsplat(this.global); // ARTLIGHT (TKT-272) : pas le modèle masqué
         const comp = (entity as any)?.gsplat as GSplatComponent | undefined;
         if (!comp) return;
 
@@ -106,7 +107,7 @@ class SplatBoxHighlight {
         if (!comp) return;
         this.component = null;
 
-        comp.setWorkBufferModifier(null);
+        releaseWorkBufferModifier(comp); // ARTLIGHT (TKT-272) : un modèle masqué le reste
         for (const name of ['uVolBoxCenter', 'uVolBoxAxisX', 'uVolBoxAxisZ', 'uVolBoxHalf']) {
             comp.deleteParameter(name);
         }
@@ -179,7 +180,7 @@ class SplatSectionHighlight {
     // Tranche centrée sur `center`, de normale `normal` (côté masqué si
     // `clip`), bornée à ±halfX sur axisX et ±halfY sur axisY.
     set(center: Vec3, axisX: Vec3, axisY: Vec3, normal: Vec3, halfX: number, halfY: number, halfThickness: number, clip: boolean) {
-        const entity = this.global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+        const entity = findShownGsplat(this.global); // ARTLIGHT (TKT-272) : pas le modèle masqué
         const comp = (entity as any)?.gsplat as GSplatComponent | undefined;
         if (!comp) return;
 
@@ -203,7 +204,7 @@ class SplatSectionHighlight {
         if (!comp) return;
         this.component = null;
 
-        comp.setWorkBufferModifier(null);
+        releaseWorkBufferModifier(comp); // ARTLIGHT (TKT-272) : un modèle masqué le reste
         for (const name of SECTION_PARAMS) {
             comp.deleteParameter(name);
         }
@@ -211,4 +212,4 @@ class SplatSectionHighlight {
     }
 }
 
-export { SplatBoxHighlight, SplatSectionHighlight };
+export { SplatBoxHighlight, SplatSectionHighlight, markPlacementsDirty };

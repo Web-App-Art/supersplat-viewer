@@ -1,6 +1,7 @@
 import { BoundingBox, Mat4, Vec3, Vec4 } from 'playcanvas';
 import type { Entity, GSplatComponent } from 'playcanvas';
 
+import { findShownGsplat } from './interior'; // ARTLIGHT (TKT-272)
 import type { Global, State } from './types';
 
 // ARTLIGHT: vrai dès qu'un de nos outils (mesure, surface, planéité, cubature,
@@ -380,7 +381,7 @@ export type SplatCenters = {
 // Centres des splats de la scène, partagés par les outils qui analysent le
 // nuage (planéité, cubature).
 export function getSplatCenters(global: Global): SplatCenters | null {
-    const entity = global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+    const entity = findShownGsplat(global); // ARTLIGHT (TKT-272) : le modèle affiché
     if (!entity) return null;
 
     const comp = (entity as any).gsplat as GSplatComponent;
@@ -422,6 +423,8 @@ export function getSplatCenters(global: Global): SplatCenters | null {
                 if (!octreeInstances) continue;
 
                 for (const octreeInstance of octreeInstances.values()) {
+                    // ARTLIGHT (TKT-272) : pas les splats du modèle masqué.
+                    if (resource.octree && octreeInstance.octree !== resource.octree) continue;
                     lod.levels = Math.max(lod.levels, octreeInstance.octree?.lodLevels ?? 0);
                     for (const placement of octreeInstance.activePlacements) {
                         const placementCenters = placement.resource?.centers as Float32Array;
@@ -510,7 +513,7 @@ export const orientedBoxAabb = (obb: OrientedBox): BoundingBox => {
 
 // Octree du modèle affiché et entité qui le porte, null pour un modèle simple.
 const findOctree = (global: Global): { entity: Entity; octree: any } | null => {
-    const entity = global.app.root.findOne((node: any) => !!node.gsplat) as Entity | null;
+    const entity = findShownGsplat(global); // ARTLIGHT (TKT-272) : le modèle affiché
     const octree = (entity as any)?.gsplat?.resource?.octree;
     if (!octree || !Array.isArray(octree.nodes) || !octree.nodeBoundsMinMax) return null;
     return { entity, octree };

@@ -1,0 +1,289 @@
+// ARTLIGHT (TKT-272)
+//
+// Bascule intérieur / extérieur. Un relevé peut porter deux modèles du même
+// bâtiment dans le même repère : l'un net dehors, l'autre net dedans. On ne
+// sait pas les fusionner sans défaut (les deux se disputent la même surface),
+// alors on les charge tous les deux et on n'en montre qu'un, choisi selon la
+// position de la caméra par rapport au volume du bâtiment décrit dans le
+// project.json (bloc `interior`, voir project.ts).
+//
+// Le modèle caché n'est pas désactivé : le moteur détruirait son instance et
+// déchargerait ses fichiers, à recharger à chaque passage de porte. Il reste
+// en place, réduit à son niveau de détail le plus grossier (environ 1,5 % du
+// modèle) et rendu invisible par un modificateur de work buffer (opacité et
+// échelle nulles). Près du seuil, il est libéré de cette contrainte pour que
+// ses niveaux fins arrivent avant qu'on le montre.
+//
+// Budget de splats : le modèle caché le consomme aussi (le moteur répartit un
+// budget unique entre les deux). On l'augmente d'autant pour que le modèle
+// affiché garde la qualité choisie : du niveau grossier du modèle caché
+// (≈ 0,7 M à Saint-Germain), ou d'un budget entier près du seuil.
+
+import type { Entity, GSplatComponent } from 'playcanvas';
+
+import type { Collision, SwitchableCollision } from './collision';
+import type { VolumePrism } from './project';
+import { markPlacementsDirty } from './splat-highlight';
+import type { Global } from './types';
+
+/** Demi-largeur de l'hystérésis : 20 cm entre les deux seuils. */
+const HYSTERESIS = 0.1;
+
+/** Distance au volume en deçà de laquelle le modèle caché charge ses niveaux fins. */
+const PREWARM = 1.5;
+
+const HIDE_GLSL = `
+void modifySplatCenter(inout vec3 center) {
+}
+void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
+    scale = vec3(0.0);
+}
+void modifySplatColor(vec3 center, inout vec4 color) {
+    color.a = 0.0;
+}
+`;
+
+const HIDE_WGSL = `
+fn modifySplatCenter(center: ptr<function, vec3f>) {
+}
+fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
+    *scale = vec3f(0.0);
+}
+fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
+    *color = vec4f((*color).rgb, 0.0);
+}
+`;
+
+const HIDE_MODIFIER = { glsl: HIDE_GLSL, wgsl: HIDE_WGSL };
+
+/**
+ * Nombre de splats du niveau le plus grossier d'un modèle LOD (ce que le
+ * modèle caché affiche hors du seuil).
+ *
+ * @param {any} octree - L'octree du modèle (champs internes du moteur).
+ * @returns {number} Le nombre de splats, 0 si l'octree n'est pas lisible.
+ */
+const coarsestCount = (octree: any): number => {
+    let total = 0;
+    for (const node of octree?.nodes ?? []) {
+        const lods = node.lods as { count: number }[] | undefined;
+        for (let l = (lods?.length ?? 0) - 1; l >= 0; l--) {
+            if (lods[l]?.count > 0) {
+                total += lods[l].count;
+                break;
+            }
+        }
+    }
+    return total;
+};
+
+/** Composants actuellement masqués par la bascule. */
+const hiddenComponents = new WeakSet<GSplatComponent>();
+
+/**
+ * Entité gsplat affichée : la première qui n'est pas masquée par la bascule.
+ * Les outils qui lisent ou teintent les splats passent par ici.
+ *
+ * @param {Global} global - Contexte du visualisateur.
+ * @returns {Entity | null} L'entité, ou null si la scène n'en a pas.
+ */
+const findShownGsplat = (global: Global): Entity | null => {
+    return global.app.root.findOne((node: any) => !!node.gsplat && !hiddenComponents.has(node.gsplat)) as Entity | null;
+};
+
+/**
+ * Retire le modificateur d'un outil (surbrillance, coupe). Sur un modèle
+ * masqué, remet celui qui le cache au lieu de le révéler.
+ *
+ * @param {GSplatComponent} comp - Le composant.
+ */
+const releaseWorkBufferModifier = (comp: GSplatComponent) => {
+    comp.setWorkBufferModifier(hiddenComponents.has(comp) ? HIDE_MODIFIER : null);
+};
+
+/**
+ * Distance signée d'un point au contour d'un polygone (négative dedans).
+ *
+ * @param {[number, number][]} outline - Sommets, fermeture implicite.
+ * @param {number} e - Abscisse du point.
+ * @param {number} n - Ordonnée du point.
+ * @returns {number} La distance signée.
+ */
+const polygonSignedDistance = (outline: [number, number][], e: number, n: number): number => {
+    let inside = false;
+    let best = Infinity;
+    for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+        const [ax, ay] = outline[j];
+        const [bx, by] = outline[i];
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((e - ax) * dx + (n - ay) * dy) / len2)) : 0;
+        const px = ax + t * dx - e, py = ay + t * dy - n;
+        best = Math.min(best, px * px + py * py);
+        if ((by > n) !== (ay > n) && e < ax + (n - ay) * dx / dy) {
+            inside = !inside;
+        }
+    }
+    const d = Math.sqrt(best);
+    return inside ? -d : d;
+};
+
+/**
+ * Distance signée d'un point moteur au volume (union de prismes), négative
+ * dedans. Exacte hors du volume ; dedans, distance à la face la plus proche.
+ *
+ * @param {VolumePrism[]} volume - Les prismes.
+ * @param {number} x - x moteur.
+ * @param {number} y - y moteur (hauteur).
+ * @param {number} z - z moteur.
+ * @returns {number} La distance signée, en mètres.
+ */
+const volumeSignedDistance = (volume: VolumePrism[], x: number, y: number, z: number): number => {
+    let best = Infinity;
+    for (const prism of volume) {
+        // Point moteur (x, y, z) → (E, N) = (−x, z), comme la carte.
+        const dh = polygonSignedDistance(prism.outline, -x, z);
+        const dv = Math.max(prism.floor - y, y - prism.top);
+        const d = dh <= 0 && dv <= 0 ?
+            Math.max(dh, dv) :
+            Math.hypot(Math.max(dh, 0), Math.max(dv, 0));
+        best = Math.min(best, d);
+    }
+    return best;
+};
+
+type InteriorContents = {
+    volume: VolumePrism[];
+    exterior: Entity;
+    /** null en mode nuage de points : un seul contenu, seule la collision bascule. */
+    interior: Entity | null;
+    /** Collision aiguillée, null si l'un des deux modèles n'a pas la sienne. */
+    collision: SwitchableCollision | null;
+    exteriorCollision: Collision | null;
+    interiorCollision: Collision | null;
+};
+
+class InteriorSwitch {
+    private global: Global;
+
+    private contents: InteriorContents;
+
+    /** Caméra dans le bâtiment (modèle intérieur affiché). */
+    inside: boolean;
+
+    /** Modèle caché libéré du niveau grossier (caméra près du seuil). */
+    private prewarm = false;
+
+    /**
+     * Faux tant que le visualisateur montre le premier aperçu grossier : les
+     * plages de LOD sont alors les siennes.
+     */
+    revealed = false;
+
+    /** Budget de splats choisi par le visualisateur, avant la part du modèle caché. */
+    baseBudget = 0;
+
+    constructor(global: Global, contents: InteriorContents) {
+        this.global = global;
+        this.contents = contents;
+
+        const p = global.camera.getPosition();
+        const d = volumeSignedDistance(contents.volume, p.x, p.y, p.z);
+        this.inside = d < 0;
+        this.prewarm = Math.abs(d) < PREWARM;
+        this.applyVisibility();
+
+        // Abonné après le visualisateur, qui place la caméra dans son propre
+        // « update » : la position lue ici est celle de la frame.
+        global.app.on('update', () => this.update());
+    }
+
+    private get shown(): GSplatComponent {
+        const { exterior, interior } = this.contents;
+        return (this.inside ? interior : exterior)?.gsplat;
+    }
+
+    private get hidden(): GSplatComponent {
+        const { exterior, interior } = this.contents;
+        return (this.inside ? exterior : interior)?.gsplat;
+    }
+
+    /**
+     * Collision du modèle affiché.
+     *
+     * @returns {Collision | null} La collision, null si la scène n'en a pas.
+     */
+    get activeCollision(): Collision | null {
+        const { contents } = this;
+        return this.inside ? contents.interiorCollision ?? contents.exteriorCollision : contents.exteriorCollision;
+    }
+
+    private update() {
+        const p = this.global.camera.getPosition();
+        const d = volumeSignedDistance(this.contents.volume, p.x, p.y, p.z);
+        const inside = this.inside ? d < HYSTERESIS : d < -HYSTERESIS;
+        const prewarm = Math.abs(d) < PREWARM;
+
+        if (inside !== this.inside) {
+            this.inside = inside;
+            this.prewarm = prewarm;
+            this.applyVisibility();
+        } else if (prewarm !== this.prewarm) {
+            this.prewarm = prewarm;
+            this.applyLodRanges();
+        }
+    }
+
+    private applyVisibility() {
+        const { global, contents } = this;
+        const { shown, hidden } = this;
+
+        if (shown && hidden) {
+            hiddenComponents.delete(shown);
+            hiddenComponents.add(hidden);
+            shown.setWorkBufferModifier(null);
+            hidden.setWorkBufferModifier(HIDE_MODIFIER);
+        }
+
+        if (contents.collision) {
+            contents.collision.current = this.activeCollision;
+        }
+
+        this.applyLodRanges();
+        markPlacementsDirty(global);
+        global.state.insideBuilding = this.inside;
+        global.app.renderNextFrame = true;
+    }
+
+    /**
+     * Plages de LOD et budget après l'aperçu : plage complète pour le
+     * modèle affiché ; pour le modèle caché, le niveau le plus grossier, sauf
+     * près du seuil. Le budget couvre en plus ce que le modèle caché prend.
+     */
+    applyLodRanges() {
+        const { shown, hidden } = this;
+        if (!this.revealed || !shown || !hidden) {
+            return;
+        }
+        shown.lodRangeMin = 0;
+        shown.lodRangeMax = 1000;
+
+        const octree = (hidden.resource as any)?.octree;
+        const levels = octree?.lodLevels as number | undefined;
+        let extra = this.baseBudget;
+        if (this.prewarm || !levels) {
+            hidden.lodRangeMin = 0;
+            hidden.lodRangeMax = 1000;
+        } else {
+            hidden.lodRangeMin = hidden.lodRangeMax = levels - 1;
+            extra = coarsestCount(octree);
+        }
+        if (this.baseBudget > 0) {
+            this.global.app.scene.gsplat.splatBudget = this.baseBudget + extra;
+        }
+        this.global.app.renderNextFrame = true;
+    }
+}
+
+export { InteriorSwitch, findShownGsplat, releaseWorkBufferModifier, volumeSignedDistance };
+export type { InteriorContents };

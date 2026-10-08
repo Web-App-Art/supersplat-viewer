@@ -1,6 +1,7 @@
 import type { Entity, EventHandler, AppBase } from 'playcanvas';
 
 import type { CoordinateSystem } from './coordinates';
+import type { VolumePrism } from './project';
 import type { QualityChoice } from './quality';
 import type { ExperienceSettings } from './settings';
 
@@ -22,6 +23,12 @@ type Config = {
     contentMode?: ContentMode;
     splatsUrl?: string;
     pointcloudUrl?: string;
+    // ARTLIGHT (TKT-272): modèle intérieur affiché dans le volume du bâtiment
+    // (bloc `interior` du project.json). Absent en mode nuage de points, où le
+    // nuage est commun ; la collision et le volume restent.
+    interiorUrl?: string;
+    interiorCollisionUrl?: string;
+    interiorVolume?: VolumePrism[];
 
     noui: boolean;
     noanim: boolean;
@@ -67,6 +74,7 @@ type State = {
     volumeMeasureMode: boolean;
     pointMode: boolean;                         // ARTLIGHT (TKT-225): outil « Point XYZ »
     sectionMode: boolean;                       // ARTLIGHT (TKT-238): outil « Coupe »
+    insideBuilding: boolean;                    // ARTLIGHT (TKT-272): caméra dans le volume, modèle intérieur affiché
     speedLevel: number;                         // ARTLIGHT (TKT-241): niveau de vitesse de déplacement, 1 à 5
     isFullscreen: boolean;
     controlsHidden: boolean;

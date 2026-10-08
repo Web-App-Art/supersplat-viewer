@@ -97,6 +97,14 @@
                 sseConfig.contentUrl = sseConfig.contentMode === 'pointcloud' ? sseConfig.pointcloudUrl : sseConfig.splatsUrl;
                 sseConfig.contents = fetch(sseConfig.contentUrl);
                 sseConfig.collisionUrl = rel(scene.collision) || collisionUrl;
+                // ARTLIGHT (TKT-272): modèle intérieur, chargé en plus de `content`.
+                if (scene.interior) {
+                    if (sseConfig.contentMode === 'splats') {
+                        sseConfig.interiorUrl = rel(scene.interior.content);
+                    }
+                    sseConfig.interiorCollisionUrl = rel(scene.interior.collision);
+                    sseConfig.interiorVolume = scene.interior.volume;
+                }
                 if (scene.intro === false) {
                     sseConfig.nointro = true;
                 }

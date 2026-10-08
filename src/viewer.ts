@@ -33,12 +33,13 @@ import { CameraManager, isWalkAllowed } from './camera-manager';
 import { Camera } from './cameras/camera';
 import { Capture } from './capture';
 import type { Collision } from './collision';
-import { MeshCollision, VoxelCollision } from './collision';
+import { MeshCollision, SwitchableCollision, VoxelCollision } from './collision';
 import { contentModeUrl } from './content-mode'; // ARTLIGHT (TKT-228)
 import { nearlyEquals } from './core/math';
 import { DebugPanel } from './debug';
 import { FlatnessTool } from './flatness-tool'; // ARTLIGHT
 import { InputController } from './input-controller';
+import { InteriorSwitch } from './interior'; // ARTLIGHT (TKT-272)
 import { MeasureTool } from './measure-tool'; // ARTLIGHT
 import { MeshDebugOverlay } from './mesh-debug-overlay';
 import { MiniMap } from './minimap'; // ARTLIGHT (TKT-268)
@@ -46,6 +47,7 @@ import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
+import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
 import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Config, ContentMode, Global } from './types';
@@ -150,6 +152,13 @@ const anyPostEffectEnabled = (settings: PostEffectSettings): boolean => {
 
 const vec = new Vec3();
 
+// ARTLIGHT (TKT-272) : modèle intérieur d'une scène, voir src/interior.ts.
+type InteriorLoad = {
+    volume: VolumePrism[];
+    gsplat: Promise<Entity | null>;
+    collision?: Promise<Collision | null>;
+};
+
 // store the original isColorBufferSrgb so the override in updatePostEffects is idempotent
 const origIsColorBufferSrgb = RenderTarget.prototype.isColorBufferSrgb;
 
@@ -167,6 +176,8 @@ class Viewer {
     annotations: Annotations;
 
     portals: Portals | null = null; // ARTLIGHT
+
+    interiorSwitch: InteriorSwitch | null = null; // ARTLIGHT (TKT-272)
 
     miniMap: MiniMap | null = null; // ARTLIGHT (TKT-268)
 
@@ -204,7 +215,7 @@ class Viewer {
         }
     };
 
-    constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void> | undefined, collisionLoad: Promise<Collision> | undefined) {
+    constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void> | undefined, collisionLoad: Promise<Collision> | undefined, interiorLoad?: InteriorLoad) {
         this.global = global;
 
         const { app, settings, config, events, state, camera, renderer } = global;
@@ -393,14 +404,45 @@ class Viewer {
         });
 
         // wait for the model to load
-        Promise.all([gsplatLoad, skyboxLoad, collisionLoad]).then((results) => {
+        Promise.all([gsplatLoad, skyboxLoad, collisionLoad, interiorLoad?.gsplat, interiorLoad?.collision]).then((results) => {
             const gsplatComponent = results[0].gsplat as GSplatComponent;
-            const collision = results[2];
+            const exteriorCollision = results[2] ?? null;
 
             // get scene bounding box
             const gsplatBbox = gsplatComponent.customAabb;
             if (gsplatBbox) {
                 sceneBound.setFromTransformedAabb(gsplatBbox, results[0].getWorldTransform());
+            }
+
+            // ARTLIGHT (TKT-272) : modèle intérieur. La scène englobe les deux
+            // modèles ; la collision suit le modèle affiché.
+            const interiorEntity = results[3] ?? null;
+            const interiorComponent = interiorEntity?.gsplat as GSplatComponent | undefined;
+            const interiorCollision = results[4] ?? null;
+            let collision: Collision | null = exteriorCollision;
+            let switchable: SwitchableCollision | null = null;
+            if (interiorLoad && (interiorEntity || interiorCollision)) {
+                const interiorBbox = interiorComponent?.customAabb;
+                if (interiorBbox) {
+                    const bound = new BoundingBox();
+                    bound.setFromTransformedAabb(interiorBbox, interiorEntity.getWorldTransform());
+                    sceneBound.add(bound);
+                }
+                if (exteriorCollision && interiorCollision) {
+                    switchable = new SwitchableCollision(exteriorCollision);
+                    collision = switchable;
+                } else if (interiorCollision) {
+                    console.warn('Collision intérieure ignorée : la scène n\'a pas de collision extérieure.');
+                }
+                // Nuage de points : un seul contenu, seule la collision bascule.
+                this.interiorSwitch = new InteriorSwitch(global, {
+                    volume: interiorLoad.volume,
+                    exterior: results[0],
+                    interior: interiorEntity,
+                    collision: switchable,
+                    exteriorCollision,
+                    interiorCollision
+                });
             }
 
             if (!config.noui) {
@@ -427,15 +469,29 @@ class Viewer {
 
             // Create collision debug overlay (voxel uses a compute shader, mesh
             // uses standard line rendering). The voxel path requires WebGPU.
-            if (collision instanceof VoxelCollision && renderer !== 'webgl') {
-                this.voxelOverlay = new VoxelDebugOverlay(app, collision, camera);
-                this.voxelOverlay.mode = config.heatmap ? 'heatmap' : 'overlay';
+            // ARTLIGHT (TKT-272) : avec la bascule, un affichage par collision,
+            // seul celui du modèle affiché est actif.
+            const voxelCollisions = (switchable ? [exteriorCollision, interiorCollision] : [collision])
+            .filter((c): c is VoxelCollision => c instanceof VoxelCollision);
+            if (voxelCollisions.length > 0 && renderer !== 'webgl') {
+                const overlays = new Map(voxelCollisions.map((c) => {
+                    const overlay = new VoxelDebugOverlay(app, c, camera);
+                    overlay.mode = config.heatmap ? 'heatmap' : 'overlay';
+                    return [c as Collision, overlay];
+                }));
+                const activeOverlay = () => overlays.get(switchable ? switchable.current : collision) ?? null;
+                this.voxelOverlay = activeOverlay();
                 state.hasCollisionOverlay = true;
 
-                events.on('collisionOverlayEnabled:changed', (value: boolean) => {
-                    this.voxelOverlay.enabled = value;
+                const applyOverlay = () => {
+                    this.voxelOverlay = activeOverlay();
+                    overlays.forEach((overlay) => {
+                        overlay.enabled = state.collisionOverlayEnabled && overlay === this.voxelOverlay;
+                    });
                     app.renderNextFrame = true;
-                });
+                };
+                events.on('collisionOverlayEnabled:changed', applyOverlay);
+                events.on('insideBuilding:changed', applyOverlay);
             } else if (collision instanceof MeshCollision) {
                 this.meshOverlay = new MeshDebugOverlay(app, collision, camera, !!this.cameraFrame);
                 state.hasCollisionOverlay = true;
@@ -554,8 +610,15 @@ class Viewer {
                 };
 
                 gsplat.splatBudget = budget() * 1000000;
-                gsplatComponent.lodRangeMin = 0;
-                gsplatComponent.lodRangeMax = 1000;
+                // ARTLIGHT (TKT-272) : avec deux modèles, la bascule répartit les plages.
+                if (this.interiorSwitch && interiorComponent) {
+                    this.interiorSwitch.baseBudget = gsplat.splatBudget;
+                    this.interiorSwitch.revealed = true;
+                    this.interiorSwitch.applyLodRanges();
+                } else {
+                    gsplatComponent.lodRangeMin = 0;
+                    gsplatComponent.lodRangeMax = 1000;
+                }
                 gsplat.colorUpdateAngle = state.performanceMode ? 4 : 2;
                 gsplat.minContribution = 1;
                 gsplat.alphaClip = 1 / 255;
@@ -567,10 +630,13 @@ class Viewer {
                 applyPerfSettings();
             } else {
                 // reveal once low lod has loaded for fastest possible reveal
-                const resource = results[0].gsplat.resource as GSplatOctreeResourceLike | null;
-                const lodLevels = resource?.octree?.lodLevels;
-                if (lodLevels) {
-                    gsplatComponent.lodRangeMax = gsplatComponent.lodRangeMin = lodLevels - 1;
+                // ARTLIGHT (TKT-272) : le modèle intérieur aussi.
+                for (const component of [gsplatComponent, interiorComponent]) {
+                    const resource = component?.resource as GSplatOctreeResourceLike | null;
+                    const lodLevels = resource?.octree?.lodLevels;
+                    if (lodLevels) {
+                        component.lodRangeMax = component.lodRangeMin = lodLevels - 1;
+                    }
                 }
             }
 
@@ -716,3 +782,4 @@ class Viewer {
 }
 
 export { Viewer };
+export type { InteriorLoad };

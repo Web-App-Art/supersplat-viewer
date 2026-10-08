@@ -31,10 +31,11 @@
 
 import { Vec3 } from 'playcanvas';
 
+import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { localize } from './localization';
 import type { Portals } from './portals';
 import { resolveScene } from './project';
-import type { Portal, ProjectContext, SceneMap, SceneMapLevel } from './project';
+import type { Portal, ProjectContext, SceneMap, SceneMapLevel, VolumePrism } from './project';
 import { isToolActive } from './tool-utils';
 import type { Global } from './types';
 
@@ -167,7 +168,7 @@ const isValidLevel = (level: SceneMapLevel) => {
 };
 
 // Bloc « map » de la scène active, chemins résolus ; null sans carte.
-const readSceneMap = (): { map: SceneMap, levels: SceneMapLevel[] } | null => {
+const readSceneMap = (): { map: SceneMap, levels: SceneMapLevel[], volume: VolumePrism[] | null } | null => {
     const context = (window as any).sse?.project as ProjectContext | undefined;
     if (!context?.project?.scenes) {
         return null;
@@ -193,7 +194,11 @@ const readSceneMap = (): { map: SceneMap, levels: SceneMapLevel[] } | null => {
         })
     })).sort((a, b) => a.floor - b.floor);
 
-    return levels.length ? { map, levels } : null;
+    // ARTLIGHT (TKT-272) : volume du bâtiment, s'il a un modèle intérieur
+    // et des niveaux marqués comme tels.
+    const volume = scene.interior?.volume && levels.some(level => level.interior) ? scene.interior.volume : null;
+
+    return levels.length ? { map, levels, volume } : null;
 };
 
 // Vue d'une carte : centre (E, N) et mètres par pixel CSS.
@@ -230,6 +235,12 @@ class MiniMap {
     private pinnedLevel: number | null = null;
 
     private visitorLevel = -1;
+
+    // ARTLIGHT (TKT-272) : volume du bâtiment, null sans modèle intérieur.
+    private volume: VolumePrism[] | null;
+
+    // Côté du volume pour lequel visitorLevel a été choisi.
+    private visitorInside = false;
 
     private dirty = true;
 
@@ -276,13 +287,14 @@ class MiniMap {
      */
     static create(global: Global, portals: Portals | null = null) {
         const found = readSceneMap();
-        return found ? new MiniMap(global, found.map, found.levels, portals) : null;
+        return found ? new MiniMap(global, found.map, found.levels, found.volume, portals) : null;
     }
 
-    private constructor(global: Global, map: SceneMap, levels: SceneMapLevel[], portals: Portals | null) {
+    private constructor(global: Global, map: SceneMap, levels: SceneMapLevel[], volume: VolumePrism[] | null, portals: Portals | null) {
         this.global = global;
         this.map = map;
         this.levels = levels;
+        this.volume = volume;
         this.background = readBackground();
         this.showPins = readMarks();
         this.narrow = window.matchMedia('(max-width: 720px)');
@@ -306,15 +318,17 @@ class MiniMap {
 
     // ── Repères (lot 4) ──
 
-    // Niveau d'un repère : le plus haut sol sous lui, sans hystérésis.
-    private pinLevel(y: number) {
-        return this.pickLevel(y + PIN_BELOW_FLOOR);
+    // Niveau d'un repère : le plus haut sol sous lui, sans hystérésis, parmi
+    // les niveaux de son côté du volume (TKT-272).
+    private pinLevel(p: ArrayLike<number>) {
+        const inside = this.volume ? volumeSignedDistance(this.volume, p[0], p[1], p[2]) < 0 : false;
+        return this.pickLevel(p[1] + PIN_BELOW_FLOOR, inside);
     }
 
     private collectPins(portals: Portals | null) {
         const { settings, events } = this.global;
         const pins: Pin[] = [];
-        const at = (p: ArrayLike<number>) => ({ e: -p[0], n: p[2], level: this.pinLevel(p[1]) });
+        const at = (p: ArrayLike<number>) => ({ e: -p[0], n: p[2], level: this.pinLevel(p) });
         const valid = (p: unknown): p is number[] => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
 
         // Portails : suivis comme un clic sur le hotspot.
@@ -762,22 +776,28 @@ class MiniMap {
 
     // ── Suivi de la caméra ──
 
-    private pickLevel(height: number) {
-        let index = 0;
+    // ARTLIGHT (TKT-272) : avec un modèle intérieur, seuls les niveaux du côté
+    // `inside` du volume comptent (tous s'il n'y en a aucun de ce côté).
+    private pickLevel(height: number, inside = false) {
+        const side = (i: number) => !this.volume || !!this.levels[i].interior === inside;
+        const pool = this.levels.some((_, i) => side(i)) ? side : () => true;
+        let index = -1;
         for (let i = 0; i < this.levels.length; i++) {
-            if (this.levels[i].floor <= height) index = i;
+            if (pool(i) && (index < 0 || this.levels[i].floor <= height)) index = i;
         }
-        return index;
+        return Math.max(0, index);
     }
 
     private followLevel(y: number) {
         const h = y - EYE_ABOVE_FLOOR;
-        if (this.visitorLevel < 0) {
-            this.visitorLevel = this.pickLevel(h);
+        const inside = this.global.state.insideBuilding;
+        if (this.visitorLevel < 0 || inside !== this.visitorInside) {
+            this.visitorInside = inside;
+            this.visitorLevel = this.pickLevel(h, inside);
             return;
         }
-        const up = this.pickLevel(h - LEVEL_HYSTERESIS);
-        const down = this.pickLevel(h + LEVEL_HYSTERESIS);
+        const up = this.pickLevel(h - LEVEL_HYSTERESIS, inside);
+        const down = this.pickLevel(h + LEVEL_HYSTERESIS, inside);
         if (up > this.visitorLevel) {
             this.visitorLevel = up;
         } else if (down < this.visitorLevel) {

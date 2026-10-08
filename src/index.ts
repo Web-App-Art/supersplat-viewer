@@ -29,11 +29,13 @@ import { importSettings } from './settings';
 import type { Config, Global } from './types';
 import { initPoster, initUI } from './ui';
 import { Viewer } from './viewer';
+import type { InteriorLoad } from './viewer';
 import { initXr } from './xr';
 import { version as appVersion } from '../package.json';
 
-const loadGsplat = async (app: AppBase, config: Config, progressCallback: (progress: number) => void) => {
-    const { contents, contentUrl } = config;
+// ARTLIGHT (TKT-272) : URL et contenu en paramètres, pour charger aussi le
+// modèle intérieur d'une scène.
+const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Response>, progressCallback: (progress: number) => void) => {
     const c = contents as unknown as ArrayBuffer;
     const filename = new URL(contentUrl, location.href).pathname.split('/').pop();
     const data = filename.toLowerCase() === 'meta.json' ? await (await contents).json() : undefined;
@@ -67,6 +69,20 @@ const loadGsplat = async (app: AppBase, config: Config, progressCallback: (progr
 
         app.assets.add(asset);
         app.assets.load(asset);
+    });
+};
+
+const loadCollision = (app: AppBase, url: string): Promise<Collision | null> => {
+    const ext = new URL(url, location.href).pathname.split('.').pop()?.toLowerCase();
+    if (ext === 'glb') {
+        return MeshCollision.fromGlb(app, url).catch((err: Error): null => {
+            console.warn('Failed to load mesh collision:', err);
+            return null;
+        });
+    }
+    return loadVoxelCollision(url).catch((err: Error): null => {
+        console.warn('Failed to load voxel data:', err);
+        return null;
     });
 };
 
@@ -297,6 +313,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         volumeMeasureMode: false,
         pointMode: false,
         sectionMode: false,
+        insideBuilding: false,
         speedLevel: loadSpeedLevel(sceneKey, config.speed),
         isFullscreen: false,
         controlsHidden: false,
@@ -379,7 +396,8 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // Load model
     const gsplatLoad = loadGsplat(
         app,
-        config,
+        config.contentUrl,
+        config.contents,
         (progress: number) => {
             state.progress = progress;
         }
@@ -394,20 +412,22 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         });
 
     // Load collision data (type determined by file extension)
-    let collisionLoad: Promise<Collision> | undefined;
-    if (config.collisionUrl) {
-        const ext = new URL(config.collisionUrl, location.href).pathname.split('.').pop()?.toLowerCase();
-        if (ext === 'glb') {
-            collisionLoad = MeshCollision.fromGlb(app, config.collisionUrl).catch((err: Error): null => {
-                console.warn('Failed to load mesh collision:', err);
-                return null;
-            });
-        } else {
-            collisionLoad = loadVoxelCollision(config.collisionUrl).catch((err: Error): null => {
-                console.warn('Failed to load voxel data:', err);
-                return null;
-            });
-        }
+    const collisionLoad = config.collisionUrl ? loadCollision(app, config.collisionUrl) : undefined;
+
+    // ARTLIGHT (TKT-272) : modèle intérieur et sa collision, montrés à la
+    // place des précédents quand la caméra entre dans le volume du bâtiment.
+    let interiorLoad: InteriorLoad | undefined;
+    if (config.interiorVolume && (config.interiorUrl || config.interiorCollisionUrl)) {
+        interiorLoad = {
+            volume: config.interiorVolume,
+            gsplat: config.interiorUrl ?
+                loadGsplat(app, config.interiorUrl, fetch(config.interiorUrl), () => {}).catch((err: Error): null => {
+                    console.warn('Modèle intérieur indisponible :', err);
+                    return null;
+                }) :
+                Promise.resolve(null),
+            collision: config.interiorCollisionUrl ? loadCollision(app, config.interiorCollisionUrl) : undefined
+        };
     }
 
     // Load and play sound
@@ -425,7 +445,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     }
 
     // Create the viewer
-    return new Viewer(global, gsplatLoad, skyboxLoad, collisionLoad);
+    return new Viewer(global, gsplatLoad, skyboxLoad, collisionLoad, interiorLoad);
 };
 
 console.log(`SuperSplat Viewer v${appVersion} | Engine v${engineVersion} (${engineRevision})`);

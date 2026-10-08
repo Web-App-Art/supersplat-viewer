@@ -50,6 +50,12 @@ type SceneMapLevel = {
     walls?: string;
     /** Lot 4 : noms de pièces saisis à la préparation, at en (E, N) comme bounds. */
     rooms?: SceneMapRoom[];
+    /**
+     * ARTLIGHT (TKT-272) : niveau du modèle intérieur. Dans une scène qui a un
+     * bloc `interior`, la carte suit les niveaux intérieurs quand la caméra est
+     * dans le bâtiment, les autres dehors.
+     */
+    interior?: boolean;
 };
 
 type SceneMapRoom = {
@@ -61,6 +67,31 @@ type SceneMap = {
     /** Angle du nord en degrés, 0 = en haut ; absent pour une scène non géoréférencée. */
     north?: number;
     levels: SceneMapLevel[];
+};
+
+/**
+ * ARTLIGHT (TKT-272) : un prisme du volume d'un bâtiment. Contour au sol en
+ * (E, N) du repère source, comme les bounds de la carte (point moteur
+ * (x, y, z) → (−x, z)) ; floor et top en y moteur.
+ */
+type VolumePrism = {
+    outline: [number, number][];
+    floor: number;
+    top: number;
+};
+
+/**
+ * ARTLIGHT (TKT-272) : second relevé du même bâtiment, dans le même repère que
+ * `content`, affiché à la place de celui-ci quand la caméra est dans le volume.
+ * Voir src/interior.ts.
+ */
+type SceneInterior = {
+    /** URL des splats intérieurs, relative au project.json. */
+    content: string;
+    /** Collision intérieure ; à défaut, celle de la scène reste active dedans. */
+    collision?: string;
+    /** Union de prismes. */
+    volume: VolumePrism[];
 };
 
 type ProjectScene = {
@@ -89,6 +120,8 @@ type ProjectScene = {
     portals?: Portal[];
     /** ARTLIGHT (TKT-268) : carte de la scène, voir src/minimap.ts. */
     map?: SceneMap;
+    /** ARTLIGHT (TKT-272) : modèle intérieur, affiché dans le volume du bâtiment. */
+    interior?: SceneInterior;
 };
 
 type Project = {
@@ -105,6 +138,38 @@ type ProjectContext = {
     projectParam: string;
     /** Identifiant de la scène active. */
     sceneId: string;
+};
+
+const isFiniteNumber = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * ARTLIGHT (TKT-272) : un volume mal décrit ferait basculer au mauvais endroit
+ * sans que rien ne le signale ; on le refuse donc entièrement.
+ *
+ * @param {SceneInterior} interior - Le bloc `interior` d'une scène.
+ * @param {string} at - Chemin du bloc, pour le message d'erreur.
+ */
+const validateInterior = (interior: SceneInterior, at: string) => {
+    if (!interior || typeof interior.content !== 'string' || interior.content === '') {
+        throw new Error(`${at}.content doit être une URL`);
+    }
+    if (interior.collision !== undefined && (typeof interior.collision !== 'string' || interior.collision === '')) {
+        throw new Error(`${at}.collision doit être une URL`);
+    }
+    if (!Array.isArray(interior.volume) || interior.volume.length === 0) {
+        throw new Error(`${at}.volume doit être un tableau non vide`);
+    }
+    interior.volume.forEach((prism, k) => {
+        const pat = `${at}.volume[${k}]`;
+        if (!isFiniteNumber(prism?.floor) || !isFiniteNumber(prism?.top) || prism.top <= prism.floor) {
+            throw new Error(`${pat} : floor et top attendus, top > floor`);
+        }
+        const ok = Array.isArray(prism.outline) && prism.outline.length >= 3 &&
+            prism.outline.every(p => Array.isArray(p) && p.length === 2 && isFiniteNumber(p[0]) && isFiniteNumber(p[1]));
+        if (!ok) {
+            throw new Error(`${pat}.outline doit compter au moins 3 points [E, N]`);
+        }
+    });
 };
 
 /**
@@ -145,6 +210,10 @@ const validateProject = (data: unknown): Project => {
         }
         if (scene.content === undefined && scene.pointcloud === undefined) {
             throw new Error(`project.scenes[${i}].content manquant`);
+        }
+
+        if (scene.interior !== undefined) {
+            validateInterior(scene.interior, `project.scenes[${i}].interior`);
         }
 
         (scene.portals ?? []).forEach((portal, j) => {
@@ -216,5 +285,5 @@ const findPortal = (project: Project, portalId?: string | null): Portal | null =
     return null;
 };
 
-export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene, SceneMap, SceneMapLevel, SceneMapRoom };
+export type { Portal, PortalArrival, Project, ProjectContext, ProjectScene, SceneInterior, SceneMap, SceneMapLevel, SceneMapRoom, VolumePrism };
 export { findPortal, resolveScene, validateProject };
