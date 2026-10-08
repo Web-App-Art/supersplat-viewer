@@ -198,6 +198,18 @@ class InteriorSwitch {
         global.app.on('update', () => this.update());
     }
 
+    /**
+     * Reçoit le modèle intérieur chargé après le premier affichage : masqué
+     * ou montré selon la position de la caméra, plages de LOD et budget
+     * répartis comme pour un modèle chargé d'emblée.
+     *
+     * @param {Entity} interior - L'entité gsplat intérieure.
+     */
+    attachInterior(interior: Entity) {
+        this.contents.interior = interior;
+        this.applyVisibility();
+    }
+
     private get shown(): GSplatComponent {
         const { exterior, interior } = this.contents;
         return (this.inside ? interior : exterior)?.gsplat;

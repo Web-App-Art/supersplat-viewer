@@ -155,7 +155,10 @@ const vec = new Vec3();
 // ARTLIGHT (TKT-272) : modèle intérieur d'une scène, voir src/interior.ts.
 type InteriorLoad = {
     volume: VolumePrism[];
-    gsplat: Promise<Entity | null>;
+    /** Chargement attendu avant le premier affichage (vue de départ dans le bâtiment)… */
+    gsplat: Promise<Entity | null> | null;
+    /** …ou lancé après lui. */
+    loadGsplat: (() => Promise<Entity | null>) | null;
     collision?: Promise<Collision | null>;
 };
 
@@ -416,12 +419,14 @@ class Viewer {
 
             // ARTLIGHT (TKT-272) : modèle intérieur. La scène englobe les deux
             // modèles ; la collision suit le modèle affiché.
+            // Modèle différé : la bascule commence sans lui (seule la
+            // collision suit) et le reçoit après le premier affichage.
             const interiorEntity = results[3] ?? null;
-            const interiorComponent = interiorEntity?.gsplat as GSplatComponent | undefined;
+            let interiorComponent = interiorEntity?.gsplat as GSplatComponent | undefined;
             const interiorCollision = results[4] ?? null;
             let collision: Collision | null = exteriorCollision;
             let switchable: SwitchableCollision | null = null;
-            if (interiorLoad && (interiorEntity || interiorCollision)) {
+            if (interiorLoad && (interiorEntity || interiorCollision || interiorLoad.loadGsplat)) {
                 const interiorBbox = interiorComponent?.customAabb;
                 if (interiorBbox) {
                     const bound = new BoundingBox();
@@ -443,6 +448,18 @@ class Viewer {
                     exteriorCollision,
                     interiorCollision
                 });
+                if (interiorLoad.loadGsplat) {
+                    const load = interiorLoad.loadGsplat;
+                    events.once('firstFrame', () => {
+                        load().then((entity) => {
+                            if (!entity) return;
+                            interiorComponent = entity.gsplat as GSplatComponent;
+                            this.interiorSwitch.baseBudget = app.scene.gsplat.splatBudget;
+                            this.interiorSwitch.revealed = true;
+                            this.interiorSwitch.attachInterior(entity);
+                        });
+                    });
+                }
             }
 
             if (!config.noui) {

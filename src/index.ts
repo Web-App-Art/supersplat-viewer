@@ -21,6 +21,7 @@ import type { Collision } from './collision';
 import { VIEW_PARAM, applyViewParam } from './content-mode'; // ARTLIGHT (TKT-228)
 import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
 import { observe } from './core/observe';
+import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { initLocalization } from './localization';
 import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
 import { applyArrivalPose } from './portals';
@@ -416,16 +417,24 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // ARTLIGHT (TKT-272) : modèle intérieur et sa collision, montrés à la
     // place des précédents quand la caméra entre dans le volume du bâtiment.
+    // Le modèle intérieur n'est demandé qu'après le premier affichage, sauf
+    // si la vue de départ est déjà dans le bâtiment : il faut alors l'attendre
+    // pour ne pas montrer d'abord l'intérieur du modèle extérieur.
     let interiorLoad: InteriorLoad | undefined;
     if (config.interiorVolume && (config.interiorUrl || config.interiorCollisionUrl)) {
+        const { interiorUrl } = config;
+        const loadInterior = (): Promise<Entity | null> => (interiorUrl ?
+            loadGsplat(app, interiorUrl, fetch(interiorUrl), () => {}).catch((err: Error): null => {
+                console.warn('Modèle intérieur indisponible :', err);
+                return null;
+            }) :
+            Promise.resolve(null));
+        const start = settings.cameras[0]?.initial?.position;
+        const startInside = !!start && volumeSignedDistance(config.interiorVolume, start[0], start[1], start[2]) < 0;
         interiorLoad = {
             volume: config.interiorVolume,
-            gsplat: config.interiorUrl ?
-                loadGsplat(app, config.interiorUrl, fetch(config.interiorUrl), () => {}).catch((err: Error): null => {
-                    console.warn('Modèle intérieur indisponible :', err);
-                    return null;
-                }) :
-                Promise.resolve(null),
+            gsplat: startInside ? loadInterior() : null,
+            loadGsplat: startInside || !interiorUrl ? null : loadInterior,
             collision: config.interiorCollisionUrl ? loadCollision(app, config.interiorCollisionUrl) : undefined
         };
     }
