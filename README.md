@@ -337,6 +337,30 @@ node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
 # n2 « Étage », n3 toit écarté), studio (n1, n2 plafond écarté). Son project.json écrit « 1.380 » : le bloc
 # a été recopié à la main (le script ne réécrit qu'un fichier au format JSON.stringify(…, 2)).
 
+# ===== Bascule intérieur / extérieur (TKT-272) =====
+# Une scène peut porter deux modèles du même bâtiment (extérieur net dehors, intérieur net dedans) :
+#   "interior": { "content": "./interieur/lod-output/lod-meta.json", "collision": "./interieur/interieur.voxel.json",
+#                 "volume": [ {"outline": [[E, N], …], "floor": H0, "top": H1}, … ] }
+# Le visualisateur montre l'intérieur (et sa collision) quand la caméra est dans l'union des prismes, à 10 cm près
+# de chaque côté. Le modèle intérieur n'est chargé qu'après le premier affichage, sauf si la vue de départ
+# (cameras[0]) est dans le volume. Niveaux de carte "interior": true : suivis dedans, les autres dehors.
+
+## Préparer le volume : scripts/interior-volume.mjs (≈ 1 min la première fois, quelques s ensuite)
+# Prérequis : carte de la scène avec un niveau "interior": true et sa carte des murs par étage (scene-map.mjs),
+# collision extérieure de la scène (toits) et intérieure (cadre de calcul), splat-transform pour les coupes.
+node scripts/interior-volume.mjs public/projects/saint-germain/project-bascule.json
+# Écrit volume/volume.json (réglages, gardé d'un lancement à l'autre), volume/controle.html (planche) et
+# volume/controle/resultat.json ; project.json inchangé. Planche : prismes, toits mesurés (égout, faîtage),
+# contours sur la vue de dessus de chaque niveau, une coupe verticale par façade et, si un poses.json de LCC
+# est trouvé sous le projet, les bascules le long de la trajectoire du scanner : chacune doit tomber sur une
+# porte ou une fenêtre. Corriger au besoin dans volume.json, relancer, puis écrire le volume :
+node scripts/interior-volume.mjs public/projects/saint-germain/project-bascule.json --write
+# Corrections dans volume.json : "exclude" / "include" ([{"outline": [[E, N], …], "levels": ["n1"], "note": "…"}]),
+# "tops" (toit imposé : [{"outline": […], "top": 10.8}]), "close" (ouvertures refermées jusqu'à 2 × close m),
+# "wallAlpha", "roof.step" (paliers sous le toit, 0,5 m), "levels[].use": false. --force refait les coupes.
+# Saint-Germain (08/10/2026) : 10 prismes, faîtage 10,80 m, égout ≈ 7,6 m (corps principal) ; une zone exclue à
+# la main (massifs de la terrasse est, pris pour un toit d'aile).
+
 # altitude NGF-IGN69 (TKT-231) : le viewer convertit H ellipsoïdale avec la grille RAF20 de l'IGN,
 # static/geoid/fr_ign_RAF20.gtx (France continentale, 640 Ko), copiée dans public/geoid/ au build
 # et chargée seulement si l'utilisateur choisit « Altitude NGF ». Déployer public/geoid/ avec le viewer.
