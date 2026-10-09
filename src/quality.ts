@@ -23,11 +23,12 @@ const STORAGE_KEY = 'artlight.quality';
 const LEGACY_KEYS = ['performanceMode', 'retinaDisplay'];
 
 // Budgets de splats, en millions. TKT-273 : 4 M en Haute affichait les pièces
-// aux niveaux de détail 2 à 4 ; à 16 M, l'intérieur de Saint-Germain est au
-// niveau 0 à quelques mètres.
+// aux niveaux de détail 2 à 4 ; à 20 M, le salon de Saint-Germain est au
+// niveau 0, comme à 40 M (16 M laissait plus flou le jardin vu par les
+// fenêtres, pour 2 ms de moins par image).
 const BUDGETS = {
     mobile: { standard: 1, high: 2 },
-    desktop: { standard: 2, high: 16 }
+    desktop: { standard: 2, high: 20 }
 };
 
 // Paliers d'Auto sur ordinateur, du budget de Haute au plus léger. Après le
