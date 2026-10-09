@@ -18,6 +18,14 @@
 // budget unique entre les deux). On l'augmente d'autant pour que le modèle
 // affiché garde la qualité choisie : du niveau grossier du modèle caché
 // (≈ 0,7 M à Saint-Germain), ou d'un budget entier près du seuil.
+//
+// TKT-273 : en entrant, la collision et l'état « dans le bâtiment » changent
+// aussitôt, mais l'image garde le modèle extérieur tant que l'intérieur n'a
+// pas chargé ses niveaux fins autour de la caméra (8 s au plus). Sans cela,
+// on voyait son niveau grossier pendant quelques secondes. L'extérieur
+// contient l'intérieur du relevé complet : l'image reste correcte pendant
+// l'attente. En sortant, pas d'attente : vu du dehors, le modèle intérieur
+// montre aux fenêtres ce que les visites ont relevé à travers les vitres.
 
 import type { Entity, GSplatComponent } from 'playcanvas';
 
@@ -29,8 +37,26 @@ import type { Global } from './types';
 /** Demi-largeur de l'hystérésis : 20 cm entre les deux seuils. */
 const HYSTERESIS = 0.1;
 
-/** Distance au volume en deçà de laquelle le modèle caché charge ses niveaux fins. */
-const PREWARM = 1.5;
+/**
+ * Distance au volume en deçà de laquelle le modèle caché charge ses niveaux
+ * fins : plus tôt en approchant de la maison (TKT-273), où l'on entre souvent
+ * en marchant, qu'en approchant d'une façade de l'intérieur.
+ */
+const PREWARM_OUTSIDE = 3;
+const PREWARM_INSIDE = 1.5;
+
+/**
+ * Attente maximale du modèle à montrer après le passage du seuil. En local,
+ * l'intérieur de Saint-Germain met quelques secondes à charger (≈ 70
+ * fichiers, 660 Mo pour le salon à 20 M) ; au-delà, il est montré à mi-chemin
+ * (niveaux intermédiaires, lodUnderfillLimit) et finit de s'affiner.
+ */
+const SWAP_TIMEOUT_MS = 8000;
+
+/** Images consécutives où le modèle à montrer est prêt avant de le montrer. */
+const SWAP_READY_FRAMES = 3;
+
+const isPrewarm = (d: number) => (d < 0 ? -d < PREWARM_INSIDE : d < PREWARM_OUTSIDE);
 
 const HIDE_GLSL = `
 void modifySplatCenter(inout vec3 center) {
@@ -75,6 +101,39 @@ const coarsestCount = (octree: any): number => {
         }
     }
     return total;
+};
+
+/**
+ * Le modèle affiche-t-il les niveaux de détail voulus autour de la caméra ?
+ * Lit l'état interne du moteur (PlayCanvas 2.20) : plage de LOD prise en
+ * compte, aucun fichier en attente (préchargement des niveaux plus fins
+ * compris), aucun nœud en attente de son niveau.
+ *
+ * @param {Global} global - Contexte du visualisateur.
+ * @param {GSplatComponent} comp - Le composant.
+ * @returns {boolean | null} null si l'état n'est pas lisible.
+ */
+const lodReady = (global: Global, comp: GSplatComponent): boolean | null => {
+    try {
+        const director = (global.app.renderer as any)?.gsplatDirector;
+        const placement = (comp as any)._placement;
+        let result: boolean | null = null;
+        director?.camerasMap?.forEach((cameraData: any) => {
+            cameraData.layersMap?.forEach((layerData: any) => {
+                const inst = layerData.gsplatManager?.world?._octreeInstances?.get(placement);
+                if (!inst) return;
+                const ready = inst.rangeMin === Math.min(comp.lodRangeMin, inst.octree.lodLevels - 1) &&
+                    inst.pending.size === 0 &&
+                    inst.prefetchPending.size === 0 &&
+                    inst.pendingDecrements.size === 0 &&
+                    inst.pendingVisibleAdds.size === 0;
+                result = (result ?? true) && ready;
+            });
+        });
+        return result;
+    } catch {
+        return null;
+    }
 };
 
 /** Composants actuellement masqués par la bascule. */
@@ -168,8 +227,16 @@ class InteriorSwitch {
 
     private contents: InteriorContents;
 
-    /** Caméra dans le bâtiment (modèle intérieur affiché). */
+    /** Caméra dans le bâtiment (collision et carte de l'intérieur). */
     inside: boolean;
+
+    /** Modèle intérieur affiché ; rejoint `inside` quand le modèle est prêt. */
+    private displayInside: boolean;
+
+    /** Début de l'attente du modèle à montrer, en ms. */
+    private swapStart = 0;
+
+    private readyFrames = 0;
 
     /** Modèle caché libéré du niveau grossier (caméra près du seuil). */
     private prewarm = false;
@@ -190,7 +257,9 @@ class InteriorSwitch {
         const p = global.camera.getPosition();
         const d = volumeSignedDistance(contents.volume, p.x, p.y, p.z);
         this.inside = d < 0;
-        this.prewarm = Math.abs(d) < PREWARM;
+        this.displayInside = this.inside;
+        this.prewarm = isPrewarm(d);
+        this.applyInside();
         this.applyVisibility();
 
         // Abonné après le visualisateur, qui place la caméra dans son propre
@@ -207,17 +276,31 @@ class InteriorSwitch {
      */
     attachInterior(interior: Entity) {
         this.contents.interior = interior;
+        // caméra déjà dedans : l'extérieur reste affiché le temps que
+        // l'intérieur charge ses niveaux fins
+        this.displayInside = false;
+        this.swapStart = performance.now();
+        this.readyFrames = 0;
         this.applyVisibility();
     }
 
     private get shown(): GSplatComponent {
         const { exterior, interior } = this.contents;
-        return (this.inside ? interior : exterior)?.gsplat;
+        return (this.displayInside ? interior : exterior)?.gsplat;
     }
 
     private get hidden(): GSplatComponent {
         const { exterior, interior } = this.contents;
-        return (this.inside ? exterior : interior)?.gsplat;
+        return (this.displayInside ? exterior : interior)?.gsplat;
+    }
+
+    /**
+     * Un passage de seuil attend que le modèle à montrer soit prêt.
+     *
+     * @returns {boolean} true pendant l'attente.
+     */
+    private get swapping(): boolean {
+        return this.displayInside !== this.inside;
     }
 
     /**
@@ -234,20 +317,56 @@ class InteriorSwitch {
         const p = this.global.camera.getPosition();
         const d = volumeSignedDistance(this.contents.volume, p.x, p.y, p.z);
         const inside = this.inside ? d < HYSTERESIS : d < -HYSTERESIS;
-        const prewarm = Math.abs(d) < PREWARM;
+        const prewarm = isPrewarm(d);
 
         if (inside !== this.inside) {
             this.inside = inside;
             this.prewarm = prewarm;
-            this.applyVisibility();
+            this.applyInside();
+            if (inside) {
+                this.swapStart = performance.now();
+                this.readyFrames = 0;
+                this.applyLodRanges();
+            } else {
+                this.displayInside = false;
+                this.applyVisibility();
+            }
         } else if (prewarm !== this.prewarm) {
             this.prewarm = prewarm;
             this.applyLodRanges();
         }
+
+        if (this.swapping) {
+            this.checkSwap();
+        }
+    }
+
+    /**
+     * Montre le modèle intérieur quand il a chargé ses niveaux fins, ou au
+     * bout de SWAP_TIMEOUT_MS.
+     */
+    private checkSwap() {
+        const target = this.hidden;
+        const ready = target && this.revealed ? lodReady(this.global, target) : null;
+        this.readyFrames = ready ? this.readyFrames + 1 : 0;
+        if (ready === null || this.readyFrames >= SWAP_READY_FRAMES ||
+            performance.now() - this.swapStart > SWAP_TIMEOUT_MS) {
+            this.displayInside = this.inside;
+            this.applyVisibility();
+        }
+    }
+
+    /** Collision et état « dans le bâtiment » : aussitôt le seuil passé. */
+    private applyInside() {
+        const { global, contents } = this;
+        if (contents.collision) {
+            contents.collision.current = this.activeCollision;
+        }
+        global.state.insideBuilding = this.inside;
     }
 
     private applyVisibility() {
-        const { global, contents } = this;
+        const { global } = this;
         const { shown, hidden } = this;
 
         if (shown && hidden) {
@@ -257,20 +376,16 @@ class InteriorSwitch {
             hidden.setWorkBufferModifier(HIDE_MODIFIER);
         }
 
-        if (contents.collision) {
-            contents.collision.current = this.activeCollision;
-        }
-
         this.applyLodRanges();
         markPlacementsDirty(global);
-        global.state.insideBuilding = this.inside;
         global.app.renderNextFrame = true;
     }
 
     /**
      * Plages de LOD et budget après l'aperçu : plage complète pour le
      * modèle affiché ; pour le modèle caché, le niveau le plus grossier, sauf
-     * près du seuil. Le budget couvre en plus ce que le modèle caché prend.
+     * près du seuil ou en attente d'être montré. Le budget couvre en plus ce
+     * que le modèle caché prend.
      */
     applyLodRanges() {
         const { shown, hidden } = this;
@@ -283,7 +398,7 @@ class InteriorSwitch {
         const octree = (hidden.resource as any)?.octree;
         const levels = octree?.lodLevels as number | undefined;
         let extra = this.baseBudget;
-        if (this.prewarm || !levels) {
+        if (this.prewarm || this.swapping || !levels) {
             hidden.lodRangeMin = 0;
             hidden.lodRangeMax = 1000;
         } else {

@@ -651,6 +651,12 @@ class Viewer {
             gsplat.lodUpdateAngle = 90;
             gsplat.lodBehindPenalty = 5;
 
+            // ARTLIGHT (TKT-273) : en attendant le niveau voulu, le moteur montre
+            // un niveau jusqu'à deux crans plus grossier déjà chargé, ou le
+            // charge d'abord (plus léger), puis affine. Sans cela, une zone
+            // reste au niveau le plus grossier jusqu'à l'arrivée du plus fin.
+            gsplat.lodUnderfillLimit = 2;
+
             // same performance, but rotating on slow devices does not give us unsorted splats on sides
             gsplat.radialSorting = true;
 
