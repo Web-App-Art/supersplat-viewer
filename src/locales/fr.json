@@ -614,5 +614,6 @@
     "artlight.quality.help-high": "Pleine résolution et plus de détails, même si l'affichage ralentit.",
     "artlight.quality.hint-reduced": "Affichage trop lent : qualité standard activée (menu HD pour la changer)",
     "artlight.quality.status-high": "haute qualité",
-    "artlight.quality.status-standard": "qualité standard"
+    "artlight.quality.status-standard": "qualité standard",
+    "artlight.quality.status-lighter": "qualité réduite pour rester fluide"
 }

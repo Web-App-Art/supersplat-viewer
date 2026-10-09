@@ -40,7 +40,7 @@ type Config = {
     colorize: boolean;                          // render with LOD colorization
     fullload: boolean;                          // load all streaming LOD data before first frame
     aa: boolean;                                // render with antialiasing
-    budget?: number;                            // override splat budget in millions (overrides platform + performanceMode table)
+    budget?: number;                            // override splat budget in millions (overrides platform + quality table)
     renderer: 'webgl' | 'webgpu';               // requested renderer; the actual one (after engine fallback) is exposed as Global.renderer
     heatmap: boolean;                           // render heatmap debug overlay (WebGPU only)
     debug: boolean;                             // auto-open the developer debug panel; can also be toggled with Ctrl+Shift+D
@@ -52,7 +52,7 @@ type State = {
     loaded: boolean;                            // true once first frame is rendered
     performanceMode: boolean;                   // qualité Standard effective (déduite de qualityChoice, TKT-270)
     qualityChoice: QualityChoice;               // ARTLIGHT (TKT-270): Auto, Standard ou Haute
-    qualityAutoReduced: boolean;                // ARTLIGHT (TKT-270): Auto est passé en Standard (saccades)
+    qualityStep: number;                        // ARTLIGHT (TKT-273): palier d'Auto, 0 = Haute ; descend sur saccades, jusqu'à Standard
     progress: number;                           // content loading progress 0-100
     inputMode: InputMode;
     cameraMode: CameraMode;

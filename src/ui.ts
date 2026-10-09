@@ -3,6 +3,7 @@ import { EventHandler } from 'playcanvas';
 import { version as appVersion } from '../package.json';
 import { localize } from './localization';
 import { SPEED_LEVELS } from './move-speed';
+import { AUTO_STANDARD_STEP } from './quality'; // ARTLIGHT (TKT-273)
 import type { Annotation } from './settings';
 import { translator } from './tool-panel';
 import { isToolActive } from './tool-utils';
@@ -410,6 +411,8 @@ const initUI = (global: Global) => {
     qualityButtons.forEach((button) => {
         button.addEventListener('click', () => {
             state.qualityChoice = button.dataset.quality as typeof state.qualityChoice;
+            // TKT-273 : choisir Auto à nouveau le fait repartir du premier palier
+            state.qualityStep = 0;
         });
     });
 
@@ -424,8 +427,14 @@ const initUI = (global: Global) => {
         dom.qualityMenu.classList.toggle('reduced', state.performanceMode);
         let status = trQuality(`status-${effective}`);
         if (state.qualityChoice === 'auto') {
-            // en Auto, Standard vient soit des saccades, soit d'un appareil mobile
-            const reason = state.qualityAutoReduced ? 'slow' : (state.performanceMode ? 'mobile' : null);
+            // en Auto, Standard vient soit des saccades, soit d'un appareil
+            // mobile ; un palier intermédiaire (TKT-273) est signalé sans chiffres
+            let reason: string | null = null;
+            if (state.performanceMode) {
+                reason = state.qualityStep > 0 ? 'slow' : 'mobile';
+            } else if (state.qualityStep > 0) {
+                status = trQuality('status-lighter');
+            }
             status = trQuality('auto-status', { quality: status }) + (reason ? ` (${trQuality(`reason-${reason}`)})` : '');
         } else {
             status = status.charAt(0).toUpperCase() + status.slice(1);
@@ -434,14 +443,15 @@ const initUI = (global: Global) => {
         dom.qualityHelp.textContent = trQuality(`help-${state.qualityChoice}`);
     };
     events.on('qualityChoice:changed', updateQuality);
-    events.on('qualityAutoReduced:changed', updateQuality);
+    events.on('qualityStep:changed', updateQuality);
     events.on('performanceMode:changed', updateQuality);
     updateQuality();
 
-    // Auto passe en Standard : un bandeau le signale quelques secondes.
+    // Auto passe en Standard : un bandeau le signale quelques secondes. Les
+    // paliers intermédiaires restent discrets (ligne d'état seulement).
     let qualityHintTimeout: ReturnType<typeof setTimeout> | null = null;
-    events.on('qualityAutoReduced:changed', (reduced: boolean) => {
-        if (!reduced) return;
+    events.on('qualityStep:changed', (step: number) => {
+        if (step !== AUTO_STANDARD_STEP) return;
         dom.qualityHint.textContent = trQuality('hint-reduced');
         dom.qualityHint.classList.remove('hidden');
         clearTimeout(qualityHintTimeout);

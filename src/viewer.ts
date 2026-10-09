@@ -48,6 +48,7 @@ import { Picker } from './picker';
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
+import { qualityBudget } from './quality'; // ARTLIGHT (TKT-273)
 import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Config, ContentMode, Global } from './types';
@@ -605,25 +606,14 @@ class Viewer {
                 gsplat.minPixelSize = 0;
             }
 
-            // quality budget
-            const budgets = {
-                mobile: {
-                    low: 1,
-                    high: 2
-                },
-                desktop: {
-                    low: 2,
-                    high: 4
-                }
-            };
-
             const applyPerfSettings = () => {
+                // ARTLIGHT (TKT-273) : budget de la qualité effective, palier
+                // d'Auto compris (voir quality.ts).
                 const budget = () => {
                     if (config.budget !== undefined && Number.isFinite(config.budget) && config.budget > 0) {
                         return config.budget;
                     }
-                    const quality = platform.mobile ? budgets.mobile : budgets.desktop;
-                    return state.performanceMode ? quality.low : quality.high;
+                    return qualityBudget(state.qualityChoice, state.qualityStep, platform.mobile);
                 };
 
                 gsplat.splatBudget = budget() * 1000000;
@@ -684,7 +674,10 @@ class Viewer {
                     app.autoRender = false;
 
                     // handle quality mode changes
+                    // ARTLIGHT (TKT-273) : un palier d'Auto change le budget sans changer de mode.
                     events.on('performanceMode:changed', applyPerfSettings);
+                    events.on('qualityChoice:changed', applyPerfSettings);
+                    events.on('qualityStep:changed', applyPerfSettings);
                     applyPerfSettings();
 
                     // debug colorize lods

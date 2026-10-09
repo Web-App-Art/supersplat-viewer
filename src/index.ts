@@ -25,7 +25,7 @@ import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { initLocalization } from './localization';
 import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
 import { applyArrivalPose } from './portals';
-import { FrameRateWatch, isReducedQuality, loadQualityChoice, saveQualityChoice } from './quality'; // ARTLIGHT (TKT-270)
+import { FrameRateWatch, isReducedQuality, loadQualityChoice, saveQualityChoice } from './quality'; // ARTLIGHT (TKT-270, TKT-273)
 import { importSettings } from './settings';
 import type { Config, Global } from './types';
 import { initPoster, initUI } from './ui';
@@ -291,9 +291,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     const state = observe(events, {
         loaded: false,
-        performanceMode: isReducedQuality(qualityChoice, false, platform.mobile),
+        performanceMode: isReducedQuality(qualityChoice, 0, platform.mobile),
         qualityChoice,
-        qualityAutoReduced: false,
+        qualityStep: 0,
         progress: 0,
         inputMode: platform.mobile ? 'touch' : 'desktop',
         cameraMode: 'orbit',
@@ -328,23 +328,31 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // ARTLIGHT (TKT-270) : qualité d'affichage. Choisir Auto redonne sa chance
     // à la haute qualité ; en Auto sur ordinateur, des saccades pendant les
-    // déplacements la font passer en Standard pour le reste de la visite.
+    // déplacements font descendre d'un palier (TKT-273), jusqu'à Standard,
+    // pour le reste de la visite.
     const updateQuality = () => {
-        state.performanceMode = isReducedQuality(state.qualityChoice, state.qualityAutoReduced, platform.mobile);
+        state.performanceMode = isReducedQuality(state.qualityChoice, state.qualityStep, platform.mobile);
     };
     events.on('qualityChoice:changed', (choice) => {
         saveQualityChoice(choice);
-        state.qualityAutoReduced = false;
+        state.qualityStep = 0;
         updateQuality();
     });
-    events.on('qualityAutoReduced:changed', updateQuality);
+    events.on('qualityStep:changed', updateQuality);
 
+    // Après chaque changement de palier, la mesure attend que les niveaux de
+    // détail se chargent.
     const frameRateWatch = new FrameRateWatch();
+    events.on('qualityStep:changed', () => frameRateWatch.reset());
+    app.on('prerender', () => frameRateWatch.markRendered());
+    app.systems.gsplat.on('frame:ready', (camera: unknown, layer: unknown, ready: boolean, loading: number) => {
+        frameRateWatch.loading = loading > 0;
+    });
     app.on('framerender', () => {
         if (!state.loaded || state.performanceMode || state.qualityChoice !== 'auto' || app.xr?.active) {
             frameRateWatch.reset();
         } else if (frameRateWatch.feed(performance.now())) {
-            state.qualityAutoReduced = true;
+            state.qualityStep++;
         }
     });
 

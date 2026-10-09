@@ -614,5 +614,6 @@
     "artlight.quality.help-high": "Full resolution and more detail, even if the display slows down.",
     "artlight.quality.hint-reduced": "Display too slow: switched to standard quality (HD menu to change)",
     "artlight.quality.status-high": "high quality",
-    "artlight.quality.status-standard": "standard quality"
+    "artlight.quality.status-standard": "standard quality",
+    "artlight.quality.status-lighter": "reduced quality to stay smooth"
 }
