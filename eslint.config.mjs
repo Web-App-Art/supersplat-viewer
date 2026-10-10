@@ -4,6 +4,13 @@ import tsParser from '@typescript-eslint/parser';
 import globals from 'globals';
 
 export default [
+    // ARTLIGHT (TKT-282) : src/render est copié tel quel de l'amont
+    // (playcanvas/supersplat-viewer v1.37.0, commit cd0e316 ; dernière
+    // modification de ces fichiers : #315, 6a4ab4d). Mis en forme par
+    // prettier là-bas, gardé identique pour reprendre ses corrections.
+    {
+        ignores: ['src/render/**']
+    },
     ...playcanvasConfig,
     {
         files: ['**/*.ts'],

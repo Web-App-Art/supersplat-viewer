@@ -20,6 +20,7 @@ import { MeshCollision, loadVoxelCollision } from './collision';
 import type { Collision } from './collision';
 import { VIEW_PARAM, applyViewParam } from './content-mode'; // ARTLIGHT (TKT-228)
 import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
+import { nearlyEquals } from './core/math';
 import { observe } from './core/observe';
 import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { initLocalization } from './localization';
@@ -373,9 +374,23 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     app.systems.gsplat.on('frame:ready', (camera: unknown, layer: unknown, ready: boolean, loading: number) => {
         frameRateWatch.loading = loading > 0;
     });
+    // ARTLIGHT (TKT-282) : avec le rendu stochastique, les images rendues
+    // caméra immobile (affinage après un arrêt) ne comptent pas.
+    const prevCameraWorld = new Float32Array(16);
+    const prevCameraProj = new Float32Array(16);
+    const cameraStill = () => {
+        const world = camera.getWorldTransform().data;
+        const proj = camera.camera?.projectionMatrix.data;
+        const still = nearlyEquals(world, prevCameraWorld) && (!proj || nearlyEquals(proj, prevCameraProj));
+        prevCameraWorld.set(world);
+        if (proj) prevCameraProj.set(proj);
+        return still;
+    };
     app.on('framerender', () => {
         if (!state.loaded || state.performanceMode || state.qualityChoice !== 'auto' || app.xr?.active) {
             frameRateWatch.reset();
+        } else if (config.stochastic && renderer === 'webgpu' && cameraStill()) {
+            frameRateWatch.still(performance.now());
         } else if (frameRateWatch.feed(performance.now())) {
             state.qualityStep++;
         }

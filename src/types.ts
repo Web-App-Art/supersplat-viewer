@@ -40,6 +40,10 @@ type Config = {
     colorize: boolean;                          // render with LOD colorization
     fullload: boolean;                          // load all streaming LOD data before first frame
     aa: boolean;                                // render with antialiasing
+    // ARTLIGHT (TKT-282) : rendu stochastique de l'amont (1.36), WebGPU seulement, à l'essai.
+    stochastic: boolean;                        // ?stochastic : splats non triés, accumulés d'une image à l'autre
+    splatSource?: 'workbuffer' | 'direct';      // réglage de développement du rendu stochastique (amont)
+    variant?: string;                           // réglages d'essai du rendu stochastique, `clé:valeur,…` (amont)
     budget?: number;                            // override splat budget in millions (overrides platform + quality table)
     renderer: 'webgl' | 'webgpu';               // requested renderer; the actual one (after engine fallback) is exposed as Global.renderer
     heatmap: boolean;                           // render heatmap debug overlay (WebGPU only)

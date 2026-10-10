@@ -178,6 +178,25 @@ class FrameRateWatch {
     }
 
     /**
+     * ARTLIGHT (TKT-282) : image de la caméra immobile avec le rendu
+     * stochastique. Il en rend jusqu'à 258 après chaque arrêt pour affiner
+     * l'image ; elles ne disent rien de la fluidité des déplacements. La série
+     * recommence, comme après une pause du rendu à la demande.
+     *
+     * @param {number} now - Horodatage de l'image, en ms.
+     */
+    still(now: number) {
+        if (!this.settled) {
+            this.feed(now);
+            return;
+        }
+        this.rendered = false;
+        this.durations.length = 0;
+        this.sum = 0;
+        this.last = now;
+    }
+
+    /**
      * Compte une image, rendue ou non : avec le rendu à la demande, la scène
      * immobile garde le rythme de l'écran.
      *

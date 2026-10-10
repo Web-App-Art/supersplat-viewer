@@ -937,4 +937,5 @@ class Picker {
 }
 
 export type { PickSurface, PickCameraSnapshot };
-export { Picker, getWorldPoint, captureCameraSnapshot };
+// ARTLIGHT (TKT-282) : createPickCameraSnapshot sert aussi au rendu stochastique (src/render).
+export { Picker, getWorldPoint, captureCameraSnapshot, createPickCameraSnapshot };

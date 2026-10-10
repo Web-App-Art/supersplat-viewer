@@ -49,6 +49,7 @@ import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
 import { qualityBudget } from './quality'; // ARTLIGHT (TKT-273)
+import { StochasticSplatRenderer } from './render/stochastic-splat-renderer'; // ARTLIGHT (TKT-282)
 import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Config, ContentMode, Global } from './types';
@@ -197,6 +198,12 @@ class Viewer {
 
     debugPanel: DebugPanel | null = null;
 
+    /**
+     * ARTLIGHT (TKT-282) : rendu stochastique de l'amont (?stochastic, WebGPU),
+     * null quand le rendu trié du moteur dessine les splats.
+     */
+    splatRenderer: StochasticSplatRenderer | null = null;
+
     // ARTLIGHT
     measureTool: MeasureTool;
 
@@ -258,9 +265,48 @@ class Viewer {
         // configure the camera
         this.configureCamera(settings);
 
+        // ARTLIGHT (TKT-282) : rendu stochastique de l'amont (src/render, copié
+        // de la 1.37.0 sans modification), à l'essai avec ?stochastic, en
+        // WebGPU seulement. Créé avant la première image pour couper le rendu
+        // du moteur dès que celui-ci le crée ; le moteur garde les LOD, le
+        // streaming et le work buffer (bascule et surbrillances comprises).
+        // Notre picker rend toujours sa propre passe triée : les outils pointent
+        // comme avant. Sans le paramètre, rien n'est créé.
+        if (config.stochastic && renderer === 'webgpu') {
+            const worldLayer = app.scene.layers.getLayerByName('World');
+            // Le plus grand budget possible doit tenir dans une liaison de
+            // stockage : celui de Haute (ou &budget), doublé près des murs
+            // quand la scène a un modèle intérieur (voir interior.ts).
+            const maxBudget = (config.budget !== undefined && Number.isFinite(config.budget) && config.budget > 0 ?
+                config.budget :
+                qualityBudget('high', 0, platform.mobile)) * (interiorLoad ? 2 : 1);
+            const budget = maxBudget * 1000000;
+            if (!StochasticSplatRenderer.cacheFits(graphicsDevice, budget)) {
+                console.warn(`Rendu stochastique : ${maxBudget} M splats dépassent la limite de stockage de ce GPU ; rendu trié.`);
+            } else if (worldLayer) {
+                this.splatRenderer = new StochasticSplatRenderer(app, camera.camera, worldLayer, {
+                    source: config.splatSource,
+                    variant: config.variant
+                });
+                // Un modificateur de work buffer (surbrillance, tranche de la
+                // Coupe, modèle masqué par la bascule) change les splats sans
+                // changer la version du monde : l'image repart de zéro au lieu
+                // de se fondre dans l'ancienne.
+                events.on('splatData:changed', () => this.splatRenderer?.resetHistory());
+            }
+        }
+
         // reconfigure camera when entering/exiting XR
-        app.xr.on('start', () => this.configureCamera(settings));
-        app.xr.on('end', () => this.configureCamera(settings));
+        // ARTLIGHT (TKT-282) : le rendu stochastique n'a pas de rendu stéréo,
+        // le moteur dessine les splats pendant la session.
+        app.xr.on('start', () => {
+            this.configureCamera(settings);
+            this.splatRenderer?.setEnabled(false);
+        });
+        app.xr.on('end', () => {
+            this.configureCamera(settings);
+            this.splatRenderer?.setEnabled(true);
+        });
 
         // construct debug ministats
         if (config.ministats) {
@@ -714,7 +760,12 @@ class Viewer {
                     events.on('qualityStep:changed', applyPerfSettings);
                     applyPerfSettings();
 
-                    gsplat.renderer = rendererTable[renderer];
+                    // ARTLIGHT (TKT-282) : le rendu stochastique lit le work buffer
+                    // tel que le moteur l'a préparé ; changer de mode le
+                    // reconstruirait pour rien (amont).
+                    if (!this.splatRenderer) {
+                        gsplat.renderer = rendererTable[renderer];
+                    }
 
                     // wait for the first valid frame to complete rendering
                     app.once('frameend', () => {

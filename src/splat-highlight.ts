@@ -53,7 +53,10 @@ fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
 // placement principal ; depuis le moteur 2.23, les placements des fichiers
 // LOD la suivent d'eux-mêmes (ARTLIGHT, TKT-280 : en 2.20, il fallait les
 // marquer un par un). Reste à demander une image, le rendu étant à la demande.
+// TKT-282 : le rendu stochastique accumule ses images ; sans l'événement, il
+// fondrait le nouvel aspect dans l'ancien pendant plusieurs secondes.
 const markPlacementsDirty = (global: Global) => {
+    global.events.fire('splatData:changed');
     global.app.renderNextFrame = true;
 };
 

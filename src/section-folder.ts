@@ -62,7 +62,10 @@ const captureView = async (global: Global): Promise<Blob | null> => {
     if (!window.captureFrame) return null;
     const { width, height } = global.app.graphicsDevice.clientRect;
     if (width <= 0 || height <= 0) return null;
-    const frame = await window.captureFrame({ width: THUMB_WIDTH, height: Math.round(THUMB_WIDTH * height / width), supersample: 2 });
+    // TKT-282 : le rendu stochastique n'accumule pas ses images hors écran ;
+    // 16 échantillons par pixel au lieu de 4 effacent l'essentiel du grain.
+    const supersample = global.config.stochastic && global.renderer === 'webgpu' ? 4 : 2;
+    const frame = await window.captureFrame({ width: THUMB_WIDTH, height: Math.round(THUMB_WIDTH * height / width), supersample });
     const binary = atob(frame.data);
     const pixels = new Uint8ClampedArray(binary.length);
     for (let i = 0; i < binary.length; i++) pixels[i] = binary.charCodeAt(i);
