@@ -193,25 +193,47 @@ const createApp = async (canvas: HTMLCanvasElement, config: Config) => {
     return { app, camera, renderer };
 };
 
+// measure the canvas's css size. a hidden canvas (e.g. inside a display:none
+// iframe) measures 0×0 — resizeCanvas skips those, keeping the current backing
+// size until the resize observer reports a real layout
+const measureCanvas = (canvas: HTMLCanvasElement) => ({
+    width: canvas.clientWidth,
+    height: canvas.clientHeight
+});
+
+// size the canvas backbuffer from a css size: scaled by the pixel ratio (capped to
+// limit resolution on high-DPI devices), then by `scale` (quality and motion). a zero
+// css size (hidden canvas) is skipped — the canvas keeps its previous size, as a
+// zero-sized swap chain is invalid in webgpu.
+// ARTLIGHT (TKT-283) : amont #294, avec notre échelle de mouvement et notre
+// plafond mobile (720 au lieu de 1080).
+const resizeCanvas = (
+    canvas: HTMLCanvasElement,
+    cssSize: { width: number; height: number },
+    scale: number
+) => {
+    if (!cssSize.width || !cssSize.height) return;
+
+    // maximum pixel dimension we will allow along the shortest screen dimension based on platform
+    const maxPixelDim = platform.mobile ? 720 : 2160;
+    const pixelRatio = Math.min(maxPixelDim / Math.min(screen.width, screen.height), window.devicePixelRatio);
+
+    const width = Math.ceil(cssSize.width * pixelRatio * scale);
+    const height = Math.ceil(cssSize.height * pixelRatio * scale);
+    if (width !== canvas.width || height !== canvas.height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+};
+
 // initialize canvas size and resizing
 const initCanvas = (global: Global) => {
     const { app, events, state } = global;
     const { canvas } = app.graphicsDevice;
 
-    // maximum pixel dimension we will allow along the shortest screen dimension based on platform
-    const maxPixelDim = platform.mobile ? 720 : 2160;
-
-    // cap pixel ratio to limit resolution on high-DPI devices
-    const calcPixelRatio = () => Math.min(maxPixelDim / Math.min(screen.width, screen.height), window.devicePixelRatio);
-
-    // last known device pixel size (full resolution, before any quality scaling)
-    const deviceSize = { width: 0, height: 0 };
-
-    const set = (width: number, height: number) => {
-        const ratio = calcPixelRatio();
-        deviceSize.width = width * ratio;
-        deviceSize.height = height * ratio;
-    };
+    // the canvas css size, kept current by the resize observer. measured directly at
+    // startup so the first frames are sized before the observer's first delivery.
+    const cssSize = measureCanvas(canvas);
 
     // Adaptive resolution: reduce during camera movement, restore when idle
     const MOVE_SCALE = platform.mobile ? 0.55 : 0.75;
@@ -227,19 +249,15 @@ const initCanvas = (global: Global) => {
         // ARTLIGHT: `* motionScale` = résolution adaptative pendant les
         // déplacements de caméra. `hqMode` est devenu `performanceMode` en
         // amont, avec le sens inversé.
-        const s = (state.performanceMode ? 0.5 : 1.0) * motionScale;
-        const w = Math.ceil(deviceSize.width * s);
-        const h = Math.ceil(deviceSize.height * s);
-        if (w !== canvas.width || h !== canvas.height) {
-            canvas.width = w;
-            canvas.height = h;
-        }
+        resizeCanvas(canvas, cssSize, (state.performanceMode ? 0.5 : 1.0) * motionScale);
     };
 
     const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
         const e = entries[0]?.contentBoxSize?.[0];
-        if (e) {
-            set(e.inlineSize, e.blockSize);
+        // ignore hidden deliveries (0×0), keeping the last real size
+        if (e && e.inlineSize && e.blockSize) {
+            cssSize.width = e.inlineSize;
+            cssSize.height = e.blockSize;
             app.renderNextFrame = true;
         }
     });
@@ -295,19 +313,25 @@ const initCanvas = (global: Global) => {
     // Disable the engine's built-in canvas resize — we handle it via ResizeObserver
     // @ts-ignore
     app._allowResize = false;
-    set(canvas.clientWidth, canvas.clientHeight);
     apply();
 };
 
 const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config) => {
+    // ARTLIGHT (TKT-270) : l'ancien interrupteur « Mode performance » est
+    // remplacé par le choix de qualité Auto / Standard / Haute.
+    const qualityChoice = loadQualityChoice(platform.mobile);
+    const performanceMode = isReducedQuality(qualityChoice, 0, platform.mobile);
+
+    // size the canvas backbuffer before the graphics device is created, so the swap
+    // chain and any backbuffer-sized resources start at the correct resolution instead
+    // of being recreated on the first frame's resize. a hidden embed keeps the default
+    // canvas size here; the resize observer sizes it on reveal
+    resizeCanvas(canvas, measureCanvas(canvas), performanceMode ? 0.5 : 1.0);
+
     const { app, camera, renderer } = await createApp(canvas, config);
 
     // create events
     const events = new EventHandler();
-
-    // ARTLIGHT (TKT-270) : l'ancien interrupteur « Mode performance » est
-    // remplacé par le choix de qualité Auto / Standard / Haute.
-    const qualityChoice = loadQualityChoice(platform.mobile);
 
     const sceneUrl = config.splatsUrl ?? config.contentUrl;
     const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
@@ -332,7 +356,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     const state = observe(events, {
         loaded: false,
-        performanceMode: isReducedQuality(qualityChoice, 0, platform.mobile),
+        performanceMode,
         qualityChoice,
         qualityStep: 0,
         progress: 0,
