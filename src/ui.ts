@@ -265,6 +265,7 @@ const initUI = (global: Global) => {
         'navMenu', 'navBar', 'toolsMenu', 'toolsMenuIcon', 'toolsBar',
         'qualityMenu', 'qualityBadge', 'qualityBar', 'qualityStatus', 'qualityChoices', 'qualityHelp', 'qualityHint',
         'collisionRow', 'collisionCheck',
+        'collisionSetting', 'collisionToggle', 'desktopCollisionHelp',
         'measure',
         'areaMeasure',
         'flatnessMeasure',
@@ -488,19 +489,45 @@ const initUI = (global: Global) => {
     // Raccourcis + et − : en vol la souris est souvent capturée et le panneau
     // fermé, un bandeau confirme le niveau quelques instants.
     let speedHintTimeout: ReturnType<typeof setTimeout> | null = null;
+    const showNavHint = (text: string, duration: number) => {
+        dom.speedHint.textContent = text;
+        dom.speedHint.classList.remove('hidden');
+        clearTimeout(speedHintTimeout);
+        speedHintTimeout = setTimeout(() => dom.speedHint.classList.add('hidden'), duration);
+    };
     events.on('inputEvent', (type: string) => {
         if (type !== 'speedUp' && type !== 'speedDown') return;
         const step = type === 'speedUp' ? 1 : -1;
         state.speedLevel = Math.min(SPEED_LEVELS, Math.max(1, state.speedLevel + step));
-        dom.speedHint.textContent = trSpeed('hint', {
+        showNavHint(trSpeed('hint', {
             name: speedName(state.speedLevel),
             level: state.speedLevel,
             max: SPEED_LEVELS
-        });
-        dom.speedHint.classList.remove('hidden');
-        clearTimeout(speedHintTimeout);
-        speedHintTimeout = setTimeout(() => dom.speedHint.classList.add('hidden'), 1500);
+        }), 1500);
     });
+
+    // ARTLIGHT (TKT-278) : collision du drone, désactivable dans le menu
+    // Navigation (scènes qui ont une collision) ou par la touche C, que le
+    // même bandeau confirme.
+    const trCollision = translator('artlight.collision');
+    const updateCollision = () => {
+        dom.collisionSetting.classList.toggle('hidden', !state.hasCollision);
+        dom.desktopCollisionHelp.classList.toggle('hidden', !state.hasCollision);
+        dom.collisionToggle.setAttribute('aria-checked', String(state.collisionEnabled));
+        dom.collisionToggle.setAttribute('aria-label', trCollision('label'));
+        dom.collisionToggle.title = trCollision(state.collisionEnabled ? 'on' : 'off');
+    };
+    dom.collisionToggle.addEventListener('click', () => {
+        state.collisionEnabled = !state.collisionEnabled;
+    });
+    events.on('inputEvent', (type: string) => {
+        if (type !== 'toggleCollision' || !state.hasCollision) return;
+        state.collisionEnabled = !state.collisionEnabled;
+        showNavHint(trCollision(state.collisionEnabled ? 'on' : 'off'), 2500);
+    });
+    events.on('collisionEnabled:changed', updateCollision);
+    events.on('hasCollision:changed', updateCollision);
+    updateCollision();
 
     // Gaming mode toggle (settings row visible on mobile only)
     dom.gamingControlsRow.addEventListener('click', () => {

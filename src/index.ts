@@ -34,6 +34,27 @@ import type { InteriorLoad } from './viewer';
 import { initXr } from './xr';
 import { version as appVersion } from '../package.json';
 
+// ARTLIGHT (TKT-278) : collision du drone coupée ou rétablie. Le choix vaut
+// pour la session (bascule splats / nuage, portails) ; la visite suivante
+// repart avec la collision.
+const COLLISION_STORAGE_KEY = 'artlight.collision';
+
+const loadCollisionEnabled = () => {
+    try {
+        return sessionStorage.getItem(COLLISION_STORAGE_KEY) !== 'off';
+    } catch {
+        return true;
+    }
+};
+
+const saveCollisionEnabled = (enabled: boolean) => {
+    try {
+        sessionStorage.setItem(COLLISION_STORAGE_KEY, enabled ? 'on' : 'off');
+    } catch {
+        // stockage indisponible : le choix vaut jusqu'au rechargement
+    }
+};
+
 // ARTLIGHT (TKT-272) : URL et contenu en paramètres, pour charger aussi le
 // modèle intérieur d'une scène.
 const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Response>, progressCallback: (progress: number) => void) => {
@@ -308,6 +329,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         walkAllowed: false,
         collisionOverlayEnabled: false,
         // ARTLIGHT
+        collisionEnabled: loadCollisionEnabled(),
         measureMode: false,
         areaMeasureMode: false,
         flatnessMeasureMode: false,
@@ -325,6 +347,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // ARTLIGHT (TKT-241) : le niveau choisi reste celui de la scène pour la
     // session (même clé que le zéro, pour que le nuage de points la partage).
     events.on('speedLevel:changed', (level: number) => saveSpeedLevel(sceneKey, level));
+
+    // ARTLIGHT (TKT-278) : collision coupée ou rétablie pour la session.
+    events.on('collisionEnabled:changed', (enabled: boolean) => saveCollisionEnabled(enabled));
 
     // ARTLIGHT (TKT-270) : qualité d'affichage. Choisir Auto redonne sa chance
     // à la haute qualité ; en Auto sur ordinateur, des saccades pendant les

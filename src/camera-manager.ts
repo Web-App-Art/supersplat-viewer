@@ -38,6 +38,10 @@ const WALK_ENABLED = false;
 // (play / timeline) n'apparaît jamais.
 const CAMERA_ANIMATION_ENABLED = false;
 
+// ARTLIGHT (TKT-278) : écart toléré entre le point visé et l'axe de la vue
+// (tangente, ~1°) pour poser le centre de rotation sans bouger la vue.
+const PIVOT_CENTER_TOLERANCE = 0.02;
+
 const isWalkAllowed = (bbox: BoundingBox, collision: Collision | null): boolean => {
     const { x, z } = bbox.halfExtents;
     return WALK_ENABLED && !!collision && x * 2 >= WALK_MIN_HORIZONTAL_RANGE && z * 2 >= WALK_MIN_HORIZONTAL_RANGE;
@@ -124,7 +128,8 @@ class CameraManager {
 
         controllers.orbit.fov = resetCamera.fov;
         controllers.fly.fov = resetCamera.fov;
-        controllers.fly.collision = collision;
+        // ARTLIGHT (TKT-278) : collision désactivable (menu Navigation, touche C).
+        controllers.fly.collision = state.collisionEnabled ? collision : null;
         controllers.walk.collision = collision;
 
         // ARTLIGHT (TKT-268, lot 4) : sol de la colonne (x, z). La zone libre
@@ -321,6 +326,37 @@ class CameraManager {
             // enter new controller
             const newController = getController(value);
             newController.onEnter(this.camera);
+        });
+
+        // ARTLIGHT (TKT-278) : sans collision, le drone traverse murs et
+        // planchers. Rétablie dans un mur, la caméra en sort en douceur.
+        events.on('collisionEnabled:changed', (enabled: boolean) => {
+            controllers.fly.collision = enabled ? collision : null;
+            if (enabled && state.cameraMode === 'fly') {
+                startTransition();
+                controllers.fly.leaveGeometry();
+            }
+        });
+
+        // ARTLIGHT (TKT-278) : à l'entrée en orbite, le centre de rotation
+        // passe sur la surface visée au centre de l'écran (voir
+        // nav-interaction.ts). La vue ne bouge pas : seul le recul change, et
+        // seulement si le point est encore au centre (ni rotation, ni
+        // cadrage, ni retour au départ entre-temps). Le repère du centre
+        // s'efface avec la transition.
+        events.on('orbitPivot', (position: Vec3, normal: Vec3) => {
+            if (state.cameraMode !== 'orbit') return;
+            target.calcFocusPoint(tmpv);
+            tmpv.sub(target.position).normalize();
+            const offset = tmpCamera.position.sub2(position, target.position);
+            const along = offset.dot(tmpv);
+            if (along <= 0 || offset.lengthSq() - along * along > (along * PIVOT_CENTER_TOLERANCE) ** 2) return;
+            tmpCamera.copy(target);
+            tmpCamera.distance = along;
+            controllers.orbit.goto(tmpCamera);
+            events.fire('orbitTarget:set', position, normal);
+            if (transitionTimer === 1) startTransition();
+            clearOrbitTargetOnTransitionEnd = true;
         });
 
         // handle user scrubbing the animation timeline

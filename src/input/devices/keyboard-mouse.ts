@@ -114,7 +114,7 @@ class KeyboardMouseDevice implements InputDevice {
         const { isFly, isWalk, isFirstPerson, gamingControls, dt, distance, cameraComponent, mode, touchCount, speedFactor } = ctx;
         const pan = this._buttons[2] || +(button[2] === -1) || +(touchCount > 1);
 
-        // auto-move cancellation and requestFirstPerson events (driven by keyboard axes)
+        // auto-move cancellation (driven by keyboard axes)
         if (isWalk && (this._axis.x !== 0 || this._axis.z !== 0)) {
             events.fire('navigateCancel');
         }
@@ -127,9 +127,9 @@ class KeyboardMouseDevice implements InputDevice {
         if (isFly && (gamingControls || pan) && (mouse[0] !== 0 || mouse[1] !== 0)) {
             events.fire('navigateCancel');
         }
-        if (!isFirstPerson && this._axis.length() > 0) {
-            events.fire('inputEvent', 'requestFirstPerson');
-        }
+        // ARTLIGHT (TKT-278) : plus de passage en drone quand une touche de
+        // déplacement (flèches comprises) est enfoncée en orbite : en orbite,
+        // les touches de déplacement sont sans effet.
 
         const orbitFactor = isFirstPerson ? cameraComponent.fov / 120 : 1;
 

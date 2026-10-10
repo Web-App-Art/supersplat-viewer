@@ -80,6 +80,22 @@ class FlyController implements CameraController {
         this._mover.reset(this._position);
     }
 
+    // ARTLIGHT (TKT-278) : collision rétablie alors que la caméra est dans un
+    // mur : elle rejoint la place libre la plus proche, comme à l'entrée en
+    // drone. Vrai si elle a bougé.
+    leaveGeometry(): boolean {
+        const { collision } = this;
+        if (!collision ||
+            !findSphereSpawn(collision, this._position.x, this._position.y, this._position.z, CAMERA_RADIUS, spawnProbe) ||
+            this._position.equals(spawnProbe)) {
+            this._mover.reset(this._position);
+            return false;
+        }
+        this._position.copy(spawnProbe);
+        this._mover.reset(this._position);
+        return true;
+    }
+
     resetToSpawn(camera: Camera): boolean {
         if (!this._spawn.has) {
             return false;

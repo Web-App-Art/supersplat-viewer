@@ -360,18 +360,20 @@ export const createSwitch = (label: string, value: boolean, onChange: (value: bo
 };
 
 // Bouton réduire / agrandir d'un panneau : réduit, le panneau ne garde que
-// son en-tête et son bandeau.
-export const createCollapseButton = (collapsed: boolean, onToggle: (collapsed: boolean) => void): HTMLButtonElement => {
+// son en-tête et son bandeau. La flèche montre le sens du repli : vers le
+// haut pour un panneau accroché en haut, vers le bas (`docked`) pour le
+// panneau du bas de l'écran (TKT-278).
+export const createCollapseButton = (collapsed: boolean, onToggle: (collapsed: boolean) => void, docked = false): HTMLButtonElement => {
     const button = document.createElement('button');
     button.className = 'tool-icon-btn';
     let state = collapsed;
+    const down = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+    const up = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>';
     const update = () => {
         button.title = trTool(state ? 'expand' : 'collapse');
         button.setAttribute('aria-label', button.title);
         button.setAttribute('aria-expanded', String(!state));
-        button.innerHTML = state ?
-            '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>' :
-            '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>';
+        button.innerHTML = state === docked ? up : down;
     };
     update();
     button.addEventListener('click', () => {

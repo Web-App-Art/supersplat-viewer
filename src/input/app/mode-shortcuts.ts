@@ -12,7 +12,7 @@ const isWasdKey = (event: KeyboardEvent) => (
 
 /**
  * Keyboard shortcuts that switch camera mode and toggle UI affordances.
- * Listens on `window` so the user can press 1/2/3, V, G, H, F, R, +/-, Space,
+ * Listens on `window` so the user can press 1/2/3, V, G, H, F, R, C, +/-, Space,
  * or Escape regardless of which element has focus.
  */
 class ModeShortcuts {
@@ -75,11 +75,16 @@ class ModeShortcuts {
             case '-':
                 events.fire('inputEvent', 'speedDown', event);
                 break;
+            // ARTLIGHT (TKT-278) : collision du drone coupée ou rétablie
+            case 'c':
+                events.fire('inputEvent', 'toggleCollision', event);
+                break;
             default:
-                if (isWasdKey(event) && state.inputMode === 'desktop') {
-                    if (!isCaptureMode(state.cameraMode)) {
-                        state.cameraMode = 'fly';
-                    }
+                // ARTLIGHT (TKT-278) : Z Q S D reprennent la souris en drone,
+                // mais ne font plus quitter l'orbite (l'amont y passait en
+                // drone au premier appui, d'où des bascules inattendues) :
+                // on n'en sort que par le menu Navigation ou la touche 2.
+                if (isWasdKey(event) && state.inputMode === 'desktop' && isCaptureMode(state.cameraMode)) {
                     if (!state.gamingControls) {
                         state.gamingControls = true;
                     }

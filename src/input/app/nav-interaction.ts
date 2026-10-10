@@ -11,6 +11,8 @@ const tmpV = new Vec3();
 // ARTLIGHT: pas de navigation au clic / tap (se déplacer vers le point en
 // drone, recentrer l'orbite, double-clic qui change de mode) : un clic sur un
 // mur ne doit pas déplacer la caméra. Les outils de mesure gardent le clic.
+// TKT-278 : seul reste le double-clic (double tape) en orbite, qui choisit
+// le centre de rotation.
 const CLICK_NAVIGATION_ENABLED = false;
 
 // ARTLIGHT: modes des outils maison qui neutralisent la navigation au clic
@@ -112,10 +114,50 @@ class NavInteraction {
         }
     };
 
-    private _onCameraModeChanged = () => {
+    private _onCameraModeChanged = (value: string, prev: string) => {
         this._targetPickRequest++;
         this._updateCursor();
+        // ARTLIGHT (TKT-278) : du drone à l'orbite, on tourne autour de ce
+        // qu'on regardait (surface au centre de l'écran) plutôt qu'autour
+        // d'un point à distance fixe, souvent dans un mur ou dans le vide.
+        if (value === 'orbit' && (prev === 'fly' || prev === 'walk') && this._canvas) {
+            this._pivotAtCenter();
+        }
     };
+
+    // ARTLIGHT (TKT-278) : centre de rotation de l'orbite. La surface affichée
+    // d'abord (le point qu'on voit), la collision à défaut (fond vide).
+    private async _pickPivot(offsetX: number, offsetY: number): Promise<PickTarget | null> {
+        const canvas = this._canvas;
+        if (!canvas) return null;
+        const result = await this._picker.pickSurface(
+            offsetX / canvas.clientWidth,
+            offsetY / canvas.clientHeight
+        );
+        return result ?? this._pickCollision(offsetX, offsetY);
+    }
+
+    private async _pivotAtCenter() {
+        const canvas = this._canvas;
+        if (!canvas) return;
+        const request = ++this._targetPickRequest;
+        const target = await this._pickPivot(canvas.clientWidth / 2, canvas.clientHeight / 2);
+        if (target && request === this._targetPickRequest && this._global?.state.cameraMode === 'orbit') {
+            this._global.events.fire('orbitPivot', target.position, target.normal);
+        }
+    }
+
+    // ARTLIGHT (TKT-278) : double-clic en orbite. La caméra reste en place et
+    // se tourne vers le point, qui devient le centre de rotation.
+    private async _pivotAtPoint(offsetX: number, offsetY: number) {
+        const request = ++this._targetPickRequest;
+        const target = await this._pickPivot(offsetX, offsetY);
+        const global = this._global;
+        if (target && request === this._targetPickRequest && global?.state.cameraMode === 'orbit' && !this._toolActive) {
+            global.events.fire('orbitTarget:set', target.position, target.normal);
+            global.events.fire('pick', target.position);
+        }
+    }
 
     // ARTLIGHT: ouverture d'un outil → on coupe un déplacement automatique en
     // cours et on invalide le pick asynchrone en vol ; fermeture → le curseur
@@ -281,6 +323,12 @@ class NavInteraction {
         if (!global || !canvas) return;
         if (eventName !== 'dblclick') return;
         if (!(event instanceof MouseEvent)) return;
+        if (!CLICK_NAVIGATION_ENABLED) {
+            if (global.state.cameraMode === 'orbit' && !this._toolActive) {
+                this._pivotAtPoint(event.offsetX, event.offsetY);
+            }
+            return;
+        }
         if (this._clickNavOff) return;
         const { events, state } = global;
         // dblclick swaps the active mode and uses the picked target:

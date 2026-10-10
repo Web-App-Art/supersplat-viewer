@@ -66,6 +66,7 @@ type State = {
     hasCollisionOverlay: boolean;
     walkAllowed: boolean;
     collisionOverlayEnabled: boolean;
+    collisionEnabled: boolean;                  // ARTLIGHT (TKT-278): faux = le drone traverse murs et planchers
     // ARTLIGHT: modes des outils de mesure (hasVoxelOverlay/voxelOverlayEnabled
     // ont été renommés hasCollisionOverlay/collisionOverlayEnabled en amont).
     measureMode: boolean;

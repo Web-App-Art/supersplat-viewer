@@ -2489,7 +2489,7 @@ class SectionTool {
 
         // Profil agrandi : le panneau prend presque toute la hauteur.
         const large = document.createElement('button');
-        large.className = 'tool-icon-btn';
+        large.className = 'tool-icon-btn section-enlarge';
         large.title = tr(this.large ? 'shrink' : 'enlarge');
         large.setAttribute('aria-label', large.title);
         large.setAttribute('aria-pressed', String(this.large));
@@ -2507,7 +2507,7 @@ class SectionTool {
             storeText(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
             this.panel?.classList.toggle('collapsed', collapsed);
             this.dockClasses();
-        });
+        }, true);
 
         actions.append(this.keepBox, reset, large, collapse);
         header.append(title, this.summary, actions);

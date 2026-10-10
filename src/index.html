@@ -281,6 +281,11 @@
                                 <button class="tool-seg-btn" data-level="4">4</button>
                                 <button class="tool-seg-btn" data-level="5">5</button>
                             </div>
+                            <!-- ARTLIGHT (TKT-278) : collision du drone, désactivable -->
+                            <div id="collisionSetting" class="speedLabel hidden">
+                                <span data-i18n="artlight.collision.label">Collisions</span>
+                                <button id="collisionToggle" class="navSwitch" role="switch" aria-checked="true"></button>
+                            </div>
                         </div>
                         <div class="subBarDivider"></div>
                         <div class="subBarGroup">
@@ -432,12 +437,9 @@
                                 <span class="control-action" data-i18n="help.action.zoom">Zoom</span>
                                 <span class="control-key" data-i18n="help.key.mouse-wheel">Mouse Wheel</span>
                             </div>
+                            <!-- ARTLIGHT (TKT-278) : plus de clic qui recentre ni de vol vers le point -->
                             <div class="control-item">
-                                <span class="control-action" data-i18n="help.action.set-focus">Set Focus</span>
-                                <span class="control-key" data-i18n="help.key.left-click">Left Click</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action" data-i18n="help.action.fly-to-point">Fly to Point</span>
+                                <span class="control-action" data-i18n="artlight.help.orbit-center">Rotation centre</span>
                                 <span class="control-key" data-i18n="help.key.double-click">Double-click</span>
                             </div>
                             <div class="control-item">
@@ -558,6 +560,10 @@
                                 <span class="control-action" data-i18n="help.action.toggle-gaming">Toggle Gaming Controls</span>
                                 <span class="control-key">G</span>
                             </div>
+                            <div id="desktopCollisionHelp" class="control-item hidden">
+                                <span class="control-action" data-i18n="artlight.collision.label">Collisions</span>
+                                <span class="control-key">C</span>
+                            </div>
                             <div id="desktopShowCollisionHelp" class="control-item hidden">
                                 <span class="control-action" data-i18n="help.action.show-collision">Show Collision</span>
                                 <span class="control-key">V</span>
@@ -591,11 +597,7 @@
                                 <span class="control-key" data-i18n="help.key.pinch">Pinch</span>
                             </div>
                             <div class="control-item">
-                                <span class="control-action" data-i18n="help.action.set-focus">Set Focus</span>
-                                <span class="control-key" data-i18n="help.key.tap">Tap</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action" data-i18n="help.action.fly-to-point">Fly to Point</span>
+                                <span class="control-action" data-i18n="artlight.help.orbit-center">Rotation centre</span>
                                 <span class="control-key" data-i18n="help.key.double-tap">Double-tap</span>
                             </div>
                             <div class="control-spacer"></div>
