@@ -5,10 +5,19 @@ import type { CameraFrame, Camera, CameraController } from './camera';
 import { DEFAULT_CONTROLLER_DAMPING, applyFrameRotation, dampAngles, setBasisOffset, setCameraBasis } from './camera-utils';
 import { SpawnState } from './spawn-state';
 import { SphereMover } from './sphere-mover';
-import { SEARCH_RADIUS, findSphereSpawn } from '../collision/find-spawn';
+import { findSphereSpawn } from '../collision/find-spawn';
 
 /** Radius of the camera collision sphere (meters) */
 const CAMERA_RADIUS = 0.2;
+
+/**
+ * ARTLIGHT (TKT-283) : portée de `leaveGeometry`, en mètres : assez pour
+ * sortir d'un mur ou d'un plancher. Plus loin, la collision attend que la
+ * caméra sorte d'elle-même. À 5 m, sortir de 2,4 m sous le terrain de
+ * Saint-Germain prenait 1,8 s (Chrome piloté) ; à 2 m, avec le tri
+ * préalable de findSphereSpawn, 100 ms au plus.
+ */
+const LEAVE_GEOMETRY_REACH = 2;
 
 const forward = new Vec3();
 const right = new Vec3();
@@ -142,7 +151,7 @@ class FlyController implements CameraController {
     }
 
     // ARTLIGHT (TKT-278) : collision rétablie alors que la caméra est dans un
-    // mur : elle rejoint la place libre la plus proche (5 m au plus). Plus
+    // mur : elle rejoint la place libre la plus proche (2 m au plus). Plus
     // loin, la collision reste en attente jusqu'à ce que la caméra sorte
     // (TKT-283). Vrai si elle a bougé.
     leaveGeometry(): boolean {
@@ -151,7 +160,7 @@ class FlyController implements CameraController {
             return false;
         }
         const moved = findSphereSpawn(collision, this._position.x, this._position.y, this._position.z,
-            CAMERA_RADIUS, spawnProbe, SEARCH_RADIUS) && !this._position.equals(spawnProbe);
+            CAMERA_RADIUS, spawnProbe, LEAVE_GEOMETRY_REACH) && !this._position.equals(spawnProbe);
         if (moved) {
             this._position.copy(spawnProbe);
         }

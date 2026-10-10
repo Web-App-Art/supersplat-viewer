@@ -72,6 +72,13 @@ const findSphereSpawn = (
     const reachSq = reach * reach;
     const maxCells = Math.ceil(reach / step);
 
+    // ARTLIGHT (TKT-283) : tri préalable. Une sphère d'un demi-voxel au même
+    // centre ne lit que quelques voxels ; si elle touche déjà la géométrie,
+    // la sphère complète aussi. Dans une zone pleine (sous le terrain, pièce
+    // non relevée), la recherche ne paie plus que ce test : avec des voxels
+    // de 5 cm, une sonde complète de 0,2 m en lit environ 500.
+    const coarseRadius = Math.min(radius, step * 0.5);
+
     let bestDistSq = Infinity;
     let found = false;
 
@@ -100,6 +107,7 @@ const findSphereSpawn = (
                     const cy = oy + dy * step;
                     const cz = oz + dz * step;
 
+                    if (coarseRadius < radius && collision.querySphere(cx, cy, cz, coarseRadius, scratchPush)) continue;
                     if (collision.querySphere(cx, cy, cz, radius, scratchPush)) continue;
 
                     bestDistSq = distSq;
@@ -239,4 +247,4 @@ const findCylinderSpawn = (
     return found;
 };
 
-export { SEARCH_RADIUS, findCylinderSpawn, findSphereSpawn };
+export { findCylinderSpawn, findSphereSpawn };
