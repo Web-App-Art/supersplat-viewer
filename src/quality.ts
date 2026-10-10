@@ -1,19 +1,24 @@
 // ARTLIGHT (TKT-270)
 //
-// Qualité d'affichage en trois choix, dans le menu Qualité de la barre
-// principale : Auto, Standard ou Haute. Standard est l'ancien « mode
-// performance » : canevas à demi-résolution, budget de splats réduit.
+// Qualité d'affichage en quatre choix, dans le menu Qualité de la barre
+// principale : Auto, Standard, Moyenne ou Haute. Standard est l'ancien « mode
+// performance » : canevas à demi-résolution, budget de splats réduit. Moyenne
+// (TKT-273, lot 1b) garde la pleine résolution avec un budget intermédiaire :
+// pour une connexion lente ou un ordinateur qui saccade en Haute.
 //
 // Auto démarre en Haute sur ordinateur et en Standard sur mobile. Sur
 // ordinateur, si l'affichage saccade pendant les déplacements, il allège le
 // budget de splats par paliers, puis passe en Standard (TKT-273). Il ne
 // remonte jamais pendant la visite : remonter seul ferait osciller la
 // qualité. Le choix de l'utilisateur est mémorisé d'une visite à l'autre ; un
-// choix explicite (Standard ou Haute) n'est jamais modifié.
+// choix explicite (Standard, Moyenne ou Haute) n'est jamais modifié.
 
-type QualityChoice = 'auto' | 'standard' | 'high';
+type QualityChoice = 'auto' | 'standard' | 'medium' | 'high';
 
-const QUALITY_CHOICES: QualityChoice[] = ['auto', 'standard', 'high'];
+// Qualité effective, affichée par le badge SD, MD ou HD.
+type Quality = 'standard' | 'medium' | 'high';
+
+const QUALITY_CHOICES: QualityChoice[] = ['auto', 'standard', 'medium', 'high'];
 
 const STORAGE_KEY = 'artlight.quality';
 
@@ -25,10 +30,14 @@ const LEGACY_KEYS = ['performanceMode', 'retinaDisplay'];
 // Budgets de splats, en millions. TKT-273 : 4 M en Haute affichait les pièces
 // aux niveaux de détail 2 à 4 ; à 20 M, le salon de Saint-Germain est au
 // niveau 0, comme à 40 M (16 M laissait plus flou le jardin vu par les
-// fenêtres, pour 2 ms de moins par image).
+// fenêtres, pour 2 ms de moins par image). À 8 M, Moyenne charge 370 Mo pour
+// entrer dans le salon, contre 660 Mo en Haute : murs et parquet restent
+// identiques, seul le jardin vu par les portes est plus flou. Sur mobile, où
+// Haute ne vaut que 2 M, Moyenne n'est pas proposée : un choix mémorisé y
+// vaut Haute.
 const BUDGETS = {
-    mobile: { standard: 1, high: 2 },
-    desktop: { standard: 2, high: 20 }
+    mobile: { standard: 1, medium: 2, high: 2 },
+    desktop: { standard: 2, medium: 8, high: 20 }
 };
 
 // Paliers d'Auto sur ordinateur, du budget de Haute au plus léger. Après le
@@ -66,12 +75,15 @@ const parseQualityChoice = (value: unknown): QualityChoice | null => {
 /**
  * Choix mémorisé, Auto par défaut. Oublie l'ancien mode performance.
  *
+ * @param {boolean} mobile - Appareil mobile : Moyenne n'y est pas proposée et
+ * se lit Haute.
  * @returns {QualityChoice} Le choix de départ.
  */
-const loadQualityChoice = (): QualityChoice => {
+const loadQualityChoice = (mobile: boolean): QualityChoice => {
     try {
         LEGACY_KEYS.forEach(key => localStorage.removeItem(key));
-        return parseQualityChoice(localStorage.getItem(STORAGE_KEY)) ?? 'auto';
+        const choice = parseQualityChoice(localStorage.getItem(STORAGE_KEY)) ?? 'auto';
+        return choice === 'medium' && mobile ? 'high' : choice;
     } catch {
         return 'auto';
     }
@@ -90,16 +102,31 @@ const saveQualityChoice = (choice: QualityChoice) => {
 };
 
 /**
- * Qualité réduite (Standard) effective.
+ * Qualité effective. En Auto, les paliers intermédiaires valent Moyenne.
  *
  * @param {QualityChoice} choice - Choix de l'utilisateur.
  * @param {number} step - Palier d'Auto (0 = Haute, AUTO_STANDARD_STEP = Standard).
  * @param {boolean} mobile - Appareil mobile.
+ * @returns {Quality} Standard, Moyenne ou Haute.
+ */
+const effectiveQuality = (choice: QualityChoice, step: number, mobile: boolean): Quality => {
+    if (choice === 'auto') {
+        if (mobile || step >= AUTO_STANDARD_STEP) return 'standard';
+        return step > 0 ? 'medium' : 'high';
+    }
+    return choice === 'medium' && mobile ? 'high' : choice;
+};
+
+/**
+ * Qualité réduite (Standard) effective.
+ *
+ * @param {QualityChoice} choice - Choix de l'utilisateur.
+ * @param {number} step - Palier d'Auto.
+ * @param {boolean} mobile - Appareil mobile.
  * @returns {boolean} true pour la qualité Standard.
  */
 const isReducedQuality = (choice: QualityChoice, step: number, mobile: boolean): boolean => {
-    if (choice === 'auto') return mobile || step >= AUTO_STANDARD_STEP;
-    return choice === 'standard';
+    return effectiveQuality(choice, step, mobile) === 'standard';
 };
 
 /**
@@ -111,9 +138,9 @@ const isReducedQuality = (choice: QualityChoice, step: number, mobile: boolean):
  * @returns {number} Budget en millions de splats.
  */
 const qualityBudget = (choice: QualityChoice, step: number, mobile: boolean): number => {
-    const budgets = mobile ? BUDGETS.mobile : BUDGETS.desktop;
-    if (isReducedQuality(choice, step, mobile)) return budgets.standard;
-    return choice === 'auto' ? AUTO_BUDGETS[step] : budgets.high;
+    const quality = effectiveQuality(choice, step, mobile);
+    if (choice === 'auto' && quality !== 'standard') return AUTO_BUDGETS[step];
+    return (mobile ? BUDGETS.mobile : BUDGETS.desktop)[quality];
 };
 
 /**
@@ -189,6 +216,7 @@ class FrameRateWatch {
 
 export {
     AUTO_STANDARD_STEP,
+    effectiveQuality,
     FrameRateWatch,
     isReducedQuality,
     loadQualityChoice,
@@ -197,4 +225,4 @@ export {
     saveQualityChoice
 };
 
-export type { QualityChoice };
+export type { Quality, QualityChoice };

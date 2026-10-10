@@ -603,17 +603,20 @@
     "artlight.quality.label": "Qualité d'affichage",
     "artlight.quality.auto": "Auto",
     "artlight.quality.standard": "Standard",
+    "artlight.quality.medium": "Moyenne",
     "artlight.quality.high": "Haute",
     "artlight.quality.badge-high": "HD",
+    "artlight.quality.badge-medium": "MD",
     "artlight.quality.badge-standard": "SD",
     "artlight.quality.auto-status": "Auto : {quality}",
     "artlight.quality.reason-slow": "affichage trop lent",
     "artlight.quality.reason-mobile": "mobile",
     "artlight.quality.help-auto": "La meilleure qualité que votre appareil affiche sans saccades.",
     "artlight.quality.help-standard": "Image plus légère, plus fluide sur un appareil modeste.",
+    "artlight.quality.help-medium": "Pleine résolution, moins de détails que Haute : plus rapide à charger.",
     "artlight.quality.help-high": "Pleine résolution et plus de détails, même si l'affichage ralentit.",
     "artlight.quality.hint-reduced": "Affichage trop lent : qualité standard activée (menu HD pour la changer)",
     "artlight.quality.status-high": "haute qualité",
-    "artlight.quality.status-standard": "qualité standard",
-    "artlight.quality.status-lighter": "qualité réduite pour rester fluide"
+    "artlight.quality.status-medium": "qualité moyenne",
+    "artlight.quality.status-standard": "qualité standard"
 }

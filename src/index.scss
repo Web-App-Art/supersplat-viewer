@@ -305,7 +305,7 @@ button {
                     }
                 }
 
-                // ARTLIGHT (TKT-270) : HD ou SD, en petites capitales encadrées
+                // ARTLIGHT (TKT-270) : HD, MD ou SD, en petites capitales encadrées
                 > .qualityBadge {
                     display: block;
                     min-width: 22px;
@@ -491,7 +491,8 @@ button {
         }
 
         // ARTLIGHT (TKT-270) : menu Qualité. Même gabarit que la vitesse :
-        // libellé et état au-dessus, Auto / Standard / Haute, une ligne d'aide.
+        // libellé et état au-dessus, Auto / Standard / Moyenne / Haute, une ligne
+        // d'aide.
         #qualitySetting {
             width: 250px;
             padding: 2px 8px;

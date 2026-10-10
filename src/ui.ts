@@ -1,9 +1,9 @@
-import { EventHandler } from 'playcanvas';
+import { EventHandler, platform } from 'playcanvas';
 
 import { version as appVersion } from '../package.json';
 import { localize } from './localization';
 import { SPEED_LEVELS } from './move-speed';
-import { AUTO_STANDARD_STEP } from './quality'; // ARTLIGHT (TKT-273)
+import { AUTO_STANDARD_STEP, effectiveQuality } from './quality'; // ARTLIGHT (TKT-273)
 import type { Annotation } from './settings';
 import { translator } from './tool-panel';
 import { isToolActive } from './tool-utils';
@@ -403,12 +403,16 @@ const initUI = (global: Global) => {
     //     dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
     // });
 
-    // ARTLIGHT (TKT-270) : qualité d'affichage Auto / Standard / Haute. Le
-    // bouton affiche HD ou SD selon la qualité effective ; en Auto, la ligne
-    // d'état dit ce qu'Auto a retenu et pourquoi.
+    // ARTLIGHT (TKT-270) : qualité d'affichage Auto / Standard / Moyenne /
+    // Haute. Le bouton affiche SD, MD ou HD selon la qualité effective ; en
+    // Auto, la ligne d'état dit ce qu'Auto a retenu et pourquoi.
     const trQuality = translator('artlight.quality');
     const qualityButtons = Array.from(dom.qualityChoices.querySelectorAll<HTMLButtonElement>('button'));
     qualityButtons.forEach((button) => {
+        // TKT-273 : sur mobile, Moyenne vaudrait Haute (voir quality.ts)
+        if (button.dataset.quality === 'medium' && platform.mobile) {
+            button.classList.add('hidden');
+        }
         button.addEventListener('click', () => {
             state.qualityChoice = button.dataset.quality as typeof state.qualityChoice;
             // TKT-273 : choisir Auto à nouveau le fait repartir du premier palier
@@ -422,18 +426,18 @@ const initUI = (global: Global) => {
             button.classList.toggle('active', active);
             button.setAttribute('aria-pressed', String(active));
         });
-        const effective = state.performanceMode ? 'standard' : 'high';
+        const effective = effectiveQuality(state.qualityChoice, state.qualityStep, platform.mobile);
         dom.qualityBadge.textContent = trQuality(`badge-${effective}`);
-        dom.qualityMenu.classList.toggle('reduced', state.performanceMode);
+        dom.qualityMenu.classList.toggle('reduced', effective === 'standard');
         let status = trQuality(`status-${effective}`);
         if (state.qualityChoice === 'auto') {
             // en Auto, Standard vient soit des saccades, soit d'un appareil
-            // mobile ; un palier intermédiaire (TKT-273) est signalé sans chiffres
+            // mobile ; les paliers intermédiaires (TKT-273) valent Moyenne
             let reason: string | null = null;
-            if (state.performanceMode) {
-                reason = state.qualityStep > 0 ? 'slow' : 'mobile';
-            } else if (state.qualityStep > 0) {
-                status = trQuality('status-lighter');
+            if (state.qualityStep > 0) {
+                reason = 'slow';
+            } else if (effective === 'standard') {
+                reason = 'mobile';
             }
             status = trQuality('auto-status', { quality: status }) + (reason ? ` (${trQuality(`reason-${reason}`)})` : '');
         } else {

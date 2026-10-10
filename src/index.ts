@@ -284,7 +284,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // ARTLIGHT (TKT-270) : l'ancien interrupteur « Mode performance » est
     // remplacé par le choix de qualité Auto / Standard / Haute.
-    const qualityChoice = loadQualityChoice();
+    const qualityChoice = loadQualityChoice(platform.mobile);
 
     const sceneUrl = config.splatsUrl ?? config.contentUrl;
     const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;

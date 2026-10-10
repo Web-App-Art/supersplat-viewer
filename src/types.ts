@@ -51,7 +51,7 @@ type Config = {
 type State = {
     loaded: boolean;                            // true once first frame is rendered
     performanceMode: boolean;                   // qualité Standard effective (déduite de qualityChoice, TKT-270)
-    qualityChoice: QualityChoice;               // ARTLIGHT (TKT-270): Auto, Standard ou Haute
+    qualityChoice: QualityChoice;               // ARTLIGHT (TKT-270): Auto, Standard, Moyenne ou Haute
     qualityStep: number;                        // ARTLIGHT (TKT-273): palier d'Auto, 0 = Haute ; descend sur saccades, jusqu'à Standard
     progress: number;                           // content loading progress 0-100
     inputMode: InputMode;
