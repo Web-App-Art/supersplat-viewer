@@ -1,6 +1,7 @@
 import { EventHandler, platform } from 'playcanvas';
 
 import { version as appVersion } from '../package.json';
+import { DEFAULT_FOV, FOV_MAX, FOV_MIN } from './fov'; // ARTLIGHT (TKT-271)
 import { localize } from './localization';
 import { SPEED_LEVELS } from './move-speed';
 import { AUTO_STANDARD_STEP, effectiveQuality } from './quality'; // ARTLIGHT (TKT-273)
@@ -266,6 +267,7 @@ const initUI = (global: Global) => {
         'qualityMenu', 'qualityBadge', 'qualityBar', 'qualityStatus', 'qualityChoices', 'qualityHelp', 'qualityHint',
         'collisionRow', 'collisionCheck',
         'collisionSetting', 'collisionToggle', 'desktopCollisionHelp',
+        'fovLabel', 'fovValue', 'fovRange', 'fovReset',
         'measure',
         'areaMeasure',
         'flatnessMeasure',
@@ -528,6 +530,33 @@ const initUI = (global: Global) => {
     events.on('collisionEnabled:changed', updateCollision);
     events.on('hasCollision:changed', updateCollision);
     updateCollision();
+
+    // ARTLIGHT (TKT-271) : champ de vision, dans le panneau Paramètres.
+    // Appliqué pendant le glissé ; le bouton revient au défaut de la scène.
+    const trFov = translator('artlight.fov');
+    const fovRange = dom.fovRange as HTMLInputElement;
+    const defaultFov = config.defaultFov ?? DEFAULT_FOV;
+    fovRange.min = String(FOV_MIN);
+    fovRange.max = String(FOV_MAX);
+    dom.fovLabel.title = trFov('help');
+    dom.fovReset.title = trFov('reset', { value: Math.round(defaultFov) });
+    dom.fovReset.setAttribute('aria-label', dom.fovReset.title);
+    const updateFov = () => {
+        const fov = Math.round(state.fov);
+        fovRange.value = String(fov);
+        const fill = (Math.min(FOV_MAX, Math.max(FOV_MIN, fov)) - FOV_MIN) / (FOV_MAX - FOV_MIN);
+        fovRange.style.setProperty('--fill', `${fill * 100}%`);
+        dom.fovValue.textContent = `${fov}°`;
+        (dom.fovReset as HTMLButtonElement).disabled = state.fov === defaultFov;
+    };
+    fovRange.addEventListener('input', () => {
+        state.fov = Number(fovRange.value);
+    });
+    dom.fovReset.addEventListener('click', () => {
+        state.fov = defaultFov;
+    });
+    events.on('fov:changed', updateFov);
+    updateFov();
 
     // Gaming mode toggle (settings row visible on mobile only)
     dom.gamingControlsRow.addEventListener('click', () => {

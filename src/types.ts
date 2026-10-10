@@ -34,6 +34,7 @@ type Config = {
     noanim: boolean;
     nointro: boolean;                           // ARTLIGHT: supprime l'animation d'intro générée quand la scène n'a pas d'animTrack
     speed?: unknown;                            // ARTLIGHT (TKT-241): niveau de vitesse par défaut de la scène (1 à 5), voir move-speed.ts
+    defaultFov?: number;                        // ARTLIGHT (TKT-271): champ de vision par défaut de la scène, posé au démarrage d'après le settings.json, voir fov.ts
     nofx: boolean;                              // disable post effects
     hpr?: boolean;                              // override highPrecisionRendering (undefined = use settings)
     ministats: boolean;
@@ -81,6 +82,7 @@ type State = {
     sectionMode: boolean;                       // ARTLIGHT (TKT-238): outil « Coupe »
     insideBuilding: boolean;                    // ARTLIGHT (TKT-272): caméra dans le volume, modèle intérieur affiché
     speedLevel: number;                         // ARTLIGHT (TKT-241): niveau de vitesse de déplacement, 1 à 5
+    fov: number;                                // ARTLIGHT (TKT-271): champ de vision en degrés, sur la plus grande dimension de l'écran
     isFullscreen: boolean;
     controlsHidden: boolean;
     showAnnotations: boolean;

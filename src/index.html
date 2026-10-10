@@ -412,6 +412,25 @@
                     <div id="collisionOption" data-i18n="tooltip.show-collision">Show Collision</div>
                     <div id="collisionCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>
                 </div>
+                <!-- ARTLIGHT (TKT-271) : champ de vision, option avancée -->
+                <div class="divider fovDivider"></div>
+                <div id="fovSetting">
+                    <div class="fovHeader">
+                        <label id="fovLabel" for="fovRange" data-i18n="artlight.fov.label">Field of view</label>
+                        <span id="fovValue"></span>
+                    </div>
+                    <div class="fovControl">
+                        <input id="fovRange" class="tool-range" type="range" step="1">
+                        <button id="fovReset" type="button">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+                                <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 4.5V9.5H8"/>
+                                    <path d="M4.6 15a8 8 0 1 0 1.9-8.3L3 9.5"/>
+                                </g>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- Info Panel -->

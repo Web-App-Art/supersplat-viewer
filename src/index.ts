@@ -22,6 +22,7 @@ import { VIEW_PARAM, applyViewParam } from './content-mode'; // ARTLIGHT (TKT-22
 import { CoordinateSystem } from './coordinates'; // ARTLIGHT (TKT-226)
 import { nearlyEquals } from './core/math';
 import { observe } from './core/observe';
+import { DEFAULT_FOV, loadFov, parseFov, saveFov } from './fov'; // ARTLIGHT (TKT-271)
 import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { initLocalization } from './localization';
 import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
@@ -311,6 +312,24 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     const sceneUrl = config.splatsUrl ?? config.contentUrl;
     const sceneKey = sceneUrl ? new URL(sceneUrl, location.href).href : undefined;
 
+    // ARTLIGHT: quand on arrive par un portail, sa pose d'arrivée remplace la
+    // caméra initiale de la scène. Appliqué ici, sur les réglages déjà migrés,
+    // pour que le CameraManager la lise sans savoir que les portails existent.
+    const projectContext = (window as any).sse?.project;
+    const settings = importSettings(settingsJson);
+
+    // ARTLIGHT (TKT-271) : le champ de vision par défaut est celui de la
+    // scène, lu avant qu'un portail ou la bascule n'impose le leur.
+    config.defaultFov = parseFov(settings.cameras[0]?.initial?.fov) ?? DEFAULT_FOV;
+
+    if (projectContext) {
+        applyArrivalPose(settings, projectContext, new URL(location.href).searchParams.get('arrive'));
+    }
+
+    // ARTLIGHT (TKT-228): après une bascule splats / nuage, la caméra reprend
+    // la pose transmise dans l'URL (l'intro est coupée dans index.html).
+    applyViewParam(settings, new URL(location.href).searchParams.get(VIEW_PARAM));
+
     const state = observe(events, {
         loaded: false,
         performanceMode: isReducedQuality(qualityChoice, 0, platform.mobile),
@@ -339,6 +358,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         sectionMode: false,
         insideBuilding: false,
         speedLevel: loadSpeedLevel(sceneKey, config.speed),
+        fov: loadFov(sceneKey, parseFov(settings.cameras[0]?.initial?.fov) ?? config.defaultFov),
         isFullscreen: false,
         controlsHidden: false,
         showAnnotations: localStorage.getItem('showAnnotations') !== 'false',
@@ -348,6 +368,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // ARTLIGHT (TKT-241) : le niveau choisi reste celui de la scène pour la
     // session (même clé que le zéro, pour que le nuage de points la partage).
     events.on('speedLevel:changed', (level: number) => saveSpeedLevel(sceneKey, level));
+
+    // ARTLIGHT (TKT-271) : de même pour le champ de vision.
+    events.on('fov:changed', (fov: number) => saveFov(sceneKey, fov, config.defaultFov));
 
     // ARTLIGHT (TKT-278) : collision coupée ou rétablie pour la session.
     events.on('collisionEnabled:changed', (enabled: boolean) => saveCollisionEnabled(enabled));
@@ -395,19 +418,6 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
             state.qualityStep++;
         }
     });
-
-    // ARTLIGHT: quand on arrive par un portail, sa pose d'arrivée remplace la
-    // caméra initiale de la scène. Appliqué ici, sur les réglages déjà migrés,
-    // pour que le CameraManager la lise sans savoir que les portails existent.
-    const projectContext = (window as any).sse?.project;
-    const settings = importSettings(settingsJson);
-    if (projectContext) {
-        applyArrivalPose(settings, projectContext, new URL(location.href).searchParams.get('arrive'));
-    }
-
-    // ARTLIGHT (TKT-228): après une bascule splats / nuage, la caméra reprend
-    // la pose transmise dans l'URL (l'intro est coupée dans index.html).
-    applyViewParam(settings, new URL(location.href).searchParams.get(VIEW_PARAM));
 
     const global: Global = {
         app,

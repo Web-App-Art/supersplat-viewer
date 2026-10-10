@@ -81,12 +81,13 @@ class CameraManager {
 
         const walkAllowed = isWalkAllowed(bbox, collision);
 
+        // ARTLIGHT (TKT-271) : le champ de vision est celui des Paramètres
+        // (state.fov), pour toutes les vues ; celui de la caméra initiale en
+        // est la valeur de départ (voir fov.ts).
         const camera0 = settings.cameras[0]?.initial;
-        const defaultFov = camera0?.fov ?? 75;
-        const frameCamera = createFrameCamera(bbox, defaultFov);
         const resetCamera = camera0 ?
-            createCamera(new Vec3(camera0.position), new Vec3(camera0.target), camera0.fov) :
-            frameCamera;
+            createCamera(new Vec3(camera0.position), new Vec3(camera0.target), state.fov) :
+            createFrameCamera(bbox, state.fov);
 
         const getAnimTrack = (initial: Camera, isObjectExperience: boolean) => {
             const { animTracks } = settings;
@@ -248,7 +249,7 @@ class CameraManager {
                 case 'frame':
                     events.fire('orbitTarget:clear');
                     state.cameraMode = 'orbit';
-                    controllers.orbit.goto(frameCamera);
+                    controllers.orbit.goto(createFrameCamera(bbox, state.fov));
                     startTransition();
                     break;
                 case 'reset':
@@ -338,6 +339,20 @@ class CameraManager {
             }
         });
 
+        // ARTLIGHT (TKT-271) : champ de vision changé dans les Paramètres.
+        // Appliqué tout de suite, même pendant une transition (sans fondu
+        // depuis l'ancien angle : le curseur donne déjà la progression).
+        events.on('fov:changed', (fov: number) => {
+            controllers.orbit.fov = fov;
+            controllers.fly.fov = fov;
+            controllers.walk.fov = fov;
+            resetCamera.fov = fov;
+            this.camera.fov = fov;
+            target.fov = fov;
+            from.fov = fov;
+            global.app.renderNextFrame = true;
+        });
+
         // ARTLIGHT (TKT-278) : à l'entrée en orbite, le centre de rotation
         // passe sur la surface visée au centre de l'écran (voir
         // nav-interaction.ts). La vue ne bouge pas : seul le recul change, et
@@ -391,7 +406,7 @@ class CameraManager {
             const { initial } = annotation.camera;
 
             // construct camera
-            tmpCamera.fov = initial.fov;
+            tmpCamera.fov = state.fov; // ARTLIGHT (TKT-271) : pas initial.fov
             tmpCamera.look(
                 new Vec3(initial.position),
                 new Vec3(initial.target)
