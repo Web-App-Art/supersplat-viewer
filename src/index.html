@@ -15,6 +15,16 @@
 
             const url = new URL(location.href);
 
+            // ARTLIGHT (TKT-283) : amont #306. Le moteur télécharge lui-même
+            // lod-meta.json et ignore une réponse préchargée : la précharger
+            // ici le ferait télécharger deux fois. Les autres formats
+            // consomment la réponse et gardent cette avance. `prefetchContent`
+            // de src/index.ts applique la même règle au modèle intérieur.
+            const prefetch = (contentUrl) => {
+                const name = new URL(contentUrl, location.href).pathname.split('/').pop() ?? '';
+                return name.toLowerCase() === 'lod-meta.json' ? null : fetch(contentUrl);
+            };
+
             const posterUrl = url.searchParams.get('poster');
             const skyboxUrl = url.searchParams.get('skybox');
             const collisionUrl = url.searchParams.get('collision') ?? url.searchParams.get('voxel');
@@ -42,7 +52,7 @@
                 skyboxUrl,
                 collisionUrl,
                 contentUrl,
-                contents: projectParam ? null : fetch(contentUrl),
+                contents: projectParam ? null : prefetch(contentUrl),
                 splatsUrl,
                 pointcloudUrl,
                 contentMode: wantsPointcloud && pointcloudUrl ? 'pointcloud' : 'splats',
@@ -99,7 +109,7 @@
                 // Scène nuage seul : pas de `content`, le nuage est le contenu.
                 sseConfig.contentMode = sseConfig.pointcloudUrl && (wantsPointcloud || !sseConfig.splatsUrl) ? 'pointcloud' : 'splats';
                 sseConfig.contentUrl = sseConfig.contentMode === 'pointcloud' ? sseConfig.pointcloudUrl : sseConfig.splatsUrl;
-                sseConfig.contents = fetch(sseConfig.contentUrl);
+                sseConfig.contents = prefetch(sseConfig.contentUrl);
                 sseConfig.collisionUrl = rel(scene.collision) || collisionUrl;
                 // ARTLIGHT (TKT-272): modèle intérieur, chargé en plus de `content`.
                 if (scene.interior) {

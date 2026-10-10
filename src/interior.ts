@@ -284,6 +284,19 @@ class InteriorSwitch {
         this.applyVisibility();
     }
 
+    /**
+     * TKT-283 : reçoit les collisions, qui arrivent après le premier
+     * affichage (amont #306).
+     *
+     * @param {SwitchableCollision | null} collision - Collision aiguillée, null s'il en manque une.
+     * @param {Collision | null} exteriorCollision - Collision du modèle extérieur.
+     * @param {Collision | null} interiorCollision - Collision du modèle intérieur.
+     */
+    setCollisions(collision: SwitchableCollision | null, exteriorCollision: Collision | null, interiorCollision: Collision | null) {
+        Object.assign(this.contents, { collision, exteriorCollision, interiorCollision });
+        this.applyInside();
+    }
+
     private get shown(): GSplatComponent {
         const { exterior, interior } = this.contents;
         return (this.displayInside ? interior : exterior)?.gsplat;

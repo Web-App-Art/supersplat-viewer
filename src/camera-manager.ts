@@ -31,6 +31,9 @@ const WALK_MIN_HORIZONTAL_RANGE = 5;
 // ARTLIGHT: navigation limitée au mode drone (par défaut) et à l'orbite.
 // Le mode marche n'est plus proposé (bouton, touche 3) ; la collision reste
 // utilisée par le mode drone.
+// TKT-283 : la collision arrive après le premier affichage. Rétablir la
+// marche demanderait de reprendre aussi la partie WalkController de l'amont
+// #306 (sol tenu tant que la collision manque).
 const WALK_ENABLED = false;
 
 // ARTLIGHT: pas d'animation de caméra (piste du settings.json ni intro
@@ -73,13 +76,19 @@ class CameraManager {
     // visible instantly.
     snap: () => void;
 
+    // Attach (or clear) collision after construction. The viewer reveals the scene without
+    // waiting for collision data, which can be larger than the splats themselves, so this
+    // arrives late. It re-tests whether walk mode is allowed.
+    // ARTLIGHT (TKT-283) : amont #306.
+    setCollision: (collision: Collision | null) => void;
+
     // holds the camera state
     camera = new Camera();
 
     constructor(global: Global, bbox: BoundingBox, collision: Collision | null = null) {
         const { config, events, settings, state } = global;
 
-        const walkAllowed = isWalkAllowed(bbox, collision);
+        let walkAllowed = isWalkAllowed(bbox, collision);
 
         // ARTLIGHT (TKT-271) : le champ de vision est celui des Paramètres
         // (state.fov), pour toutes les vues ; celui de la caméra initiale en
@@ -328,6 +337,13 @@ class CameraManager {
             const newController = getController(value);
             newController.onEnter(this.camera);
         });
+
+        this.setCollision = (value: Collision | null) => {
+            collision = value;
+            controllers.fly.collision = state.collisionEnabled ? value : null;
+            controllers.walk.collision = value;
+            walkAllowed = isWalkAllowed(bbox, value);
+        };
 
         // ARTLIGHT (TKT-278) : sans collision, le drone traverse murs et
         // planchers. Rétablie dans un mur, la caméra en sort en douceur.

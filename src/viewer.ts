@@ -512,10 +512,59 @@ class Viewer {
             interiorLoad?.gsplat?.then(clampToCoarsest);
         }
 
+        // ARTLIGHT (TKT-283) : amont #306. Loading progress has to start reporting as soon as
+        // the splat data starts streaming, which is well before the reveal. The reveal below
+        // also waits on the skybox, so chaining off `gsplatLoad` alone lets the bar track the
+        // one load it can measure, from the moment that load begins. The reveal stops it and
+        // puts the bar at 100.
+        let stopProgress: (() => void) | undefined;
+        gsplatLoad.then(() => {
+            const eventHandler = app.systems.gsplat;
+
+            // `loading` counts the node files the streamer has requested and not yet made
+            // resident. Before the reveal the LOD range is clamped to the coarsest level, so this
+            // is a single wave and completed / (completed + in-flight) tracks it directly. A drop
+            // in the count is work that finished, or was cancelled, which this cannot tell apart
+            // and counts as done. Clamped monotone and capped below 100 so only the reveal fills
+            // the bar.
+            let prevLoading = 0;
+            let completed = 0;
+            const progressHandler = (camera: CameraComponent, layer: Layer, ready: boolean, loading: number) => {
+                completed += Math.max(0, prevLoading - loading);
+                prevLoading = loading;
+
+                const total = completed + loading;
+                if (total > 0) {
+                    state.progress = Math.max(state.progress, Math.min(99, Math.trunc(completed / total * 100)));
+                }
+            };
+
+            eventHandler.on('frame:ready', progressHandler);
+            stopProgress = () => eventHandler.off('frame:ready', progressHandler);
+        }, () => {});
+
+        // ARTLIGHT (TKT-283) : amont #306. Collision data is not needed to draw the scene, and
+        // it can be larger than the splats themselves (Saint-Germain : 16 Mo pour la collision
+        // extérieure, 3 Mo pour l'intérieure, contre 12 Mo pour les deux fichiers du niveau le
+        // plus grossier). So it is kept out of the reveal path below, which would otherwise sit on
+        // a blank poster with everything needed to render already in memory. `attachCollision`
+        // wires it up whenever it lands; the two chains can resolve in either order, so
+        // whichever is second performs the attach. Les deux collisions de la bascule arrivent
+        // ensemble.
+        //
+        // Until it attaches, `hasCollision` stays false (pas d'interrupteur ni de touche C),
+        // fly mode has no collision response, and nav targeting falls back to splat depth.
+        let collisionReady: [Collision | null, Collision | null] | null = null;
+        let attachCollision: ((exterior: Collision | null, interior: Collision | null) => void) | undefined;
+
+        Promise.all([collisionLoad, interiorLoad?.collision]).then(([exterior, interior]) => {
+            collisionReady = [exterior ?? null, interior ?? null];
+            attachCollision?.(...collisionReady);
+        });
+
         // wait for the model to load
-        Promise.all([gsplatLoad, skyboxLoad, collisionLoad, interiorLoad?.gsplat, interiorLoad?.collision]).then((results) => {
+        Promise.all([gsplatLoad, skyboxLoad, interiorLoad?.gsplat]).then((results) => {
             const gsplatComponent = results[0].gsplat as GSplatComponent;
-            const exteriorCollision = results[2] ?? null;
 
             // get scene bounding box
             const gsplatBbox = gsplatComponent.customAabb;
@@ -527,32 +576,24 @@ class Viewer {
             // modèles ; la collision suit le modèle affiché.
             // Modèle différé : la bascule commence sans lui (seule la
             // collision suit) et le reçoit après le premier affichage.
-            const interiorEntity = results[3] ?? null;
+            const interiorEntity = results[2] ?? null;
             let interiorComponent = interiorEntity?.gsplat as GSplatComponent | undefined;
-            const interiorCollision = results[4] ?? null;
-            let collision: Collision | null = exteriorCollision;
-            let switchable: SwitchableCollision | null = null;
-            if (interiorLoad && (interiorEntity || interiorCollision || interiorLoad.loadGsplat)) {
+            if (interiorLoad && (interiorEntity || interiorLoad.collision || interiorLoad.loadGsplat)) {
                 const interiorBbox = interiorComponent?.customAabb;
                 if (interiorBbox) {
                     const bound = new BoundingBox();
                     bound.setFromTransformedAabb(interiorBbox, interiorEntity.getWorldTransform());
                     sceneBound.add(bound);
                 }
-                if (exteriorCollision && interiorCollision) {
-                    switchable = new SwitchableCollision(exteriorCollision);
-                    collision = switchable;
-                } else if (interiorCollision) {
-                    console.warn('Collision intérieure ignorée : la scène n\'a pas de collision extérieure.');
-                }
                 // Nuage de points : un seul contenu, seule la collision bascule.
+                // Les collisions arrivent plus tard (attachCollision).
                 this.interiorSwitch = new InteriorSwitch(global, {
                     volume: interiorLoad.volume,
                     exterior: results[0],
                     interior: interiorEntity,
-                    collision: switchable,
-                    exteriorCollision,
-                    interiorCollision
+                    collision: null,
+                    exteriorCollision: null,
+                    interiorCollision: null
                 });
                 if (interiorLoad.loadGsplat) {
                     const load = interiorLoad.loadGsplat;
@@ -581,50 +622,6 @@ class Viewer {
 
             this.picker = new Picker(app, camera);
             this.inputController = new InputController(global, this.picker);
-            this.inputController.collision = collision ?? null;
-
-            // hasCollision = collision data exists (drives fly-mode collision
-            // detection and the voxel/mesh debug overlay availability).
-            // walkAllowed = walk mode is offered to the user; requires both
-            // collision data and a scene large enough to walk around in.
-            state.hasCollision = !!collision;
-            state.walkAllowed = isWalkAllowed(sceneBound, collision ?? null);
-
-            // Create collision debug overlay (voxel uses a compute shader, mesh
-            // uses standard line rendering). The voxel path requires WebGPU.
-            // ARTLIGHT (TKT-272) : avec la bascule, un affichage par collision,
-            // seul celui du modèle affiché est actif.
-            const voxelCollisions = (switchable ? [exteriorCollision, interiorCollision] : [collision])
-            .filter((c): c is VoxelCollision => c instanceof VoxelCollision);
-            if (voxelCollisions.length > 0 && renderer !== 'webgl') {
-                const overlays = new Map(voxelCollisions.map((c) => {
-                    const overlay = new VoxelDebugOverlay(app, c, camera);
-                    overlay.mode = config.heatmap ? 'heatmap' : 'overlay';
-                    return [c as Collision, overlay];
-                }));
-                const activeOverlay = () => overlays.get(switchable ? switchable.current : collision) ?? null;
-                this.voxelOverlays = [...overlays.values()];
-                this.voxelOverlay = activeOverlay();
-                state.hasCollisionOverlay = true;
-
-                const applyOverlay = () => {
-                    this.voxelOverlay = activeOverlay();
-                    overlays.forEach((overlay) => {
-                        overlay.enabled = state.collisionOverlayEnabled && overlay === this.voxelOverlay;
-                    });
-                    app.renderNextFrame = true;
-                };
-                events.on('collisionOverlayEnabled:changed', applyOverlay);
-                events.on('insideBuilding:changed', applyOverlay);
-            } else if (collision instanceof MeshCollision) {
-                this.meshOverlay = new MeshDebugOverlay(app, collision, camera, !!this.cameraFrame);
-                state.hasCollisionOverlay = true;
-
-                events.on('collisionOverlayEnabled:changed', (value: boolean) => {
-                    this.meshOverlay.enabled = value;
-                    app.renderNextFrame = true;
-                });
-            }
 
             // ARTLIGHT: outils de mesure
             // Measure tool
@@ -688,7 +685,7 @@ class Viewer {
                 }
             });
 
-            this.cameraManager = new CameraManager(global, sceneBound, collision);
+            this.cameraManager = new CameraManager(global, sceneBound);
             applyCamera(this.cameraManager.camera);
 
             // ARTLIGHT (TKT-228): bascule Splats / Nuage de points, caméra conservée.
@@ -697,7 +694,86 @@ class Viewer {
             });
 
             if (!config.noui) {
-                this.navCursor = new NavCursor(app, camera, collision ?? null, events, state);
+                this.navCursor = new NavCursor(app, camera, null, events, state);
+            }
+
+            // ARTLIGHT (TKT-283) : amont #306, collision branchée à son arrivée.
+            attachCollision = (exteriorCollision: Collision | null, interiorCollision: Collision | null) => {
+                // ARTLIGHT (TKT-272) : avec la bascule, la collision suit le
+                // modèle affiché. La bascule la reçoit en premier pour que la
+                // collision aiguillée soit la bonne quand le drone la teste.
+                let collision = exteriorCollision;
+                let switchable: SwitchableCollision | null = null;
+                if (this.interiorSwitch) {
+                    if (exteriorCollision && interiorCollision) {
+                        switchable = new SwitchableCollision(exteriorCollision);
+                        collision = switchable;
+                    } else if (interiorCollision) {
+                        console.warn('Collision intérieure ignorée : la scène n\'a pas de collision extérieure.');
+                    }
+                    this.interiorSwitch.setCollisions(switchable, exteriorCollision, interiorCollision);
+                }
+                if (!collision) {
+                    return;
+                }
+
+                this.inputController.collision = collision;
+                this.cameraManager.setCollision(collision);
+                if (this.navCursor) {
+                    this.navCursor.collision = collision;
+                }
+
+                // hasCollision = collision data exists (drives fly-mode collision
+                // detection and the voxel/mesh debug overlay availability).
+                // walkAllowed = walk mode is offered to the user; requires both
+                // collision data and a scene large enough to walk around in.
+                state.hasCollision = true;
+                state.walkAllowed = isWalkAllowed(sceneBound, collision);
+
+                // Create collision debug overlay (voxel uses a compute shader, mesh
+                // uses standard line rendering). The voxel path requires WebGPU.
+                // ARTLIGHT (TKT-272) : avec la bascule, un affichage par collision,
+                // seul celui du modèle affiché est actif.
+                const voxelCollisions = (switchable ? [exteriorCollision, interiorCollision] : [collision])
+                .filter((c): c is VoxelCollision => c instanceof VoxelCollision);
+                if (voxelCollisions.length > 0 && renderer !== 'webgl') {
+                    // Upload the voxel data and allocate the screen-sized texture only
+                    // when the debug overlay is first used (amont #306).
+                    const overlays = new Map<Collision, VoxelDebugOverlay>();
+                    const applyOverlay = () => {
+                        const active = switchable ? switchable.current : collision;
+                        if (state.collisionOverlayEnabled && active instanceof VoxelCollision && !overlays.has(active)) {
+                            const overlay = new VoxelDebugOverlay(app, active, camera);
+                            overlay.mode = config.heatmap ? 'heatmap' : 'overlay';
+                            overlays.set(active, overlay);
+                            this.voxelOverlays.push(overlay);
+                        }
+                        this.voxelOverlay = overlays.get(active) ?? null;
+                        overlays.forEach((overlay) => {
+                            overlay.enabled = state.collisionOverlayEnabled && overlay === this.voxelOverlay;
+                        });
+                        app.renderNextFrame = true;
+                    };
+                    events.on('collisionOverlayEnabled:changed', applyOverlay);
+                    events.on('insideBuilding:changed', applyOverlay);
+                    state.hasCollisionOverlay = true;
+                    applyOverlay();
+                } else if (collision instanceof MeshCollision) {
+                    this.meshOverlay = new MeshDebugOverlay(app, collision, camera, !!this.cameraFrame);
+                    state.hasCollisionOverlay = true;
+
+                    events.on('collisionOverlayEnabled:changed', (value: boolean) => {
+                        this.meshOverlay.enabled = value;
+                        app.renderNextFrame = true;
+                    });
+                }
+
+                app.renderNextFrame = true;
+            };
+
+            // collision may already have landed while the splats were still streaming
+            if (collisionReady) {
+                attachCollision(...collisionReady);
             }
 
             this.debugPanel = new DebugPanel(global, this.cameraManager, this.picker); // ARTLIGHT: picker pour le relevé alt+clic
@@ -743,12 +819,32 @@ class Viewer {
                 app.renderNextFrame = true;
             });
 
-            let current = 0;
-            let watermark = 1;
+            // ARTLIGHT (TKT-283) : amont #306. `ready && loading === 0` describes the state
+            // before streaming starts just as well as the state after it finishes: on the first
+            // frame the octree instance has not run its LOD pass yet, so nothing is in flight and
+            // the world trivially reports ready. Now that the reveal no longer waits for the
+            // collision, this handler can be registered that early; taken at face value that
+            // would reveal the scene before a single frame had rendered and undo the coarse LOD
+            // clamp above by running applyPerfSettings immediately. So require evidence that the
+            // streamer has left that initial state: work in flight, or splats on screen. Only
+            // octree content has a streaming phase to wait for; single-file content is fully
+            // loaded before this handler is registered, so it must not be gated.
+            const octree = (gsplatComponent.resource as GSplatOctreeResourceLike | null)?.octree ?? null;
+            let streamingStarted = !octree;
+
             const readyHandler = (camera: CameraComponent, layer: Layer, ready: boolean, loading: number) => {
-                if (ready && loading === 0) {
+                // `frame.gsplats` is the rendered splat count, the same stat the ministats panel
+                // reads. It covers an octree that renders before it reports work in flight.
+                if (loading > 0 || app.stats.frame.gsplats > 0) {
+                    streamingStarted = true;
+                }
+
+                if (ready && loading === 0 && streamingStarted) {
                     // scene is done with initial/reveal loading
                     eventHandler.off('frame:ready', readyHandler);
+
+                    stopProgress?.();
+                    state.progress = 100;
 
                     // switch to on-demand rendering (frame:request + camera-change detection)
                     app.autoRender = false;
@@ -774,13 +870,6 @@ class Viewer {
                         // emit first frame event on window
                         window.firstFrame?.();
                     });
-                }
-
-                // update loading status
-                if (loading !== current) {
-                    watermark = Math.max(watermark, loading);
-                    current = watermark - loading;
-                    state.progress = Math.trunc(current / watermark * 100);
                 }
             };
 

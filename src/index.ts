@@ -57,11 +57,20 @@ const saveCollisionEnabled = (enabled: boolean) => {
     }
 };
 
+const contentName = (contentUrl: string) => new URL(contentUrl, location.href).pathname.split('/').pop() ?? '';
+
+// ARTLIGHT (TKT-283) : amont #306. Le moteur télécharge lui-même
+// lod-meta.json et ignore `asset.file.contents` : le précharger le ferait
+// télécharger deux fois (la production interdit le cache, la deuxième
+// requête repart sur le réseau). index.html applique la même règle au
+// contenu principal.
+const prefetchContent = (contentUrl: string) => (contentName(contentUrl).toLowerCase() === 'lod-meta.json' ? null : fetch(contentUrl));
+
 // ARTLIGHT (TKT-272) : URL et contenu en paramètres, pour charger aussi le
 // modèle intérieur d'une scène.
-const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Response>, progressCallback: (progress: number) => void) => {
+const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Response> | null, progressCallback: (progress: number) => void) => {
     const c = contents as unknown as ArrayBuffer;
-    const filename = new URL(contentUrl, location.href).pathname.split('/').pop();
+    const filename = contentName(contentUrl);
     const data = filename.toLowerCase() === 'meta.json' ? await (await contents).json() : undefined;
     const asset = new Asset(filename, 'gsplat', { url: contentUrl, filename, contents: c }, data);
 
@@ -495,7 +504,15 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         });
 
     // Load collision data (type determined by file extension)
-    const collisionLoad = config.collisionUrl ? loadCollision(app, config.collisionUrl) : undefined;
+    // ARTLIGHT (TKT-283) : la collision ne sert pas au premier affichage, qui
+    // ne l'attend plus (amont #306). Elle n'est demandée qu'après lui : lancée
+    // en même temps, elle prenait la moitié du débit aux fichiers du niveau
+    // grossier (Saint-Germain : 19 Mo de collisions contre 12 Mo de splats).
+    const afterFirstFrame = new Promise<void>((resolve) => {
+        events.once('firstFrame', () => resolve());
+    });
+    const deferredCollision = (url: string) => afterFirstFrame.then(() => loadCollision(app, url));
+    const collisionLoad = config.collisionUrl ? deferredCollision(config.collisionUrl) : undefined;
 
     // ARTLIGHT (TKT-272) : modèle intérieur et sa collision, montrés à la
     // place des précédents quand la caméra entre dans le volume du bâtiment.
@@ -506,7 +523,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     if (config.interiorVolume && (config.interiorUrl || config.interiorCollisionUrl)) {
         const { interiorUrl } = config;
         const loadInterior = (): Promise<Entity | null> => (interiorUrl ?
-            loadGsplat(app, interiorUrl, fetch(interiorUrl), () => {}).catch((err: Error): null => {
+            loadGsplat(app, interiorUrl, prefetchContent(interiorUrl), () => {}).catch((err: Error): null => {
                 console.warn('Modèle intérieur indisponible :', err);
                 return null;
             }) :
@@ -517,7 +534,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
             volume: config.interiorVolume,
             gsplat: startInside ? loadInterior() : null,
             loadGsplat: startInside || !interiorUrl ? null : loadInterior,
-            collision: config.interiorCollisionUrl ? loadCollision(app, config.interiorCollisionUrl) : undefined
+            collision: config.interiorCollisionUrl ? deferredCollision(config.interiorCollisionUrl) : undefined
         };
     }
 

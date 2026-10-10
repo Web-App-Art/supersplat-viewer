@@ -246,7 +246,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let invDir = 1.0 / rd;
     let gridHit = intersectAABB(ro, invDir, gridMin, gridMax);
 
-    if (gridHit.x > gridHit.y) {
+    if (max(gridHit.x, 0.0) > gridHit.y) {
         textureStore(outputTexture, vec2i(px, py), vec4f(0.0));
         return;
     }
@@ -627,7 +627,7 @@ class VoxelDebugOverlay {
 
     update(): void {
         this.quad.visible = false;
-        if (!this.enabled) return;
+        if (!this.enabled || this.collision.nodes.length === 0) return;
 
         const { app, camera, compute, collision } = this;
         const device = app.graphicsDevice;
@@ -709,6 +709,9 @@ class VoxelDebugOverlay {
     destroy(): void {
         this.app.scene.defaultDrawLayer.removeMeshInstances([this.quad], true);
         this.quad.destroy();
+        this.compute.destroy();
+        this.compute.shader.destroy();
+        this.overlayMaterial.destroy();
         this.nodesBuffer?.destroy();
         this.leafDataBuffer?.destroy();
         this.storageTexture?.destroy();
