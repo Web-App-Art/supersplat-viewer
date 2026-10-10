@@ -9,8 +9,12 @@ import {
     BUFFERUSAGE_COPY_DST,
     Compute,
     CULLFACE_NONE,
+    GraphNode,
     Mat4,
+    Mesh,
+    MeshInstance,
     PIXELFORMAT_RGBA8,
+    PRIMITIVE_TRISTRIP,
     SEMANTIC_POSITION,
     Shader,
     SHADERLANGUAGE_WGSL,
@@ -453,6 +457,8 @@ class VoxelDebugOverlay {
 
     private overlayMaterial: ShaderMaterial;
 
+    private quad: MeshInstance;
+
     private nodesBuffer: StorageBuffer;
 
     private leafDataBuffer: StorageBuffer;
@@ -588,6 +594,22 @@ class VoxelDebugOverlay {
             attributes: { vertex_position: SEMANTIC_POSITION }
         };
         this.overlayMaterial.update();
+
+        // Fullscreen quad in the default draw layer, shown on frames update() composites.
+        // The node is outside the hierarchy, so its fixed transform is synced here once.
+        // ARTLIGHT (TKT-280) : repris de l'amont (#326), le moteur 2.23 n'a plus drawTexture.
+        const mesh = new Mesh(device);
+        mesh.setPositions([-0.5, -0.5, 0, 0.5, -0.5, 0, -0.5, 0.5, 0, 0.5, 0.5, 0]);
+        mesh.update(PRIMITIVE_TRISTRIP);
+        const node = new GraphNode('VoxelOverlayComposite');
+        node.setLocalScale(2, -2, 1);
+        node.getWorldTransform();
+        this.quad = new MeshInstance(mesh, this.overlayMaterial, node);
+        this.quad.cull = false;
+        this.quad.castShadow = false;
+        this.quad.pick = false;
+        this.quad.visible = false;
+        app.scene.defaultDrawLayer.addMeshInstances([this.quad], true);
     }
 
     private createStorageTexture(width: number, height: number): Texture {
@@ -604,6 +626,7 @@ class VoxelDebugOverlay {
     }
 
     update(): void {
+        this.quad.visible = false;
         if (!this.enabled) return;
 
         const { app, camera, compute, collision } = this;
@@ -680,10 +703,12 @@ class VoxelDebugOverlay {
         device.computeDispatch([compute], 'VoxelDebugOverlay');
 
         // Composite overlay on top of the scene
-        app.drawTexture(0, 0, 2, 2, null, this.overlayMaterial);
+        this.quad.visible = true;
     }
 
     destroy(): void {
+        this.app.scene.defaultDrawLayer.removeMeshInstances([this.quad], true);
+        this.quad.destroy();
         this.nodesBuffer?.destroy();
         this.leafDataBuffer?.destroy();
         this.storageTexture?.destroy();

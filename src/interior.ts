@@ -105,7 +105,7 @@ const coarsestCount = (octree: any): number => {
 
 /**
  * Le modèle affiche-t-il les niveaux de détail voulus autour de la caméra ?
- * Lit l'état interne du moteur (PlayCanvas 2.20) : plage de LOD prise en
+ * Lit l'état interne du moteur (PlayCanvas 2.20, vérifié en 2.23) : plage de LOD prise en
  * compte, aucun fichier en attente (préchargement des niveaux plus fins
  * compris), aucun nœud en attente de son niveau.
  *

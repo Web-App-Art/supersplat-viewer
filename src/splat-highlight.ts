@@ -49,25 +49,11 @@ fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
 }
 `;
 
-// `setParameter` ne redemande la recopie que du placement principal. En LOD,
-// chaque fichier chargé a son propre placement (qui hérite des paramètres) :
-// on les marque aussi, sinon la surbrillance ne suivrait pas sur les scènes
-// streamées.
+// `setParameter` et `setWorkBufferModifier` redemandent la recopie du
+// placement principal ; depuis le moteur 2.23, les placements des fichiers
+// LOD la suivent d'eux-mêmes (ARTLIGHT, TKT-280 : en 2.20, il fallait les
+// marquer un par un). Reste à demander une image, le rendu étant à la demande.
 const markPlacementsDirty = (global: Global) => {
-    const director = (global.app as any).renderer?.gsplatDirector;
-    if (director) {
-        for (const cameraData of director.camerasMap.values()) {
-            for (const layerData of cameraData.layersMap.values()) {
-                const octreeInstances = layerData.gsplatManager?.world?._octreeInstances;
-                if (!octreeInstances) continue;
-                for (const octreeInstance of octreeInstances.values()) {
-                    for (const placement of octreeInstance.activePlacements) {
-                        placement.renderDirty = true;
-                    }
-                }
-            }
-        }
-    }
     global.app.renderNextFrame = true;
 };
 

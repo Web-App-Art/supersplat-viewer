@@ -187,6 +187,10 @@ class Viewer {
 
     voxelOverlay: VoxelDebugOverlay | null = null;
 
+    // ARTLIGHT (TKT-280) : toutes les surcouches voxel (une par collision).
+    // Chacune garde son quad affiché tant que son update() ne l'a pas masqué.
+    private voxelOverlays: VoxelDebugOverlay[] = [];
+
     meshOverlay: MeshDebugOverlay | null = null;
 
     navCursor: NavCursor | null = null;
@@ -351,7 +355,7 @@ class Viewer {
 
         // Render voxel debug overlay
         app.on('prerender', () => {
-            this.voxelOverlay?.update();
+            this.voxelOverlays.forEach(overlay => overlay.update());
         });
 
         // update state on first frame
@@ -406,6 +410,61 @@ class Viewer {
                 return result;
             };
         });
+
+        const { gsplat } = app.scene;
+
+        // ARTLIGHT (TKT-280) : réglages gsplat de la scène posés avant tout
+        // chargement (amont #284 et #289). Le streaming commence à l'image qui
+        // suit la création du composant : minContribution, alphaClip et
+        // antiAlias sont recopiés avec chaque splat dans le work buffer (les
+        // premiers splats ne les avaient pas), et lodUpdateAngle /
+        // lodBehindPenalty décident des premiers fichiers demandés.
+
+        // ARTLIGHT (TKT-228): le moteur écarte les splats de moins de
+        // 2 px de diamètre (≈ 0,45 px d'écart-type). Un nuage vu de loin
+        // n'est fait que de points plus petits : les blocs d'un niveau
+        // fin disparaissaient d'un coup, laissant un trou noir.
+        if (config.contentMode === 'pointcloud') {
+            gsplat.minPixelSize = 0;
+        }
+
+        // these two allow LOD behind camera to drop, saves lots of splats
+        gsplat.lodUpdateAngle = 90;
+        gsplat.lodBehindPenalty = 5;
+        gsplat.minContribution = 1;
+        gsplat.alphaClip = 1 / 255;
+        gsplat.antiAlias = config.aa;
+
+        // ARTLIGHT (TKT-273) : en attendant le niveau voulu, le moteur montre
+        // un niveau jusqu'à deux crans plus grossier déjà chargé, ou le
+        // charge d'abord (plus léger), puis affine. Sans cela, une zone
+        // reste au niveau le plus grossier jusqu'à l'arrivée du plus fin.
+        gsplat.lodUnderfillLimit = 2;
+
+        // same performance, but rotating on slow devices does not give us unsorted splats on sides
+        gsplat.radialSorting = true;
+
+        // debug colorize lods (baked into the work buffer: set before streaming starts)
+        gsplat.debug = config.colorize ? GSPLAT_DEBUG_LOD : GSPLAT_DEBUG_NONE;
+
+        // ARTLIGHT (TKT-280) : aperçu au niveau le plus grossier dès que le
+        // modèle est créé (amont #288), sans attendre le ciel ni la collision :
+        // le streaming a déjà commencé, et il demandait entre-temps les
+        // niveaux fins. Le gestionnaire tourne en microtâche de l'événement de
+        // chargement, aucune image n'est donc rendue sans ce bridage.
+        // Le modèle intérieur chargé d'emblée (vue de départ dedans) aussi.
+        if (!config.fullload) {
+            const clampToCoarsest = (entity: Entity | null) => {
+                const component = entity?.gsplat as GSplatComponent | undefined;
+                const resource = component?.resource as GSplatOctreeResourceLike | null;
+                const lodLevels = resource?.octree?.lodLevels;
+                if (lodLevels) {
+                    component.lodRangeMax = component.lodRangeMin = lodLevels - 1;
+                }
+            };
+            gsplatLoad.then(clampToCoarsest, () => {});
+            interiorLoad?.gsplat?.then(clampToCoarsest);
+        }
 
         // wait for the model to load
         Promise.all([gsplatLoad, skyboxLoad, collisionLoad, interiorLoad?.gsplat, interiorLoad?.collision]).then((results) => {
@@ -498,6 +557,7 @@ class Viewer {
                     return [c as Collision, overlay];
                 }));
                 const activeOverlay = () => overlays.get(switchable ? switchable.current : collision) ?? null;
+                this.voxelOverlays = [...overlays.values()];
                 this.voxelOverlay = activeOverlay();
                 state.hasCollisionOverlay = true;
 
@@ -596,16 +656,6 @@ class Viewer {
 
             this.debugPanel = new DebugPanel(global, this.cameraManager, this.picker); // ARTLIGHT: picker pour le relevé alt+clic
 
-            const { gsplat } = app.scene;
-
-            // ARTLIGHT (TKT-228): le moteur écarte les splats de moins de
-            // 2 px de diamètre (≈ 0,45 px d'écart-type). Un nuage vu de loin
-            // n'est fait que de points plus petits : les blocs d'un niveau
-            // fin disparaissaient d'un coup, laissant un trou noir.
-            if (config.contentMode === 'pointcloud') {
-                gsplat.minPixelSize = 0;
-            }
-
             const applyPerfSettings = () => {
                 // ARTLIGHT (TKT-273) : budget de la qualité effective, palier
                 // d'Auto compris (voir quality.ts).
@@ -627,38 +677,16 @@ class Viewer {
                     gsplatComponent.lodRangeMax = 1000;
                 }
                 gsplat.colorUpdateAngle = state.performanceMode ? 4 : 2;
-                gsplat.minContribution = 1;
-                gsplat.alphaClip = 1 / 255;
-                gsplat.antiAlias = config.aa;
+
+                // request a frame so the param changes are processed even when on-demand
+                // rendering is active and the camera is idle (amont #284)
+                app.renderNextFrame = true;
             };
 
             if (config.fullload) {
                 // reveal once full quality has finished loading (used for screenshots)
                 applyPerfSettings();
-            } else {
-                // reveal once low lod has loaded for fastest possible reveal
-                // ARTLIGHT (TKT-272) : le modèle intérieur aussi.
-                for (const component of [gsplatComponent, interiorComponent]) {
-                    const resource = component?.resource as GSplatOctreeResourceLike | null;
-                    const lodLevels = resource?.octree?.lodLevels;
-                    if (lodLevels) {
-                        component.lodRangeMax = component.lodRangeMin = lodLevels - 1;
-                    }
-                }
             }
-
-            // these two allow LOD behind camera to drop, saves lots of splats
-            gsplat.lodUpdateAngle = 90;
-            gsplat.lodBehindPenalty = 5;
-
-            // ARTLIGHT (TKT-273) : en attendant le niveau voulu, le moteur montre
-            // un niveau jusqu'à deux crans plus grossier déjà chargé, ou le
-            // charge d'abord (plus léger), puis affine. Sans cela, une zone
-            // reste au niveau le plus grossier jusqu'à l'arrivée du plus fin.
-            gsplat.lodUnderfillLimit = 2;
-
-            // same performance, but rotating on slow devices does not give us unsorted splats on sides
-            gsplat.radialSorting = true;
 
             const eventHandler = app.systems.gsplat;
 
@@ -686,8 +714,6 @@ class Viewer {
                     events.on('qualityStep:changed', applyPerfSettings);
                     applyPerfSettings();
 
-                    // debug colorize lods
-                    gsplat.debug = config.colorize ? GSPLAT_DEBUG_LOD : GSPLAT_DEBUG_NONE;
                     gsplat.renderer = rendererTable[renderer];
 
                     // wait for the first valid frame to complete rendering

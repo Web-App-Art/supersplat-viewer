@@ -491,6 +491,11 @@ export function getSplatCenters(global: Global): SplatCenters | null {
 const FINEST_MAX_FILES = 16;
 const FINEST_TIMEOUT = 60000;
 const FINEST_POLL = 50;
+// ARTLIGHT (TKT-280) : depuis le moteur 2.23, la file de chargement est servie
+// par priorité (de 0 à 3 pour le streaming) et non plus dans l'ordre d'arrivée.
+// Sans priorité, les fichiers demandés par l'outil passeraient après tout le
+// streaming en cours.
+const FINEST_PRIORITY = 10;
 
 // Boîte orientée (repère monde) : axes unitaires orthogonaux, demi-dimensions
 // selon chaque axe.
@@ -650,7 +655,10 @@ export async function loadFinestCenters(global: Global, box: BoundingBox, coarse
     try {
         const start = performance.now();
         for (;;) {
-            files.forEach(fi => octree.ensureFileResource(fi));
+            files.forEach((fi) => {
+                octree.ensureFileResource(fi);
+                if (!octree.getFileResource(fi)) octree.assetLoader?.load?.(octree.files[fi].url, FINEST_PRIORITY);
+            });
             if (files.every(fi => octree.getFileResource(fi)?.centers?.length > 0)) break;
             if (cancelled()) return { status: 'cancelled' };
             const failed = files.some(fi => octree.assetLoader?.hasFailed?.(octree.files[fi]?.url));
