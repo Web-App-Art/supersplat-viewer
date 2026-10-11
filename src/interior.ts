@@ -26,8 +26,13 @@
 // contient l'intérieur du relevé complet : l'image reste correcte pendant
 // l'attente. En sortant, pas d'attente : vu du dehors, le modèle intérieur
 // montre aux fenêtres ce que les visites ont relevé à travers les vitres.
+//
+// TKT-284 : la position est celle de la caméra dans le repère des modèles.
+// En VR, c'est la tête du visiteur (déplacement réel et téléportation). En
+// AR, la saisie à deux mains déplace et réduit les modèles : la maquette posée
+// sur une table montre l'extérieur tant que la tête n'y entre pas.
 
-import type { Entity, GSplatComponent } from 'playcanvas';
+import { Mat4, Vec3, type Entity, type GSplatComponent } from 'playcanvas';
 
 import type { Collision, SwitchableCollision } from './collision';
 import type { VolumePrism } from './project';
@@ -81,6 +86,9 @@ fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
 `;
 
 const HIDE_MODIFIER = { glsl: HIDE_GLSL, wgsl: HIDE_WGSL };
+
+const invModelMat = new Mat4();
+const modelPosition = new Vec3();
 
 /**
  * Nombre de splats du niveau le plus grossier d'un modèle LOD (ce que le
@@ -254,7 +262,7 @@ class InteriorSwitch {
         this.global = global;
         this.contents = contents;
 
-        const p = global.camera.getPosition();
+        const p = this.cameraPosition();
         const d = volumeSignedDistance(contents.volume, p.x, p.y, p.z);
         this.inside = d < 0;
         this.displayInside = this.inside;
@@ -326,8 +334,24 @@ class InteriorSwitch {
         return this.inside ? contents.interiorCollision ?? contents.exteriorCollision : contents.exteriorCollision;
     }
 
-    private update() {
+    /**
+     * Position de la caméra dans le repère des modèles (TKT-284) : la racine
+     * commune des modèles n'est déplacée qu'en AR, par la saisie à deux mains.
+     *
+     * @returns {Vec3} La position, à ne pas conserver.
+     */
+    private cameraPosition(): Vec3 {
         const p = this.global.camera.getPosition();
+        const root = this.contents.exterior.parent;
+        if (!root) {
+            return p;
+        }
+        invModelMat.copy(root.getWorldTransform()).invert();
+        return invModelMat.transformPoint(p, modelPosition);
+    }
+
+    private update() {
+        const p = this.cameraPosition();
         const d = volumeSignedDistance(this.contents.volume, p.x, p.y, p.z);
         const inside = this.inside ? d < HYSTERESIS : d < -HYSTERESIS;
         const prewarm = isPrewarm(d);

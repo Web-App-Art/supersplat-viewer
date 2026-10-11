@@ -68,7 +68,8 @@ const prefetchContent = (contentUrl: string) => (contentName(contentUrl).toLower
 
 // ARTLIGHT (TKT-272) : URL et contenu en paramètres, pour charger aussi le
 // modèle intérieur d'une scène.
-const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Response> | null, progressCallback: (progress: number) => void) => {
+// TKT-284 : sous la racine de la scène, que la saisie à deux mains déplace en AR.
+const loadGsplat = async (app: AppBase, parent: Entity, contentUrl: string, contents: Promise<Response> | null, progressCallback: (progress: number) => void) => {
     const c = contents as unknown as ArrayBuffer;
     const filename = contentName(contentUrl);
     const data = filename.toLowerCase() === 'meta.json' ? await (await contents).json() : undefined;
@@ -82,7 +83,7 @@ const loadGsplat = async (app: AppBase, contentUrl: string, contents: Promise<Re
                 unified: true,
                 asset
             });
-            app.root.addChild(entity);
+            parent.addChild(entity);
             resolve(entity);
         });
 
@@ -189,6 +190,12 @@ const createApp = async (canvas: HTMLCanvasElement, config: Config) => {
     const camera = new Entity('camera');
     cameraRoot.addChild(camera);
 
+    // ARTLIGHT (TKT-284) : racine commune des modèles (extérieur et intérieur
+    // de la bascule). En AR, la saisie à deux mains la déplace, la tourne et
+    // la réduit ; hors session AR, elle reste à l'origine.
+    const sceneRoot = new Entity('scene');
+    app.root.addChild(sceneRoot);
+
     const light = new Entity('light');
     light.setEulerAngles(35, 45, 0);
     light.addComponent('light', {
@@ -199,7 +206,7 @@ const createApp = async (canvas: HTMLCanvasElement, config: Config) => {
 
     app.scene.ambientLight.set(0.51, 0.55, 0.65);
 
-    return { app, camera, renderer };
+    return { app, camera, sceneRoot, renderer };
 };
 
 // measure the canvas's css size. a hidden canvas (e.g. inside a display:none
@@ -337,7 +344,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // canvas size here; the resize observer sizes it on reveal
     resizeCanvas(canvas, measureCanvas(canvas), performanceMode ? 0.5 : 1.0);
 
-    const { app, camera, renderer } = await createApp(canvas, config);
+    const { app, camera, sceneRoot, renderer } = await createApp(canvas, config);
 
     // create events
     const events = new EventHandler();
@@ -377,6 +384,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         animationPaused: true,
         hasAR: false,
         hasVR: false,
+        xrMode: null,
         hasCollision: false,
         hasCollisionOverlay: false,
         walkAllowed: false,
@@ -479,7 +487,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // Initialize XR support (any backend; when the current device can't host a
     // session the UI can offer a reload into WebGL instead)
-    initXr(global);
+    initXr(global, sceneRoot);
 
     // Initialize user interface
     initLocalization(config.lang);
@@ -488,6 +496,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // Load model
     const gsplatLoad = loadGsplat(
         app,
+        sceneRoot,
         config.contentUrl,
         config.contents,
         (progress: number) => {
@@ -523,7 +532,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     if (config.interiorVolume && (config.interiorUrl || config.interiorCollisionUrl)) {
         const { interiorUrl } = config;
         const loadInterior = (): Promise<Entity | null> => (interiorUrl ?
-            loadGsplat(app, interiorUrl, prefetchContent(interiorUrl), () => {}).catch((err: Error): null => {
+            loadGsplat(app, sceneRoot, interiorUrl, prefetchContent(interiorUrl), () => {}).catch((err: Error): null => {
                 console.warn('Modèle intérieur indisponible :', err);
                 return null;
             }) :

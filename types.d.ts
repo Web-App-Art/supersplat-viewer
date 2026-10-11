@@ -38,9 +38,29 @@ declare module 'playcanvas/scripts/esm/xr/xr-controllers.mjs' {
     export { XrControllers };
 }
 
+// ARTLIGHT (TKT-284) : réglages lus ou posés par src/xr.ts.
 declare module 'playcanvas/scripts/esm/xr/xr-navigation.mjs' {
-    const XrNavigation: any;
+    class XrNavigation extends pc.Script {
+        enableTeleport: boolean;
+        enableMove: boolean;
+        enableSnapVertical: boolean;
+        groundHeight: number;
+        maxTeleportDistance: number;
+        castRay: ((start: pc.Vec3, end: pc.Vec3) => pc.Vec3 | null) | null;
+        _currentGroundY: number;
+    }
     export { XrNavigation };
+}
+
+declare module 'playcanvas/scripts/esm/xr/xr-manipulation.mjs' {
+    class XrManipulation extends pc.Script {
+        target: pc.Entity | null;
+        scalePivot: 'feet' | 'hands';
+        minScale: number;
+        maxScale: number;
+        reset(): void;
+    }
+    export { XrManipulation };
 }
 
 declare module '*.html' {

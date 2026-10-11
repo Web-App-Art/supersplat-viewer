@@ -40,6 +40,14 @@ const BUDGETS = {
     desktop: { standard: 2, medium: 8, high: 20 }
 };
 
+// TKT-284 : budget d'une session XR sur casque autonome (Quest, Pico), quelle
+// que soit la qualité choisie. Le GPU mobile du casque dessine chaque splat
+// une fois par œil, mais son navigateur se déclare « ordinateur » et
+// prendrait les 20 M de Haute. L'amont a retenu 1 M (#322 : 31 images/s sur
+// Quest 3, contre 10 à 4 M) ; à remesurer sur Saint-Germain face à 2 M
+// (paramètre &budget=2, qui l'emporte).
+const XR_HEADSET_BUDGET = 1;
+
 // Paliers d'Auto sur ordinateur, du budget de Haute au plus léger. Après le
 // dernier, Auto passe en Standard.
 const AUTO_BUDGETS = [BUDGETS.desktop.high, 10, 6];
@@ -241,7 +249,8 @@ export {
     loadQualityChoice,
     QUALITY_CHOICES,
     qualityBudget,
-    saveQualityChoice
+    saveQualityChoice,
+    XR_HEADSET_BUDGET
 };
 
 export type { Quality, QualityChoice };

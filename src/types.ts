@@ -11,6 +11,9 @@ type InputMode = 'desktop' | 'touch';
 
 type ContentMode = 'splats' | 'pointcloud';
 
+// ARTLIGHT (TKT-284) : amont #320, session XR en cours.
+type XrMode = 'ar' | 'vr' | null;
+
 // configuration options are immutable at runtime
 type Config = {
     poster?: HTMLImageElement;
@@ -67,6 +70,7 @@ type State = {
     animationPaused: boolean;
     hasAR: boolean;
     hasVR: boolean;
+    xrMode: XrMode;                             // ARTLIGHT (TKT-284): session XR en cours, null hors session (amont #320)
     hasCollision: boolean;
     hasCollisionOverlay: boolean;
     walkAllowed: boolean;
@@ -100,4 +104,4 @@ type Global = {
     coords: CoordinateSystem;                   // ARTLIGHT (TKT-226): repère affiché, zéro utilisateur partagé par les outils
 };
 
-export { CameraMode, ContentMode, InputMode, Config, State, Global };
+export { CameraMode, ContentMode, InputMode, Config, State, Global, XrMode };

@@ -24,6 +24,7 @@ import {
     GSPLAT_RENDERER_RASTER_CPU_SORT,
     GSPLAT_RENDERER_RASTER_GPU_SORT,
     GSplatComponent,
+    LAYERID_SKYBOX,
     platform
 } from 'playcanvas';
 
@@ -48,13 +49,14 @@ import { Picker } from './picker';
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
-import { qualityBudget } from './quality'; // ARTLIGHT (TKT-273)
+import { qualityBudget, XR_HEADSET_BUDGET } from './quality'; // ARTLIGHT (TKT-273, TKT-284)
 import { StochasticSplatRenderer } from './render/stochastic-splat-renderer'; // ARTLIGHT (TKT-282)
 import { SectionTool } from './section-tool'; // ARTLIGHT (TKT-238)
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Config, ContentMode, Global } from './types';
 import { VolumeTool } from './volume-tool'; // ARTLIGHT
 import { VoxelDebugOverlay } from './voxel-debug-overlay';
+import { standaloneHeadset } from './xr'; // ARTLIGHT (TKT-284)
 import { ZeroUI } from './zero-ui'; // ARTLIGHT (TKT-226)
 
 // String.replace wrapper that warns when the source substring is missing, so
@@ -83,6 +85,14 @@ const rendererTable: Record<Config['renderer'], number> = {
     'webgl': GSPLAT_RENDERER_RASTER_CPU_SORT,
     'webgpu': GSPLAT_RENDERER_RASTER_GPU_SORT
 };
+
+// ARTLIGHT (TKT-284) : amont #324.
+// how much further away parts of the scene behind the camera count when choosing their detail,
+// which saves a lot of splats while orbiting, and the turn after which detail is chosen again.
+// XR sessions choose detail by distance alone, with no penalty and no turn-triggered choices: a
+// head turning less than 90 degrees brought the coarse detail chosen for behind it into view
+const lodBehindPenalty = 5;
+const lodUpdateAngle = 90;
 
 type GSplatOctreeResourceLike = {
     octree?: {
@@ -299,13 +309,11 @@ class Viewer {
         // reconfigure camera when entering/exiting XR
         // ARTLIGHT (TKT-282) : le rendu stochastique n'a pas de rendu stéréo,
         // le moteur dessine les splats pendant la session.
-        app.xr.on('start', () => {
+        // ARTLIGHT (TKT-284) : amont #320. Follows xrMode rather than app.xr.active, which still
+        // reports the session while its 'end' handlers run.
+        events.on('xrMode:changed', () => {
             this.configureCamera(settings);
-            this.splatRenderer?.setEnabled(false);
-        });
-        app.xr.on('end', () => {
-            this.configureCamera(settings);
-            this.splatRenderer?.setEnabled(true);
+            this.splatRenderer?.setEnabled(state.xrMode === null);
         });
 
         // construct debug ministats
@@ -475,8 +483,8 @@ class Viewer {
         }
 
         // these two allow LOD behind camera to drop, saves lots of splats
-        gsplat.lodUpdateAngle = 90;
-        gsplat.lodBehindPenalty = 5;
+        gsplat.lodUpdateAngle = lodUpdateAngle;
+        gsplat.lodBehindPenalty = lodBehindPenalty;
         gsplat.minContribution = 1;
         gsplat.alphaClip = 1 / 255;
         gsplat.antiAlias = config.aa;
@@ -722,6 +730,8 @@ class Viewer {
                 if (this.navCursor) {
                     this.navCursor.collision = collision;
                 }
+                // ARTLIGHT (TKT-284) : sol de la XR (départ et téléportation).
+                events.fire('collision:attached', collision);
 
                 // hasCollision = collision data exists (drives fly-mode collision
                 // detection and the voxel/mesh debug overlay availability).
@@ -781,9 +791,14 @@ class Viewer {
             const applyPerfSettings = () => {
                 // ARTLIGHT (TKT-273) : budget de la qualité effective, palier
                 // d'Auto compris (voir quality.ts).
+                // TKT-284 : amont #322, budget réduit en XR sur casque autonome.
+                // Le doublement près des murs (bascule) part de ce budget.
                 const budget = () => {
                     if (config.budget !== undefined && Number.isFinite(config.budget) && config.budget > 0) {
                         return config.budget;
+                    }
+                    if (standaloneHeadset && state.xrMode !== null) {
+                        return XR_HEADSET_BUDGET;
                     }
                     return qualityBudget(state.qualityChoice, state.qualityStep, platform.mobile);
                 };
@@ -799,6 +814,9 @@ class Viewer {
                     gsplatComponent.lodRangeMax = 1000;
                 }
                 gsplat.colorUpdateAngle = state.performanceMode ? 4 : 2;
+                // ARTLIGHT (TKT-284) : amont #324.
+                gsplat.lodBehindPenalty = state.xrMode === null ? lodBehindPenalty : 1;
+                gsplat.lodUpdateAngle = state.xrMode === null ? lodUpdateAngle : 0;
 
                 // request a frame so the param changes are processed even when on-demand
                 // rendering is active and the camera is idle (amont #284)
@@ -854,6 +872,7 @@ class Viewer {
                     events.on('performanceMode:changed', applyPerfSettings);
                     events.on('qualityChoice:changed', applyPerfSettings);
                     events.on('qualityStep:changed', applyPerfSettings);
+                    events.on('xrMode:changed', applyPerfSettings); // ARTLIGHT (TKT-284)
                     applyPerfSettings();
 
                     // ARTLIGHT (TKT-282) : le rendu stochastique lit le work buffer
@@ -880,7 +899,7 @@ class Viewer {
     // configure camera based on application mode and post process settings
     configureCamera(settings: ExperienceSettings) {
         const { global } = this;
-        const { app, config, camera } = global;
+        const { app, config, camera, state } = global;
         const { postEffectSettings } = settings;
         const { background } = settings;
 
@@ -890,7 +909,9 @@ class Viewer {
         const postFxRequested = !config.nofx &&
             (anyPostEffectEnabled(postEffectSettings) || highPrecisionRendering);
 
-        const enableCameraFrame = !app.xr.active && postFxRequested;
+        // ARTLIGHT (TKT-284) : amont #320. CameraFrame has no XR path, so post effects are off
+        // for the session
+        const enableCameraFrame = state.xrMode === null && postFxRequested;
 
         if (enableCameraFrame) {
             // create instance
@@ -950,11 +971,18 @@ class Viewer {
             // restore original isColorBufferSrgb behavior
             RenderTarget.prototype.isColorBufferSrgb = origIsColorBufferSrgb;
 
-            if (!app.xr.active) {
-                camera.camera.toneMapping = tonemapTable[settings.tonemapping];
-                camera.camera.clearColor = new Color(background.color);
-            }
+            // ARTLIGHT (TKT-284) : amont #320, tone mapping de la scène en XR
+            // aussi.
+            camera.camera.toneMapping = tonemapTable[settings.tonemapping];
+
+            // AR composites the scene over the passthrough view
+            camera.camera.clearColor = state.xrMode === 'ar' ? new Color(0, 0, 0, 0) : new Color(background.color);
         }
+
+        // ARTLIGHT (TKT-284) : amont #321. The sky would cover AR's passthrough view entirely, so
+        // it is hidden for the session
+        const skyLayer = app.scene.layers.getLayerById(LAYERID_SKYBOX);
+        if (skyLayer) skyLayer.enabled = state.xrMode !== 'ar';
 
         // Mesh overlay bakes its vertex colors based on the current gamma
         // path; reapply when CameraFrame is created/destroyed (e.g. on XR
