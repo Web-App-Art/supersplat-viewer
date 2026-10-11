@@ -10,9 +10,11 @@
 //
 // Options :
 //   --size <m>          diamètre apparent d'un point au niveau 0 (défaut 0.015)
-//   --levels <n>        nombre de niveaux de LOD ; chaque niveau garde la moitié
-//                       des points du précédent, en points plus gros. Défaut :
-//                       5, ou plus pour que le dernier tienne en 1 M de points
+//   --levels <n>        nombre de niveaux de LOD. Le niveau 0 garde tous les
+//                       points ; le niveau k ≥ 1 met un point par voxel occupé,
+//                       de diamètre size·√2^k pour un voxel deux fois plus
+//                       petit. Défaut : 5, ou plus pour que le dernier tienne
+//                       en 1 M de points
 //   --offset <x,y,z>    offset retiré aux coordonnées (défaut : celui du LAS)
 //   --lcc <modèle.lcc>  reprend l'offset et l'epsg du .lcc des splats, pour que
 //                       nuage et splats partagent exactement le même repère
@@ -20,6 +22,16 @@
 //   --settings <json>   écrit epsg/offset/heightRef dans le bloc « coordinates »
 //   --height-ref <ellipsoid|ngf>  nature de H (défaut ellipsoid)
 //   --keep-noise        garde les classes 7 et 18 (bruit), retirées par défaut
+//
+// TKT-286 : un point d'un niveau grossier est la moyenne des points de son
+// voxel (position, et couleur en lumière linéaire), et non plus un point tiré
+// au hasard : la couleur ne varie plus d'un point à l'autre (rendu « poivre et
+// sel »), et la couverture est régulière. Le niveau 0 reste le relevé brut,
+// au point près.
+//
+// Le nuage est gardé en mémoire (environ 20 octets par point : 3,4 Go pour
+// 170 M points) et traité par blocs cubiques de 256 voxels du niveau 1 de côté.
+// Environ 3,5 min pour les 170 M points de Saint-Germain sur un M1 Max.
 //
 // Chaque niveau est écrit en PLY 3DGS (lod0.ply, lod1.ply…), offset retiré,
 // dans le repère où splat-transform (v3.3.3 et v3.10.0) place un .lcc (sans -r, son lecteur
@@ -31,7 +43,7 @@
 // sortie avant lecture.
 
 import { execFileSync } from 'child_process';
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync, writeSync } from 'fs';
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, rmSync, unlinkSync, writeFileSync, writeSync } from 'fs';
 import { basename, join } from 'path';
 
 const HEIGHT_REFS = ['ellipsoid', 'ngf'];
@@ -147,8 +159,13 @@ const pointCount = versionMinor >= 4 && headerSize >= 255 ?
 // au-delà du budget. Avec 5 niveaux, les 170 M points de Saint-Germain en
 // laissaient 10,6 M pour un budget mobile de 2 M. On ajoute des niveaux
 // jusqu'à ce que le dernier tienne en 1 M (budget Standard).
+// TKT-286 : l'effectif d'un niveau par voxels n'est connu qu'une fois calculé.
+// Sans --levels, les 10 niveaux sont calculés, et on garde jusqu'au premier
+// qui tient en 1 M (5 niveaux au moins).
 const COARSEST_MAX_POINTS = 1e6;
-opts.levels ??= Math.min(10, Math.max(5, 1 + Math.ceil(Math.log2(pointCount / COARSEST_MAX_POINTS))));
+const MIN_LEVELS = 5;
+const MAX_LEVELS = 10;
+const levelCount = opts.levels ?? MAX_LEVELS;
 
 // Position de la couleur RVB et de la classification selon le format de point.
 const RGB_OFFSETS = { 2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30 };
@@ -231,31 +248,36 @@ const shift = lasOffset.map((o, i) => o - offset[i]);
 
 // --- niveaux de LOD ----------------------------------------------------------
 
-// Tirage déterministe par point (hachage de l'indice) : le niveau k garde les
-// points de tirage < 2^-k. Les niveaux sont emboîtés et les effectifs se
-// calculent sans relire le fichier.
-const hash01 = (i) => {
-    let h = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b);
-    h ^= h >>> 13;
-    h = Math.imul(h, 0xc2b2ae35);
-    h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-};
+// Diamètre des points du niveau k : size·√2^k. Écart-type de la gaussienne =
+// diamètre / 4 : opacité ≈ 13 % au bord du disque.
+const diameter = k => opts.size * Math.SQRT2 ** k;
 
-// Nombre de niveaux auxquels appartient le point : 1 = niveau 0 seul.
-const levelsOf = (i) => {
-    const u = hash01(i);
-    let n = 1;
-    while (n < opts.levels && u < 2 ** -n) n++;
-    return n;
-};
+// Niveau k ≥ 1 : un point par voxel occupé. Sur une surface, l'effectif est à
+// peu près divisé par deux d'un niveau au suivant.
+// TKT-286 : les centres forment une grille presque régulière sur un mur. Avec
+// un diamètre de √2 fois le côté du voxel (la diagonale), la gaussienne ne
+// couvre que 44 % du milieu d'une maille : le fond passe et dessine un
+// quadrillage sur les murs. À deux fois le côté, la couverture monte à 84 %
+// et le quadrillage disparaît.
+const DIAMETER_PER_VOXEL = 2;
+const voxelSide = k => diameter(k) / DIAMETER_PER_VOXEL;
 
-// Un niveau garde 2^-k des points : leur espacement sur une surface croît de
-// √2^k, la taille des points aussi pour boucher les trous.
-// Écart-type de la gaussienne = diamètre / 4 : opacité ≈ 13 % au bord du disque.
-const logScales = [];
-for (let k = 0; k < opts.levels; k++) {
-    logScales.push(Math.log(opts.size * Math.SQRT2 ** k / 4));
+// Un voxel peu rempli (point isolé, feuillage, bord) ne doit pas peser plus
+// que ses points au niveau 0 : sans garde, un point de bruit devient une tache
+// de plus en plus grosse, et un arbre une masse opaque. Un voxel est plein
+// s'il a au moins les points d'une surface relevée tous les `size` (le
+// diamètre du niveau 0) ; sinon son diamètre suit la racine de son
+// remplissage, sans descendre sous celui du niveau 0.
+const fullVoxelCount = k => 2 ** k / DIAMETER_PER_VOXEL ** 2; // (voxelSide(k) / diameter(0))², exact
+
+// Blocs cubiques de BLOCK_VOXELS voxels du niveau 1 de côté. Le côté des
+// voxels du niveau k est arrondi pour en mettre un nombre entier par bloc :
+// la grille est la même partout et aucun voxel n'est à cheval sur deux blocs.
+const BLOCK_VOXELS = 256;
+const blockSize = BLOCK_VOXELS * voxelSide(1);
+const voxelsPerBlock = [0];
+for (let k = 1; k < levelCount; k++) {
+    voxelsPerBlock.push(Math.max(1, Math.round(BLOCK_VOXELS / Math.SQRT2 ** (k - 1))));
 }
 
 // --- couleurs ----------------------------------------------------------------
@@ -275,55 +297,85 @@ const colorDivisor = (() => {
     return maxValue > 255 ? 65535 : 255;
 })();
 
-// --- premier passage : points gardés ----------------------------------------
-
-// Le filtrage du bruit change les effectifs : un passage léger ne lit que la
-// classification pour écrire des en-têtes PLY exacts.
-const keptMask = new Uint8Array(pointCount);
-const counts = new Array(opts.levels).fill(0);
-const readBuf = Buffer.alloc(CHUNK_POINTS * recordLength);
-for (let first = 0; first < pointCount; first += CHUNK_POINTS) {
-    const n = Math.min(CHUNK_POINTS, pointCount - first);
-    readSync(fd, readBuf, 0, n * recordLength, pointDataOffset + first * recordLength);
-    for (let p = 0; p < n; p++) {
-        const cls = readBuf.readUInt8(p * recordLength + classOffset) & classMask;
-        if (!opts.keepNoise && NOISE_CLASSES.has(cls)) continue;
-        const levels = levelsOf(first + p);
-        keptMask[first + p] = levels;
-        for (let k = 0; k < levels; k++) counts[k]++;
-    }
+// Couleur d'un voxel : moyenne en lumière linéaire, comme l'œil mélange de
+// loin des points de couleurs différentes.
+const SRGB_TO_LINEAR = new Float64Array(256);
+for (let c = 0; c < 256; c++) {
+    const v = c / 255;
+    SRGB_TO_LINEAR[c] = v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
 }
+const linearToSrgb = v => (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055);
 
-// --- second passage : écriture des PLY ---------------------------------------
+// --- écriture des PLY --------------------------------------------------------
 
+// L'effectif d'un niveau n'est connu qu'à la fin : l'en-tête est écrit avec
+// un compte sur 10 chiffres (zéros en tête), réécrit à la fermeture.
 const plyHeader = count => [
     'ply',
     'format binary_little_endian 1.0',
-    `element vertex ${count}`,
+    `element vertex ${String(count).padStart(10, '0')}`,
     ...PLY_PROPERTIES.map(p => `property float ${p}`),
     'end_header',
     ''
 ].join('\n');
 
-const outputs = counts.map((count, k) => {
+const WRITE_POINTS = 1 << 16;
+
+const openPly = (k) => {
     const path = join(outDir, `lod${k}.ply`);
     const out = openSync(path, 'w');
-    writeSync(out, plyHeader(count));
-    return { path, fd: out, buf: new Float32Array(CHUNK_POINTS * PLY_PROPERTIES.length), used: 0 };
-});
+    writeSync(out, plyHeader(0));
+    const logScale = Math.log(diameter(k) / 4);
+    return { path, fd: out, count: 0, sparse: 0, logScale, buf: new Float32Array(WRITE_POINTS * PLY_PROPERTIES.length), used: 0 };
+};
+
+const flushPly = (o) => {
+    writeSync(o.fd, new Uint8Array(o.buf.buffer, 0, o.used * PLY_PROPERTIES.length * 4));
+    o.used = 0;
+};
+
+// Point en (E, N, H) local, couleur sRGB entre 0 et 1.
+const writePoint = (o, e, n, h, r, g, b, logScale = o.logScale) => {
+    if (o.used === WRITE_POINTS) flushPly(o);
+    const v = o.buf;
+    let w = o.used++ * PLY_PROPERTIES.length;
+    // Rotation de 90° autour de X : repère des .lcc après splat-transform.
+    v[w++] = e; v[w++] = -h; v[w++] = n;
+    v[w++] = (r - 0.5) / SH_C0; v[w++] = (g - 0.5) / SH_C0; v[w++] = (b - 0.5) / SH_C0;
+    v[w++] = OPACITY_LOGIT;
+    v[w++] = logScale; v[w++] = logScale; v[w++] = logScale;
+    v[w++] = 1; v[w++] = 0; v[w++] = 0; v[w] = 0;
+    o.count++;
+};
+
+const closePly = (o) => {
+    flushPly(o);
+    writeSync(o.fd, plyHeader(o.count), 0);
+    closeSync(o.fd);
+};
+
+// --- lecture : niveau 0, et nuage gardé en mémoire ---------------------------
+
+// Points gardés, en (E, N, H) local, couleur sRGB sur 8 bits.
+const px = new Float32Array(pointCount);
+const py = new Float32Array(pointCount);
+const pz = new Float32Array(pointCount);
+const pc = new Uint8Array(pointCount * 3);
+let kept = 0;
 
 const bboxMin = [Infinity, Infinity, Infinity];
 const bboxMax = [-Infinity, -Infinity, -Infinity];
 
+const outputs = [openPly(0)];
+const readBuf = Buffer.alloc(CHUNK_POINTS * recordLength);
 for (let first = 0; first < pointCount; first += CHUNK_POINTS) {
     const n = Math.min(CHUNK_POINTS, pointCount - first);
     readSync(fd, readBuf, 0, n * recordLength, pointDataOffset + first * recordLength);
-    for (const o of outputs) o.used = 0;
 
     for (let p = 0; p < n; p++) {
-        const levels = keptMask[first + p];
-        if (!levels) continue;
         const at = p * recordLength;
+        const cls = readBuf.readUInt8(at + classOffset) & classMask;
+        if (!opts.keepNoise && NOISE_CLASSES.has(cls)) continue;
         const x = readBuf.readInt32LE(at) * scale[0] + shift[0];
         const y = readBuf.readInt32LE(at + 4) * scale[1] + shift[1];
         const z = readBuf.readInt32LE(at + 8) * scale[2] + shift[2];
@@ -343,30 +395,134 @@ for (let first = 0; first < pointCount; first += CHUNK_POINTS) {
         bboxMin[1] = Math.min(bboxMin[1], y); bboxMax[1] = Math.max(bboxMax[1], y);
         bboxMin[2] = Math.min(bboxMin[2], z); bboxMax[2] = Math.max(bboxMax[2], z);
 
-        for (let k = 0; k < levels; k++) {
-            const o = outputs[k];
-            const s = logScales[k];
-            const v = o.buf;
-            let w = o.used++ * PLY_PROPERTIES.length;
-            // Rotation de 90° autour de X : repère des .lcc après splat-transform.
-            v[w++] = x; v[w++] = -z; v[w++] = y;
-            v[w++] = (r - 0.5) / SH_C0; v[w++] = (g - 0.5) / SH_C0; v[w++] = (b - 0.5) / SH_C0;
-            v[w++] = OPACITY_LOGIT;
-            v[w++] = s; v[w++] = s; v[w++] = s;
-            v[w++] = 1; v[w++] = 0; v[w++] = 0; v[w] = 0;
-        }
+        writePoint(outputs[0], x, y, z, r, g, b);
+        px[kept] = x; py[kept] = y; pz[kept] = z;
+        pc[3 * kept] = Math.round(r * 255);
+        pc[3 * kept + 1] = Math.round(g * 255);
+        pc[3 * kept + 2] = Math.round(b * 255);
+        kept++;
     }
-
-    for (const o of outputs) {
-        writeSync(o.fd, new Uint8Array(o.buf.buffer, 0, o.used * PLY_PROPERTIES.length * 4));
-    }
-    process.stdout.write(`\r${Math.round(100 * (first + n) / pointCount)} %`);
+    process.stdout.write(`\rlecture ${Math.round(100 * (first + n) / pointCount)} %`);
 }
 process.stdout.write('\n');
-
-for (const o of outputs) closeSync(o.fd);
+closePly(outputs[0]);
 closeSync(fd);
 if (tempLas) rmSync(tempLas);
+
+// --- niveaux 1 et suivants : moyennes par voxel -------------------------------
+
+if (levelCount > 1 && kept > 0) {
+    // Tri des points par bloc (dénombrement) : order les liste bloc après bloc.
+    const blocks = [0, 1, 2].map(a => Math.max(1, Math.ceil((bboxMax[a] - bboxMin[a]) / blockSize)));
+    const blockCount = blocks[0] * blocks[1] * blocks[2];
+    if (blockCount > 1 << 24) fail(`emprise trop grande pour --size ${opts.size} (${blockCount} blocs)`);
+    const blockAxis = (v, a) => Math.min(blocks[a] - 1, Math.max(0, Math.floor((v - bboxMin[a]) / blockSize)));
+    const blockOf = i => (blockAxis(px[i], 0) * blocks[1] + blockAxis(py[i], 1)) * blocks[2] + blockAxis(pz[i], 2);
+
+    const blockStart = new Uint32Array(blockCount + 1);
+    for (let i = 0; i < kept; i++) blockStart[blockOf(i) + 1]++;
+    let maxBlock = 0;
+    for (let bl = 0; bl < blockCount; bl++) {
+        maxBlock = Math.max(maxBlock, blockStart[bl + 1]);
+        blockStart[bl + 1] += blockStart[bl];
+    }
+    const order = new Uint32Array(kept);
+    const fill = blockStart.slice(0, blockCount);
+    for (let i = 0; i < kept; i++) order[fill[blockOf(i)]++] = i;
+
+    // Clé de tri d'un point : numéro du voxel dans le bloc, puis rang du point
+    // dans le bloc, dans un float64 exact (53 bits).
+    const indexScale = 2 ** Math.max(1, Math.ceil(Math.log2(maxBlock)));
+    if (BLOCK_VOXELS ** 3 * indexScale > 2 ** 53) fail(`trop de points dans un bloc (${maxBlock}) : augmenter --size`);
+
+    const lx = new Float32Array(maxBlock);
+    const ly = new Float32Array(maxBlock);
+    const lz = new Float32Array(maxBlock);
+    const lc = new Uint8Array(maxBlock * 3);
+    const keys = new Float64Array(maxBlock);
+
+    for (let k = 1; k < levelCount; k++) outputs.push(openPly(k));
+
+    let done = 0;
+    for (let bl = 0; bl < blockCount; bl++) {
+        const start = blockStart[bl];
+        const m = blockStart[bl + 1] - start;
+        if (m === 0) continue;
+
+        // Points du bloc, relatifs à son coin.
+        const bz = bl % blocks[2];
+        const by = Math.floor(bl / blocks[2]) % blocks[1];
+        const bx = Math.floor(bl / (blocks[1] * blocks[2]));
+        const ox = bboxMin[0] + bx * blockSize;
+        const oy = bboxMin[1] + by * blockSize;
+        const oz = bboxMin[2] + bz * blockSize;
+        for (let j = 0; j < m; j++) {
+            const i = order[start + j];
+            lx[j] = px[i] - ox; ly[j] = py[i] - oy; lz[j] = pz[i] - oz;
+            lc[3 * j] = pc[3 * i]; lc[3 * j + 1] = pc[3 * i + 1]; lc[3 * j + 2] = pc[3 * i + 2];
+        }
+
+        for (let k = 1; k < levelCount; k++) {
+            const nv = voxelsPerBlock[k];
+            const toVoxel = nv / blockSize;
+            const cell = v => Math.min(nv - 1, Math.max(0, Math.floor(v * toVoxel)));
+            for (let j = 0; j < m; j++) {
+                keys[j] = ((cell(lx[j]) * nv + cell(ly[j])) * nv + cell(lz[j])) * indexScale + j;
+            }
+            const sorted = keys.subarray(0, m).sort();
+
+            const o = outputs[k];
+            const fullCount = fullVoxelCount(k);
+            let j = 0;
+            while (j < m) {
+                const end = (Math.floor(sorted[j] / indexScale) + 1) * indexScale;
+                let count = 0;
+                let se = 0;
+                let sn = 0;
+                let sh = 0;
+                let sr = 0;
+                let sg = 0;
+                let sb = 0;
+                for (; j < m && sorted[j] < end; j++) {
+                    const q = sorted[j] % indexScale;
+                    se += lx[q]; sn += ly[q]; sh += lz[q];
+                    sr += SRGB_TO_LINEAR[lc[3 * q]];
+                    sg += SRGB_TO_LINEAR[lc[3 * q + 1]];
+                    sb += SRGB_TO_LINEAR[lc[3 * q + 2]];
+                    count++;
+                }
+                let logScale = o.logScale;
+                if (count < fullCount) {
+                    logScale = Math.log(Math.max(diameter(0), diameter(k) * Math.sqrt(count / fullCount)) / 4);
+                    o.sparse++;
+                }
+                writePoint(o, ox + se / count, oy + sn / count, oz + sh / count,
+                    linearToSrgb(sr / count), linearToSrgb(sg / count), linearToSrgb(sb / count), logScale);
+            }
+        }
+
+        done += m;
+        process.stdout.write(`\rniveaux 1 à ${levelCount - 1} : ${Math.round(100 * done / kept)} %`);
+    }
+    process.stdout.write('\n');
+    for (let k = 1; k < levelCount; k++) closePly(outputs[k]);
+}
+
+// Sans --levels : on s'arrête au premier niveau qui tient en 1 M de points.
+if (opts.levels === undefined) {
+    let levels = outputs.length;
+    for (let k = MIN_LEVELS - 1; k < outputs.length; k++) {
+        if (outputs[k].count <= COARSEST_MAX_POINTS) {
+            levels = k + 1;
+            break;
+        }
+    }
+    for (const o of outputs.splice(levels)) unlinkSync(o.path);
+}
+const coarsest = outputs[outputs.length - 1];
+if (coarsest.count > COARSEST_MAX_POINTS) {
+    console.warn(`Attention : le niveau le plus grossier garde ${coarsest.count} points, chargés quel que soit le budget`);
+}
 
 // --- settings.json -----------------------------------------------------------
 
@@ -399,7 +555,11 @@ console.log(`Emprise LAS : min (${fmt(min)}) max (${fmt(max)})`);
 console.log(`Offset retiré : [${offsetRaw.join(', ')}]`);
 console.log(`Emprise locale (E, N, H) : min (${fmt(bboxMin)}) max (${fmt(bboxMax)})`);
 console.log(`Centre dans le moteur (−E, H, N) : ${fmt([-(bboxMin[0] + bboxMax[0]) / 2, (bboxMin[2] + bboxMax[2]) / 2, (bboxMin[1] + bboxMax[1]) / 2])}`);
-outputs.forEach((o, k) => console.log(`  ${o.path} : ${counts[k]} points, diamètre ${(opts.size * Math.SQRT2 ** k * 100).toFixed(1)} cm`));
+outputs.forEach((o, k) => {
+    const source = k === 0 ? 'relevé brut' : `voxels de ${(blockSize / voxelsPerBlock[k] * 100).toFixed(1)} cm`;
+    const sparse = k === 0 ? '' : ` (${(100 * o.sparse / Math.max(1, o.count)).toFixed(1)} % de voxels peu remplis, plus petits)`;
+    console.log(`  ${o.path} : ${o.count} points, ${source}, diamètre ${(diameter(k) * 100).toFixed(1)} cm${sparse}`);
+});
 
 const lodArgs = outputs.map((o, k) => `${o.path} -l ${k}`).join(' ');
 console.log('\nPuis (sans -r : la rotation est déjà dans les PLY) :');

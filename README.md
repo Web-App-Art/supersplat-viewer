@@ -369,9 +369,12 @@ gdal_translate -of GTX "$(projinfo --searchpaths | tail -1)/fr_ign_RAF20.tif" st
 
 # nuage de points LiDAR → LOD (TKT-228)
 # Outil : scripts/las-to-splats.mjs. Chaque point LiDAR devient un petit splat opaque de sa couleur,
-# en niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros). Au moins 5 niveaux,
+# en niveaux de LOD. Le niveau 0 est le relevé brut. Les suivants sont des moyennes par voxel : un point
+# par voxel occupé, à la position et à la couleur moyennes de ses points (TKT-286, fin du rendu « poivre
+# et sel » du tirage au hasard). Le voxel grossit de √2 d'un niveau au suivant. Au moins 5 niveaux,
 # davantage pour que le dernier tienne en 1 M de points : le moteur le garde toujours chargé, même au-delà
 # du budget (TKT-233 : 170 M points en 5 niveaux en laissaient 10,6 M pour un budget mobile de 2 M).
+# Le nuage est tenu en mémoire : environ 20 octets par point (3,4 Go pour 170 M points).
 # Options utiles :
 #   --size 0.02          diamètre d'un point au niveau 0, en m (0.015 par défaut ; plus gros = moins de trous de près).
 #                        TKT-233 : 0.015 gardé, 0.025 et 0.035 floutent les murs sans boucher les vrais manques du
@@ -382,9 +385,9 @@ gdal_translate -of GTX "$(projinfo --searchpaths | tail -1)/fr_ign_RAF20.tif" st
 #   --settings <json>    écrit epsg / offset / heightRef dans le settings.json de la scène
 #   --lcc <modèle.lcc>   reprend l'offset et l'epsg du .lcc : nuage et splats dans le même repère
 # Les .laz sont décompressés par PDAL (brew install pdal).
-# Les PLY intermédiaires sont gros (~3 Go pour 25 M points) : les écrire dans tmp/, pas dans public/.
+# Les PLY intermédiaires sont gros (22 Go pour les 170 M points de Saint-Germain) : les écrire dans tmp/, pas dans public/.
 
-## Étape 1 : LAS → PLY par niveau (quelques secondes)
+## Étape 1 : LAS → PLY par niveau (3,5 min pour 170 M points)
 node scripts/las-to-splats.mjs public/projects/parking-muy/20260127_Parking_A8_Muy.las tmp/parking-muy-pc --epsg 2154 --height-ref ngf --settings public/projects/parking-muy/settings.json
 
 ## Étape 2 : PLY → lod-meta.json, avec la commande affichée par le script (un -l par niveau). Pas de -r : la rotation est déjà faite.
