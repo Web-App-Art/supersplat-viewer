@@ -35,7 +35,7 @@ import { Camera } from './cameras/camera';
 import { Capture } from './capture';
 import type { Collision } from './collision';
 import { MeshCollision, SwitchableCollision, VoxelCollision } from './collision';
-import { contentModeUrl } from './content-mode'; // ARTLIGHT (TKT-228)
+import { ORBIT_PARAM, contentModeUrl } from './content-mode'; // ARTLIGHT (TKT-228, TKT-233)
 import { nearlyEquals } from './core/math';
 import { DebugPanel } from './debug';
 import { FlatnessTool } from './flatness-tool'; // ARTLIGHT
@@ -698,8 +698,12 @@ class Viewer {
 
             // ARTLIGHT (TKT-228): bascule Splats / Nuage de points, caméra conservée.
             events.on('contentMode:switch', (mode: ContentMode) => {
-                location.href = contentModeUrl(mode, this.cameraManager.camera);
+                location.href = contentModeUrl(mode, this.cameraManager.camera, state.cameraMode);
             });
+            // TKT-233 : la page d'avant la bascule était en orbite.
+            if (new URL(location.href).searchParams.has(ORBIT_PARAM)) {
+                state.cameraMode = 'orbit';
+            }
 
             if (!config.noui) {
                 this.navCursor = new NavCursor(app, camera, null, events, state);

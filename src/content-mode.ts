@@ -10,16 +10,21 @@
 // au premier chargement, et un seul contenu occupe la mémoire (le mobile n'a
 // pas la place pour deux). La pose de caméra passe dans l'URL (`view`) et
 // remplace la caméra initiale, comme la pose d'arrivée d'un portail.
+//
+// TKT-233 : le mode orbite passe aussi (`orbit`) ; sans lui, la page
+// rechargée repartait en drone.
 
 import { Vec3 } from 'playcanvas';
 
 import type { Camera } from './cameras/camera';
 import type { ExperienceSettings } from './settings';
-import type { ContentMode } from './types';
+import type { CameraMode, ContentMode } from './types';
 
 const MODE_PARAM = 'mode';
 
 const VIEW_PARAM = 'view';
+
+const ORBIT_PARAM = 'orbit';
 
 // Décimales de la pose : le mm suffit, l'URL reste lisible.
 const VIEW_DECIMALS = 3;
@@ -57,9 +62,10 @@ const applyViewParam = (settings: ExperienceSettings, param: string | null): boo
  *
  * @param {ContentMode} mode - Contenu à afficher.
  * @param {Camera} camera - Caméra courante.
+ * @param {CameraMode} cameraMode - Mode de navigation courant.
  * @returns {string} L'URL à charger.
  */
-const contentModeUrl = (mode: ContentMode, camera: Camera): string => {
+const contentModeUrl = (mode: ContentMode, camera: Camera, cameraMode: CameraMode): string => {
     camera.calcFocusPoint(tmpTarget);
     const { position } = camera;
     const view = [position.x, position.y, position.z, tmpTarget.x, tmpTarget.y, tmpTarget.z]
@@ -73,9 +79,15 @@ const contentModeUrl = (mode: ContentMode, camera: Camera): string => {
         url.searchParams.delete(MODE_PARAM);
     }
     url.searchParams.set(VIEW_PARAM, view.join(','));
+    // En orbite, le point visé (`view`) est le centre de l'orbite.
+    if (cameraMode === 'orbit') {
+        url.searchParams.set(ORBIT_PARAM, '');
+    } else {
+        url.searchParams.delete(ORBIT_PARAM);
+    }
     // La pose d'arrivée d'un portail ne doit pas écraser celle-ci.
     url.searchParams.delete('arrive');
     return url.href;
 };
 
-export { VIEW_PARAM, applyViewParam, contentModeUrl };
+export { ORBIT_PARAM, VIEW_PARAM, applyViewParam, contentModeUrl };
