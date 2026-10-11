@@ -10,8 +10,9 @@
 //
 // Options :
 //   --size <m>          diamètre apparent d'un point au niveau 0 (défaut 0.015)
-//   --levels <n>        nombre de niveaux de LOD (défaut 5) ; chaque niveau garde
-//                       la moitié des points du précédent, en points plus gros
+//   --levels <n>        nombre de niveaux de LOD ; chaque niveau garde la moitié
+//                       des points du précédent, en points plus gros. Défaut :
+//                       5, ou plus pour que le dernier tienne en 1 M de points
 //   --offset <x,y,z>    offset retiré aux coordonnées (défaut : celui du LAS)
 //   --lcc <modèle.lcc>  reprend l'offset et l'epsg du .lcc des splats, pour que
 //                       nuage et splats partagent exactement le même repère
@@ -65,7 +66,7 @@ const fail = (message) => {
 // --- arguments ---------------------------------------------------------------
 
 const args = process.argv.slice(2);
-const opts = { size: 0.015, levels: 5, keepNoise: false };
+const opts = { size: 0.015, keepNoise: false };
 const files = [];
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -91,7 +92,9 @@ if (files.length !== 2) {
     fail('usage : node scripts/las-to-splats.mjs <nuage.las|.laz> <dossier de sortie> [--size m] [--levels n] [--offset x,y,z | --lcc modèle.lcc] [--epsg code] [--settings settings.json] [--height-ref ellipsoid|ngf] [--keep-noise]');
 }
 if (!(opts.size > 0)) fail('--size doit être un nombre positif, en mètres');
-if (!Number.isInteger(opts.levels) || opts.levels < 1 || opts.levels > 10) fail('--levels doit être un entier entre 1 et 10');
+if (opts.levels !== undefined && (!Number.isInteger(opts.levels) || opts.levels < 1 || opts.levels > 10)) {
+    fail('--levels doit être un entier entre 1 et 10');
+}
 if (opts.heightRef && !HEIGHT_REFS.includes(opts.heightRef)) fail(`--height-ref doit valoir ${HEIGHT_REFS.join(' ou ')}`);
 if (opts.offsetRaw && opts.lcc) fail('--offset et --lcc sont exclusifs');
 if (opts.offsetRaw && (opts.offsetRaw.length !== 3 || opts.offsetRaw.some(v => !Number.isFinite(Number(v))))) {
@@ -139,6 +142,13 @@ const min = [head.readDoubleLE(187), head.readDoubleLE(203), head.readDoubleLE(2
 const pointCount = versionMinor >= 4 && headerSize >= 255 ?
     Number(head.readBigUInt64LE(247)) :
     head.readUInt32LE(107);
+
+// TKT-233 : le moteur garde toujours chargé le niveau le plus grossier, même
+// au-delà du budget. Avec 5 niveaux, les 170 M points de Saint-Germain en
+// laissaient 10,6 M pour un budget mobile de 2 M. On ajoute des niveaux
+// jusqu'à ce que le dernier tienne en 1 M (budget Standard).
+const COARSEST_MAX_POINTS = 1e6;
+opts.levels ??= Math.min(10, Math.max(5, 1 + Math.ceil(Math.log2(pointCount / COARSEST_MAX_POINTS))));
 
 // Position de la couleur RVB et de la classification selon le format de point.
 const RGB_OFFSETS = { 2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30 };

@@ -369,9 +369,14 @@ gdal_translate -of GTX "$(projinfo --searchpaths | tail -1)/fr_ign_RAF20.tif" st
 
 # nuage de points LiDAR → LOD (TKT-228)
 # Outil : scripts/las-to-splats.mjs. Chaque point LiDAR devient un petit splat opaque de sa couleur,
-# en 5 niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros).
+# en niveaux de LOD (chaque niveau garde la moitié des points, en points plus gros). Au moins 5 niveaux,
+# davantage pour que le dernier tienne en 1 M de points : le moteur le garde toujours chargé, même au-delà
+# du budget (TKT-233 : 170 M points en 5 niveaux en laissaient 10,6 M pour un budget mobile de 2 M).
 # Options utiles :
-#   --size 0.02          diamètre d'un point au niveau 0, en m (0.015 par défaut ; plus gros = moins de trous de près)
+#   --size 0.02          diamètre d'un point au niveau 0, en m (0.015 par défaut ; plus gros = moins de trous de près).
+#                        TKT-233 : 0.015 gardé, 0.025 et 0.035 floutent les murs sans boucher les vrais manques du
+#                        relevé (parquet du salon de Saint-Germain, à moins de 500 points/m² par endroits)
+#   --levels 7           nombre de niveaux, s'il faut forcer le calcul automatique
 #   --epsg 2154          système du nuage, obligatoire si le LAS ne le déclare pas
 #   --height-ref ngf     H en altitude NGF (sinon ellipsoïdale)
 #   --settings <json>    écrit epsg / offset / heightRef dans le settings.json de la scène
@@ -382,7 +387,7 @@ gdal_translate -of GTX "$(projinfo --searchpaths | tail -1)/fr_ign_RAF20.tif" st
 ## Étape 1 : LAS → PLY par niveau (quelques secondes)
 node scripts/las-to-splats.mjs public/projects/parking-muy/20260127_Parking_A8_Muy.las tmp/parking-muy-pc --epsg 2154 --height-ref ngf --settings public/projects/parking-muy/settings.json
 
-## Étape 2 : PLY → lod-meta.json (≈ 11 min pour 25 M points). Pas de -r : la rotation est déjà faite.
+## Étape 2 : PLY → lod-meta.json, avec la commande affichée par le script (un -l par niveau). Pas de -r : la rotation est déjà faite.
 splat-transform -w --lod-chunk-count 256 tmp/parking-muy-pc/lod0.ply -l 0 tmp/parking-muy-pc/lod1.ply -l 1 tmp/parking-muy-pc/lod2.ply -l 2 tmp/parking-muy-pc/lod3.ply -l 3 tmp/parking-muy-pc/lod4.ply -l 4 public/projects/parking-muy/pointcloud/lod-meta.json
 
 ## Étape 3 : supprimer les PLY de tmp/
