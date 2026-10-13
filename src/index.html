@@ -72,6 +72,8 @@
                 stochastic: url.searchParams.has('stochastic'),
                 splatSource: url.searchParams.get('splatSource') ?? undefined,
                 variant: url.searchParams.get('variant') ?? undefined,
+                // ARTLIGHT (TKT-287) : réglages d'essai des points du nuage (voir point-disks.ts et point-edl.ts).
+                points: url.searchParams.get('points') ?? undefined,
                 budget,
                 heatmap: url.searchParams.has('heatmap'),
                 fullload: url.searchParams.has('fullload'),
@@ -421,6 +423,11 @@
                 <div id="collisionRow" class="settingsRow hidden">
                     <div id="collisionOption" data-i18n="tooltip.show-collision">Show Collision</div>
                     <div id="collisionCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>
+                </div>
+                <!-- ARTLIGHT (TKT-287) : contours du nuage de points (EDL) -->
+                <div id="pointEdgesRow" class="settingsRow hidden">
+                    <div id="pointEdgesOption" data-i18n="artlight.edges.label">Point outlines</div>
+                    <div id="pointEdgesCheck" class="toggleSwitch"><div class="toggleTrack"><div class="toggleThumb"></div></div></div>
                 </div>
                 <!-- ARTLIGHT (TKT-271) : champ de vision, option avancée -->
                 <div class="divider fovDivider"></div>

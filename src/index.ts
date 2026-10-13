@@ -57,6 +57,28 @@ const saveCollisionEnabled = (enabled: boolean) => {
     }
 };
 
+// ARTLIGHT (TKT-287) : contours du nuage de points (EDL), choix gardé d'une
+// visite à l'autre. Sans choix, affichés sur ordinateur seulement : sur
+// téléphone, au budget de 2 M, ils ajoutent environ 3 % au temps d'image.
+const POINT_EDGES_STORAGE_KEY = 'artlight.pointEdges';
+
+const loadPointEdges = (mobile: boolean) => {
+    try {
+        const value = localStorage.getItem(POINT_EDGES_STORAGE_KEY);
+        return value === null ? !mobile : value !== 'off';
+    } catch {
+        return !mobile;
+    }
+};
+
+const savePointEdges = (enabled: boolean) => {
+    try {
+        localStorage.setItem(POINT_EDGES_STORAGE_KEY, enabled ? 'on' : 'off');
+    } catch {
+        // stockage indisponible : le choix vaut jusqu'au rechargement
+    }
+};
+
 const contentName = (contentUrl: string) => new URL(contentUrl, location.href).pathname.split('/').pop() ?? '';
 
 // ARTLIGHT (TKT-283) : amont #306. Le moteur télécharge lui-même
@@ -391,6 +413,8 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         collisionOverlayEnabled: false,
         // ARTLIGHT
         collisionEnabled: loadCollisionEnabled(),
+        hasPointEdges: false,
+        pointEdges: loadPointEdges(platform.mobile),
         measureMode: false,
         areaMeasureMode: false,
         flatnessMeasureMode: false,
@@ -415,6 +439,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // ARTLIGHT (TKT-278) : collision coupée ou rétablie pour la session.
     events.on('collisionEnabled:changed', (enabled: boolean) => saveCollisionEnabled(enabled));
+
+    // ARTLIGHT (TKT-287) : contours du nuage de points.
+    events.on('pointEdges:changed', (enabled: boolean) => savePointEdges(enabled));
 
     // ARTLIGHT (TKT-270) : qualité d'affichage. Choisir Auto redonne sa chance
     // à la haute qualité ; en Auto sur ordinateur, des saccades pendant les

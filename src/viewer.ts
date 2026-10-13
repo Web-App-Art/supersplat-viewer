@@ -46,6 +46,8 @@ import { MeshDebugOverlay } from './mesh-debug-overlay';
 import { MiniMap } from './minimap'; // ARTLIGHT (TKT-268)
 import { NavCursor } from './nav-cursor';
 import { Picker } from './picker';
+import { applyPointDisks } from './point-disks'; // ARTLIGHT (TKT-287)
+import { PointEdl, parsePointEdlOptions, pointEdlSupported } from './point-edl'; // ARTLIGHT (TKT-287)
 import { PointTool } from './point-tool'; // ARTLIGHT
 import { Portals } from './portals'; // ARTLIGHT
 import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
@@ -229,6 +231,9 @@ class Viewer {
 
     zeroUI: ZeroUI;
 
+    // ARTLIGHT (TKT-287) : contours du nuage (EDL), null hors mode nuage.
+    pointEdl: PointEdl | null = null;
+
     origChunks: {
         glsl: {
             gsplatOutputVS: string,
@@ -252,6 +257,25 @@ class Viewer {
 
         const wgsl = ShaderChunks.get(graphicsDevice, 'wgsl');
         wgsl.set('skyboxPS', patchChunk(wgsl.get('skyboxPS'), 'mapRoughnessUv(uv, uniform.mipLevel)', 'uv', 'wgsl skyboxPS'));
+
+        // ARTLIGHT (TKT-287) : points du nuage en disques nets. Le nuage n'est
+        // pas encore créé (chargement asynchrone) : aucun shader gsplat n'est
+        // compilé avec l'ancien chunk.
+        if (config.contentMode === 'pointcloud') {
+            applyPointDisks(app, config.points);
+
+            // L'EDL passe par le CameraFrame (voir configureCamera).
+            const edl = parsePointEdlOptions(config.points);
+            if (edl.strength > 0 && pointEdlSupported(CameraFrame, graphicsDevice)) {
+                this.pointEdl = new PointEdl(app, camera.camera, edl);
+                state.hasPointEdges = true;
+                // contours coupés : plus de CameraFrame, plus de surcoût
+                events.on('pointEdges:changed', () => {
+                    this.configureCamera(settings);
+                    app.renderNextFrame = true;
+                });
+            }
+        }
 
         this.origChunks = {
             glsl: {
@@ -915,7 +939,9 @@ class Viewer {
 
         // ARTLIGHT (TKT-284) : amont #320. CameraFrame has no XR path, so post effects are off
         // for the session
-        const enableCameraFrame = state.xrMode === null && postFxRequested;
+        // ARTLIGHT (TKT-287) : les contours du nuage (EDL) ont besoin du CameraFrame.
+        const pointEdges = !!this.pointEdl && state.pointEdges;
+        const enableCameraFrame = state.xrMode === null && (postFxRequested || pointEdges);
 
         if (enableCameraFrame) {
             // create instance
@@ -928,6 +954,10 @@ class Viewer {
             cameraFrame.rendering.toneMapping = tonemapTable[settings.tonemapping];
             cameraFrame.rendering.renderFormats = highPrecisionRendering ? [PIXELFORMAT_RGBA16F, PIXELFORMAT_RGBA32F] : [];
             applyPostEffectSettings(cameraFrame, postEffectSettings);
+            if (this.pointEdl) {
+                this.pointEdl.active = pointEdges;
+                this.pointEdl.attach(cameraFrame);
+            }
             cameraFrame.update();
 
             // force gsplat shader to write gamma-space colors

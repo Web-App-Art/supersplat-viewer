@@ -266,6 +266,7 @@ const initUI = (global: Global) => {
         'navMenu', 'navBar', 'toolsMenu', 'toolsMenuIcon', 'toolsBar',
         'qualityMenu', 'qualityBadge', 'qualityBar', 'qualityStatus', 'qualityChoices', 'qualityHelp', 'qualityHint',
         'collisionRow', 'collisionCheck',
+        'pointEdgesRow', 'pointEdgesCheck',
         'collisionSetting', 'collisionToggle', 'desktopCollisionHelp',
         'fovLabel', 'fovValue', 'fovRange', 'fovReset',
         'measure',
@@ -985,6 +986,19 @@ const initUI = (global: Global) => {
     events.on('collisionOverlayEnabled:changed', (value: boolean) => {
         dom.collisionCheck.classList.toggle('active', value);
     });
+
+    // ARTLIGHT (TKT-287) : contours du nuage de points (EDL), en mode nuage
+    // quand le GPU sait les calculer.
+    const updatePointEdges = () => {
+        dom.pointEdgesRow.classList.toggle('hidden', !state.hasPointEdges);
+        dom.pointEdgesCheck.classList.toggle('active', state.pointEdges);
+    };
+    dom.pointEdgesRow.addEventListener('click', () => {
+        state.pointEdges = !state.pointEdges;
+    });
+    events.on('hasPointEdges:changed', updatePointEdges);
+    events.on('pointEdges:changed', updatePointEdges);
+    updatePointEdges();
 
     // ARTLIGHT: outils de mesure, un seul ouvert à la fois. L'outil quitté se
     // referme avant que le nouveau s'ouvre : chacun rend le curseur qu'il a

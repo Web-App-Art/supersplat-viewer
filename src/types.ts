@@ -48,6 +48,7 @@ type Config = {
     stochastic: boolean;                        // ?stochastic : splats non triés, accumulés d'une image à l'autre
     splatSource?: 'workbuffer' | 'direct';      // réglage de développement du rendu stochastique (amont)
     variant?: string;                           // réglages d'essai du rendu stochastique, `clé:valeur,…` (amont)
+    points?: string;                            // ARTLIGHT (TKT-287): réglages d'essai des points du nuage, `soft` ou `scale:…,px:…,edl:…`
     budget?: number;                            // override splat budget in millions (overrides platform + quality table)
     renderer: 'webgl' | 'webgpu';               // requested renderer; the actual one (after engine fallback) is exposed as Global.renderer
     heatmap: boolean;                           // render heatmap debug overlay (WebGPU only)
@@ -76,6 +77,8 @@ type State = {
     walkAllowed: boolean;
     collisionOverlayEnabled: boolean;
     collisionEnabled: boolean;                  // ARTLIGHT (TKT-278): faux = le drone traverse murs et planchers
+    hasPointEdges: boolean;                     // ARTLIGHT (TKT-287): contours du nuage de points (EDL) disponibles
+    pointEdges: boolean;                        // ARTLIGHT (TKT-287): contours du nuage de points affichés
     // ARTLIGHT: modes des outils de mesure (hasVoxelOverlay/voxelOverlayEnabled
     // ont été renommés hasCollisionOverlay/collisionOverlayEnabled en amont).
     measureMode: boolean;

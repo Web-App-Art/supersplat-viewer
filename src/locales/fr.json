@@ -597,6 +597,7 @@
     "artlight.collision.label": "Collisions",
     "artlight.collision.on": "Collisions activées : le drone s'arrête aux murs",
     "artlight.collision.off": "Collisions désactivées : le drone traverse les murs",
+    "artlight.edges.label": "Contours des points",
     "artlight.fov.label": "Champ de vision",
     "artlight.fov.help": "Angle couvert par la vue, sur le plus grand côté de l'écran. Plus large, on voit davantage mais les bords se déforment.",
     "artlight.fov.reset": "Revenir au champ de vision de la scène ({value}°)",

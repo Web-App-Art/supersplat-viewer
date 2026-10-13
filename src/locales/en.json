@@ -597,6 +597,7 @@
     "artlight.collision.label": "Collisions",
     "artlight.collision.on": "Collisions on: the drone stops at walls",
     "artlight.collision.off": "Collisions off: the drone goes through walls",
+    "artlight.edges.label": "Point outlines",
     "artlight.fov.label": "Field of view",
     "artlight.fov.help": "Angle covered by the view, across the longer side of the screen. Wider shows more but distorts the edges.",
     "artlight.fov.reset": "Back to the scene's field of view ({value}°)",
