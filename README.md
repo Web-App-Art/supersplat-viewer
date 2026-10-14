@@ -239,9 +239,12 @@ pm2 start npm --name "splatviewer" -- run serve
 # font échouer le build des LOD (« non-finite opacity »). En v3.3.3, -N ne nettoyait qu'un niveau à la fois (non revérifié
 # en v3.10.0) : garder un PLY par niveau.
 
-# ===== Générer une scène depuis un .lcc (splat-transform v3.10.0) =====
+# ===== Générer une scène depuis un .lcc ou un .lcc2 (splat-transform v3.10.0) =====
 # Commandes lancées depuis le dossier du projet, ex. public/projects/immeuble-toulon
 # (guillemets autour des chemins avec espaces : "lcc/lcc-result/Immeuble Full.lcc").
+# .lcc2 (LCC Manager 2.4, Montferrat le 14/10/2026) : mêmes commandes, avec lcc2-result/<modele>.lcc2 à la place
+# du .lcc ; même rotation, niveau 0 le plus fin. PIÈGE : --stats lancé directement sur le .lcc2 montre le repère
+# brut (E, N, H) et le compte du niveau 0, quel que soit -L : contrôler le PLY ou le lod-meta.json produit.
 
 # ROTATION : PAS DE -r (v3.3.3 comme v3.10.0). Le lecteur .lcc oriente déjà le modèle dans le repère attendu par le
 # viewer, (E, N, H) → (E, −H, N). Ajouter -r 90,0,0 le remet couché (erreur faite sur Belgentier,
@@ -264,6 +267,19 @@ splat-transform -w -i 16 --lod-chunk-count 128 ../../../tmp/modele/lod0.ply -l 0
 rm -r ../../../tmp/modele
 splat-transform lod-output/lod-meta.json --stats null | grep -E "^\| (x|y|z) " | head -3
 # (PLY à 1 bande SH ≈ 100 o par splat : ≈ 3 Go pour 28 M splats.)
+
+## 2 bis. Ciel (environnement) : à faire après chaque conversion complète
+# Le .lcc / .lcc2 porte à part un ciel de splats lointains (« env », niveau -1, quelques dizaines de milliers de
+# splats sur ±1 km). Les PLY par niveau ne le gardent pas, sans message : la scène s'affiche alors sur fond noir
+# (Immeuble Toulon, Montferrat avant correction). On le reprend d'une conversion directe du niveau le plus
+# grossier (4 ici, quelques secondes), qui l'écrit dans env/, puis on le déclare dans lod-meta.json.
+splat-transform -w -i 16 -L 4 lcc-result/modele.lcc -N -H 1 ../../../tmp/modele-env/lod-meta.json
+ls ../../../tmp/modele-env/env/meta.json   # absent : le modèle n'a pas de ciel (intérieur), rien de plus à faire
+cp -R ../../../tmp/modele-env/env lod-output/ && rm -r ../../../tmp/modele-env
+node -e "const fs=require('fs'),f='lod-output/lod-meta.json',m=JSON.parse(fs.readFileSync(f)),o={};for(const[k,v]of Object.entries(m)){if(k==='filenames')o.environment='env/meta.json';if(k!=='environment')o[k]=v}fs.writeFileSync(f,JSON.stringify(o))"
+splat-transform lod-output/env/meta.json --stats null | grep -E "^\| (x|y|z) " | head -3
+# Même repère que la scène : y = −H, z = N de "env.boundingBox" du .lcc. La clé "environment" se place
+# avant "filenames", comme splat-transform l'écrit lui-même. Elle ne compte pas dans "count".
 
 ## 3. settings.json (copie de celui d'un autre projet) et project.json (une scène : content, settings, speed)
 # Caméra de départ : dans le viewer, ouvrir le panneau debug (Ctrl+Shift+D ou ?debug), se placer, puis dans
