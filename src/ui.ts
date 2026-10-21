@@ -4,6 +4,7 @@ import { version as appVersion } from '../package.json';
 import { DEFAULT_FOV, FOV_MAX, FOV_MIN } from './fov'; // ARTLIGHT (TKT-271)
 import { localize } from './localization';
 import { SPEED_LEVELS } from './move-speed';
+import { XRAY_INTENSITY_DEFAULT, XRAY_INTENSITY_MAX, XRAY_INTENSITY_MIN } from './point-xray'; // ARTLIGHT (TKT-288)
 import { AUTO_STANDARD_STEP, effectiveQuality } from './quality'; // ARTLIGHT (TKT-273)
 import type { Annotation } from './settings';
 import { translator } from './tool-panel';
@@ -269,6 +270,7 @@ const initUI = (global: Global) => {
         'pointEdgesRow', 'pointEdgesCheck',
         'collisionSetting', 'collisionToggle', 'desktopCollisionHelp',
         'fovLabel', 'fovValue', 'fovRange', 'fovReset',
+        'pointXray', 'pointXraySetting', 'pointXrayLabel', 'pointXrayValue', 'pointXrayRange', 'pointXrayReset',
         'measure',
         'areaMeasure',
         'flatnessMeasure',
@@ -558,6 +560,43 @@ const initUI = (global: Global) => {
     });
     events.on('fov:changed', updateFov);
     updateFov();
+
+    // ARTLIGHT (TKT-288) : vision X, bouton de la barre en mode nuage et
+    // intensité dans le panneau Paramètres. Le curseur est en échelle
+    // logarithmique (quatre crans par doublement) ; la valeur affichée est
+    // relative à l'intensité par défaut.
+    const trXray = translator('artlight.xray');
+    const xrayRange = dom.pointXrayRange as HTMLInputElement;
+    const XRAY_STEPS_PER_OCTAVE = 4;
+    const xrayStep = (intensity: number) => Math.round(Math.log2(intensity / XRAY_INTENSITY_MIN) * XRAY_STEPS_PER_OCTAVE);
+    xrayRange.min = '0';
+    xrayRange.max = String(xrayStep(XRAY_INTENSITY_MAX));
+    dom.pointXrayLabel.title = trXray('help');
+    dom.pointXrayReset.title = trXray('reset');
+    dom.pointXrayReset.setAttribute('aria-label', dom.pointXrayReset.title);
+    const updatePointXray = () => {
+        dom.pointXray.classList.toggle('hidden', !state.hasPointXray);
+        dom.pointXray.classList.toggle('active', state.pointXray);
+        dom.pointXraySetting.classList.toggle('hidden', !state.hasPointXray);
+        const step = xrayStep(state.pointXrayIntensity);
+        xrayRange.value = String(step);
+        xrayRange.style.setProperty('--fill', `${step / Number(xrayRange.max) * 100}%`);
+        dom.pointXrayValue.textContent = trXray('value', { value: Math.round(state.pointXrayIntensity / XRAY_INTENSITY_DEFAULT * 100) });
+        (dom.pointXrayReset as HTMLButtonElement).disabled = state.pointXrayIntensity === XRAY_INTENSITY_DEFAULT;
+    };
+    dom.pointXray.addEventListener('click', () => {
+        state.pointXray = !state.pointXray;
+    });
+    xrayRange.addEventListener('input', () => {
+        state.pointXrayIntensity = XRAY_INTENSITY_MIN * 2 ** (Number(xrayRange.value) / XRAY_STEPS_PER_OCTAVE);
+    });
+    dom.pointXrayReset.addEventListener('click', () => {
+        state.pointXrayIntensity = XRAY_INTENSITY_DEFAULT;
+    });
+    events.on('hasPointXray:changed', updatePointXray);
+    events.on('pointXray:changed', updatePointXray);
+    events.on('pointXrayIntensity:changed', updatePointXray);
+    updatePointXray();
 
     // Gaming mode toggle (settings row visible on mobile only)
     dom.gamingControlsRow.addEventListener('click', () => {
@@ -1103,6 +1142,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.navMenu, localize('tooltip.artlight-navigation'), 'top');
     tooltip.register(dom.toolsMenu, localize('tooltip.artlight-tools'), 'top');
     tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
+    tooltip.register(dom.pointXray, localize('tooltip.artlight-xray'), 'top');
     tooltip.register(dom.qualityMenu, localize('tooltip.artlight-quality'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');

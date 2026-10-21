@@ -699,7 +699,10 @@ button {
         display: block;
     }
 
-    > #fovSetting {
+    // ARTLIGHT (TKT-288) : le curseur de la vision X reprend la mise en page
+    // de celui du champ de vision.
+    > #fovSetting,
+    > #pointXraySetting {
         align-self: stretch;
         min-width: 220px;
         padding: 4px 4px 0 8px;
@@ -716,10 +719,18 @@ button {
                 cursor: help;
             }
 
-            > #fovValue {
+            > #fovValue,
+            > .settingValue {
                 color: $clr-text-light;
                 font-variant-numeric: tabular-nums;
             }
+        }
+
+        > .divider {
+            height: 1px;
+            margin: 8px 0 8px -8px;
+
+            background-color: rgba(white, 0.08);
         }
 
         > .fovControl {

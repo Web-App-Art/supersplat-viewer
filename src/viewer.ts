@@ -49,6 +49,7 @@ import { Picker } from './picker';
 import { applyPointDisks } from './point-disks'; // ARTLIGHT (TKT-287)
 import { PointEdl, parsePointEdlOptions, pointEdlSupported } from './point-edl'; // ARTLIGHT (TKT-287)
 import { PointTool } from './point-tool'; // ARTLIGHT
+import { createPointXray, type PointXray } from './point-xray'; // ARTLIGHT (TKT-288)
 import { Portals } from './portals'; // ARTLIGHT
 import type { VolumePrism } from './project'; // ARTLIGHT (TKT-272)
 import { qualityBudget, XR_HEADSET_BUDGET } from './quality'; // ARTLIGHT (TKT-273, TKT-284)
@@ -234,6 +235,9 @@ class Viewer {
     // ARTLIGHT (TKT-287) : contours du nuage (EDL), null hors mode nuage.
     pointEdl: PointEdl | null = null;
 
+    // ARTLIGHT (TKT-288) : vision X, null hors mode nuage.
+    pointXray: PointXray | null = null;
+
     origChunks: {
         glsl: {
             gsplatOutputVS: string,
@@ -273,6 +277,21 @@ class Viewer {
                 events.on('pointEdges:changed', () => {
                     this.configureCamera(settings);
                     app.renderNextFrame = true;
+                });
+            }
+
+            // TKT-288 : vision X. Fond, ciel et contours suivent dans
+            // configureCamera.
+            this.pointXray = createPointXray(app);
+            if (this.pointXray) {
+                this.pointXray.intensity = state.pointXrayIntensity;
+                state.hasPointXray = true;
+                events.on('pointXray:changed', () => {
+                    this.configureCamera(settings);
+                    app.renderNextFrame = true;
+                });
+                events.on('pointXrayIntensity:changed', (intensity: number) => {
+                    this.pointXray.intensity = intensity;
                 });
             }
         }
@@ -940,7 +959,14 @@ class Viewer {
         // ARTLIGHT (TKT-284) : amont #320. CameraFrame has no XR path, so post effects are off
         // for the session
         // ARTLIGHT (TKT-287) : les contours du nuage (EDL) ont besoin du CameraFrame.
-        const pointEdges = !!this.pointEdl && state.pointEdges;
+        // TKT-288 : en vision X, pas de contours (les points ne se masquent
+        // plus, la profondeur n'a plus de sens), fond noir et ciel masqué.
+        const pointXray = !!this.pointXray && state.pointXray;
+        const pointEdges = !!this.pointEdl && state.pointEdges && !pointXray;
+        const clearColor = pointXray ? new Color(0, 0, 0) : new Color(background.color);
+        if (this.pointXray) {
+            this.pointXray.enabled = pointXray;
+        }
         const enableCameraFrame = state.xrMode === null && (postFxRequested || pointEdges);
 
         if (enableCameraFrame) {
@@ -988,7 +1014,7 @@ class Viewer {
                 return this === app.graphicsDevice.backBuffer ? true : origIsColorBufferSrgb.call(this, index);
             };
 
-            camera.camera.clearColor = new Color(background.color);
+            camera.camera.clearColor = clearColor;
         } else {
             // no post effects needed, destroy camera frame if it exists
             if (this.cameraFrame) {
@@ -1010,13 +1036,13 @@ class Viewer {
             camera.camera.toneMapping = tonemapTable[settings.tonemapping];
 
             // AR composites the scene over the passthrough view
-            camera.camera.clearColor = state.xrMode === 'ar' ? new Color(0, 0, 0, 0) : new Color(background.color);
+            camera.camera.clearColor = state.xrMode === 'ar' ? new Color(0, 0, 0, 0) : clearColor;
         }
 
         // ARTLIGHT (TKT-284) : amont #321. The sky would cover AR's passthrough view entirely, so
         // it is hidden for the session
         const skyLayer = app.scene.layers.getLayerById(LAYERID_SKYBOX);
-        if (skyLayer) skyLayer.enabled = state.xrMode !== 'ar';
+        if (skyLayer) skyLayer.enabled = state.xrMode !== 'ar' && !pointXray;
 
         // Mesh overlay bakes its vertex colors based on the current gamma
         // path; reapply when CameraFrame is created/destroyed (e.g. on XR

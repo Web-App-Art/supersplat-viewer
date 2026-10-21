@@ -26,6 +26,7 @@ import { DEFAULT_FOV, loadFov, parseFov, saveFov } from './fov'; // ARTLIGHT (TK
 import { volumeSignedDistance } from './interior'; // ARTLIGHT (TKT-272)
 import { initLocalization } from './localization';
 import { loadSpeedLevel, saveSpeedLevel } from './move-speed'; // ARTLIGHT (TKT-241)
+import { XRAY_INTENSITY_DEFAULT } from './point-xray'; // ARTLIGHT (TKT-288)
 import { applyArrivalPose } from './portals';
 import { FrameRateWatch, isReducedQuality, loadQualityChoice, saveQualityChoice } from './quality'; // ARTLIGHT (TKT-270, TKT-273)
 import { importSettings } from './settings';
@@ -74,6 +75,28 @@ const loadPointEdges = (mobile: boolean) => {
 const savePointEdges = (enabled: boolean) => {
     try {
         localStorage.setItem(POINT_EDGES_STORAGE_KEY, enabled ? 'on' : 'off');
+    } catch {
+        // stockage indisponible : le choix vaut jusqu'au rechargement
+    }
+};
+
+// ARTLIGHT (TKT-288) : intensité de la vision X, gardée d'une visite à
+// l'autre (elle dépend surtout de la densité des nuages, proche d'une scène à
+// l'autre). La vision X elle-même repart éteinte.
+const POINT_XRAY_INTENSITY_STORAGE_KEY = 'artlight.pointXrayIntensity';
+
+const loadPointXrayIntensity = () => {
+    try {
+        const value = Number(localStorage.getItem(POINT_XRAY_INTENSITY_STORAGE_KEY) ?? NaN);
+        return Number.isFinite(value) && value > 0 ? value : XRAY_INTENSITY_DEFAULT;
+    } catch {
+        return XRAY_INTENSITY_DEFAULT;
+    }
+};
+
+const savePointXrayIntensity = (intensity: number) => {
+    try {
+        localStorage.setItem(POINT_XRAY_INTENSITY_STORAGE_KEY, String(intensity));
     } catch {
         // stockage indisponible : le choix vaut jusqu'au rechargement
     }
@@ -415,6 +438,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         collisionEnabled: loadCollisionEnabled(),
         hasPointEdges: false,
         pointEdges: loadPointEdges(platform.mobile),
+        hasPointXray: false,
+        pointXray: false,
+        pointXrayIntensity: loadPointXrayIntensity(),
         measureMode: false,
         areaMeasureMode: false,
         flatnessMeasureMode: false,
@@ -442,6 +468,9 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
 
     // ARTLIGHT (TKT-287) : contours du nuage de points.
     events.on('pointEdges:changed', (enabled: boolean) => savePointEdges(enabled));
+
+    // ARTLIGHT (TKT-288) : intensité de la vision X.
+    events.on('pointXrayIntensity:changed', (intensity: number) => savePointXrayIntensity(intensity));
 
     // ARTLIGHT (TKT-270) : qualité d'affichage. Choisir Auto redonne sa chance
     // à la haute qualité ; en Auto sur ordinateur, des saccades pendant les

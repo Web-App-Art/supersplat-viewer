@@ -79,6 +79,9 @@ type State = {
     collisionEnabled: boolean;                  // ARTLIGHT (TKT-278): faux = le drone traverse murs et planchers
     hasPointEdges: boolean;                     // ARTLIGHT (TKT-287): contours du nuage de points (EDL) disponibles
     pointEdges: boolean;                        // ARTLIGHT (TKT-287): contours du nuage de points affichés
+    hasPointXray: boolean;                      // ARTLIGHT (TKT-288): vision X disponible (mode nuage)
+    pointXray: boolean;                         // ARTLIGHT (TKT-288): vision X affichée
+    pointXrayIntensity: number;                 // ARTLIGHT (TKT-288): intensité de la vision X (opacité d'un point × 32)
     // ARTLIGHT: modes des outils de mesure (hasVoxelOverlay/voxelOverlayEnabled
     // ont été renommés hasCollisionOverlay/collisionOverlayEnabled en amont).
     measureMode: boolean;
