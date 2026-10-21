@@ -49,6 +49,7 @@ type Config = {
     splatSource?: 'workbuffer' | 'direct';      // réglage de développement du rendu stochastique (amont)
     variant?: string;                           // réglages d'essai du rendu stochastique, `clé:valeur,…` (amont)
     points?: string;                            // ARTLIGHT (TKT-287): réglages d'essai des points du nuage, `soft` ou `scale:…,px:…,edl:…`
+    xray?: string;                              // ARTLIGHT (TKT-288): réglages d'essai de la vision X, `p:…,max:…,fly:…`
     budget?: number;                            // override splat budget in millions (overrides platform + quality table)
     renderer: 'webgl' | 'webgpu';               // requested renderer; the actual one (after engine fallback) is exposed as Global.renderer
     heatmap: boolean;                           // render heatmap debug overlay (WebGPU only)

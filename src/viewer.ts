@@ -282,9 +282,14 @@ class Viewer {
 
             // TKT-288 : vision X. Fond, ciel et contours suivent dans
             // configureCamera.
-            this.pointXray = createPointXray(app);
+            this.pointXray = createPointXray(app, camera.camera, config.xray);
             if (this.pointXray) {
                 this.pointXray.intensity = state.pointXrayIntensity;
+                // référence de distance sans collision : la caméra à son centre
+                this.pointXray.fallbackReference = () => this.cameraManager?.camera.distance ?? 4;
+                events.on('collision:attached', (collision: Collision) => {
+                    this.pointXray.collision = collision;
+                });
                 state.hasPointXray = true;
                 events.on('pointXray:changed', () => {
                     this.configureCamera(settings);
