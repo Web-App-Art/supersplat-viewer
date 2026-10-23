@@ -16,7 +16,7 @@
 //
 // Lot 3 : un clic dans la vue agrandie y emmène le visiteur (événement
 // « map:goto », transition de camera-manager.ts), à sol du niveau affiché
-// + 1,60 m, direction conservée ; un clic dans un mur (carte des murs) est
+// + 1,60 m (ou « eye » du niveau), direction conservée ; un clic dans un mur (carte des murs) est
 // refusé. On y zoome et on s'y déplace à la molette, au glisser et au pincer.
 //
 // Lot 4 : repères. Annotations (settings.json, même numéro que dans la scène),
@@ -700,7 +700,9 @@ class MiniMap {
         this.dirty = true;
         // (E, N) → moteur (−E, y, N)
         // Vue d'avion : hauteur prise sur le terrain sous le point (lot 4).
-        this.global.events.fire('map:goto', new Vec3(-spot.e, level.floor + EYE_HEIGHT, spot.n), level.walls ? undefined : EYE_HEIGHT);
+        // Hauteur d'œil propre au niveau (« eye »), sinon 1,60 m.
+        const eye = Number.isFinite(level.eye) && level.eye > 0 ? level.eye : EYE_HEIGHT;
+        this.global.events.fire('map:goto', new Vec3(-spot.e, level.floor + eye, spot.n), level.walls ? undefined : eye);
         // Sur téléphone, la vue agrandie couvre la scène : on la referme.
         if (this.narrow.matches) {
             this.setExpanded(false);

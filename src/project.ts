@@ -51,6 +51,11 @@ type SceneMapLevel = {
     /** Lot 4 : noms de pièces saisis à la préparation, at en (E, N) comme bounds. */
     rooms?: SceneMapRoom[];
     /**
+     * Hauteur de l'œil au-dessus de floor, en m, après un clic sur la carte
+     * (1,60 par défaut). Plus basse sous un plafond bas (combles de Prads : 1,10).
+     */
+    eye?: number;
+    /**
      * ARTLIGHT (TKT-272) : niveau du modèle intérieur. Dans une scène qui a un
      * bloc `interior`, la carte suit les niveaux intérieurs quand la caméra est
      * dans le bâtiment, les autres dehors.

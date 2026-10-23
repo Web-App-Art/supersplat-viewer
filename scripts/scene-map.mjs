@@ -24,6 +24,8 @@
 //    Noms de pièces (facultatifs, lot 4) : "rooms": [{ "name", "at": [E, N] }]
 //    dans une entrée de levels.json, recopié tel quel dans le niveau du bloc.
 //    La planche les fait saisir d'un clic sur la carte construite.
+//    "eye" (facultatif) : hauteur de l'œil au-dessus du sol après un clic sur la
+//    carte, 1,60 m par défaut ; plus basse sous un plafond bas. Recopié aussi.
 //    bounds est dans le repère source (E, N) de coordinates.ts : un point du
 //    moteur (x, y, z) tombe sur la carte en (−x, z). north vaut 0 (nord du
 //    quadrillage en haut) pour une scène géoréférencée ; absent sinon.
@@ -907,6 +909,7 @@ const build = () => {
             Array.isArray(r.at) && r.at.length === 2 && r.at.every(Number.isFinite)))) {
             fail(`niveau ${l.id} : rooms attendu [{ "name": "Cuisine", "at": [E, N] }]`);
         }
+        if (l.eye !== undefined && !(Number.isFinite(l.eye) && l.eye > 0)) fail(`niveau ${l.id} : eye attendu en m, > 0`);
         if (!Array.isArray(l.bounds) || l.bounds.length !== 4 || !(l.bounds[2] > l.bounds[0] && l.bounds[3] > l.bounds[1])) {
             fail(`niveau ${l.id} : bounds attendu [E0, N0, E1, N1]`);
         }
@@ -952,6 +955,7 @@ const build = () => {
             result.wallsBytes = readFileSync(walls).length;
             entry.walls = `./${relative(projectDir, walls)}`;
         }
+        if (l.eye !== undefined) entry.eye = l.eye;
         if (l.rooms?.length) {
             entry.rooms = l.rooms.map(r => ({ name: r.name.trim(), at: [round(r.at[0]), round(r.at[1])] }));
             const outside = entry.rooms.filter(r => r.at[0] < bounds[0] || r.at[0] > bounds[2] || r.at[1] < bounds[1] || r.at[1] > bounds[3]);

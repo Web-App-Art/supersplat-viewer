@@ -341,6 +341,9 @@ node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
 # Pièges : le filtre -B et le rendu .webp de splat-transform sont en (−E, H, N), le PLY en (E, −H, N).
 # Au-delà d'environ 800 px, splat-transform v3.3.3 perdait des splats sans prévenir sur une tranche dense
 # (corrigé en v3.10.0) : le script rend donc en tuiles de 640 px au plus, sans effet sur le résultat en v3.10.0. Relancer build après chaque modification de levels.json.
+# Plafond bas (combles) : "eye": 1.1 dans l'entrée du niveau de levels.json, recopié dans le bloc "map". C'est la hauteur
+# de l'œil au-dessus du sol après un clic sur la carte (1,60 m par défaut) : sinon on arrive dans la toiture (Prads, étage).
+# Une coupe plus basse ("cut": 1.0) dégage aussi le plancher des combles, que les tuiles masquent avec 1,8 m.
 
 ## Étape 4 (facultative) : noms de pièces
 # Sur la planche construite (map/controle.html), cliquer au milieu d'une pièce, taper son nom ; le bloc
