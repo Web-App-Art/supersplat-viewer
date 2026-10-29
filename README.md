@@ -225,7 +225,7 @@ type ExperienceSettings = {
 pm2 start npm --name "splatviewer" -- run serve
 
 
-# Syntaxe splat-transform v3.x, version de référence v3.10.0 (npm install -g @playcanvas/splat-transform@3.10.0).
+# Syntaxe splat-transform v3.x, version de référence v3.10.0 (npm install -g @playcanvas/splat-transform@3.10.0, ou npm install dans le fork : devDependency épinglée depuis le TKT-297).
 # v3.10.0 depuis le 07/10/2026 : lecteur .lcc identique à la v3.3.3 (mêmes plages x/y/z), rendu .webp corrigé
 # (la v3.3.3 perdait des splats au-delà d'environ 800 px), lod-meta.json sans tables d'erreur LOD (depuis v3.8.0,
 # le viewer ne les lit pas). Après une mise à jour, refaire le contrôle --stats ci-dessous sur une scène connue.
@@ -238,6 +238,27 @@ pm2 start npm --name "splatviewer" -- run serve
 # -N retire les splats à valeur NaN ou infinie ; sans lui, les .lcc récents (Callian, Immeuble Toulon)
 # font échouer le build des LOD (« non-finite opacity »). En v3.3.3, -N ne nettoyait qu'un niveau à la fois (non revérifié
 # en v3.10.0) : garder un PLY par niveau.
+
+# ===== Publier une scène d'un bloc (TKT-297) =====
+# scripts/publier-scene.mjs enchaîne tout ce qui suit (conversion, ciel, contrôle d'orientation, nuage LiDAR,
+# carte proposée, settings.json, project.json) sans oubli possible, et dit où il en est ligne par ligne :
+# c'est ce que lance la machine de calcul du CRM. Les commandes détaillées plus bas restent la référence.
+# splat-transform 3.10.0 est épinglé en devDependency (npm install suffit) ; à défaut, celui du PATH.
+node scripts/publier-scene.mjs <dossier des sources> --sortie public/projects/<nom> --titre "Villa Exemple"
+#   sources : un .lcc ou .lcc2 (avec son lcc-result) et, s'il y en a un, un .las / .laz (sous-dossiers compris)
+#   --sh 3 (plus fidèle, plus lourd), --sans-nuage, --sans-carte, --type interieur|exterieur|mixte,
+#   --modele / --nuage-fichier s'il y en a plusieurs, --niveaux 0,1,2,3,4, --las-options "--epsg 2154",
+#   --gpu <n|cpu> --gpu-backend vulkan (Linux), --force pour remplacer, --garder-travail (PLY intermédiaires).
+# La scène est montée dans <nom>.en-cours/ puis renommée : en cas d'échec, <nom> n'existe pas et
+# <nom>.en-cours/etat.json dit quelle étape a échoué (code de sortie : 2 arguments, 3 outils, 4 sources,
+# 5 calcul, 6 contrôle, 7 carte). Une ligne JSON par étape sur la sortie standard (debut, fin, erreur, avec durée).
+# Produit : lod-output/ (+ env/ si le modèle a un ciel, vérifié), pointcloud/, project.json (speed selon le type),
+# settings.json (vue de départ calculée, géoréférencement du .lcc recopié), map/levels.json et map/controle.html
+# (carte PROPOSÉE), publication/apercu.webp (image de la vue de départ), publication/journaux/, etat.json.
+# Puis relire map/controle.html, corriger map/levels.json, et construire la carte :
+node scripts/publier-scene.mjs carte public/projects/<nom>              # --proposer [--type …] pour reproposer d'abord
+# Contrôle d'orientation : l'emprise produite (lod-meta.json) doit être (E, −H, N) de celle du modèle, à 20 %
+# près ; un modèle couché ou retourné arrête tout (code 6). Mesure de « propose » : scripts/mesure-propose.mjs.
 
 # ===== Générer une scène depuis un .lcc ou un .lcc2 (splat-transform v3.10.0) =====
 # Commandes lancées depuis le dossier du projet, ex. public/projects/immeuble-toulon
@@ -317,8 +338,14 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 node scripts/scene-map.mjs propose public/projects/immeuble-toulon/project.json
 # Lit le LOD 1 (--lod n pour un autre), détecte les sols (surfaces horizontales avec du vide au-dessus,
 # espacés d'au moins 2,20 m) et écrit map/levels.json et la planche map/controle.html : vues de côté avec les
-# niveaux, une vignette par niveau. Une vue d'avion est toujours proposée, gardée d'office si aucun niveau.
-# Refuse d'écraser un levels.json existant (déjà édité) sans --force.
+# niveaux, une vignette par niveau. Refuse d'écraser un levels.json existant (déjà édité) sans --force.
+# TKT-297 : chaque niveau porte ses mesures (surface, murs, couvert) et une décision. Écartés d'office, avec leur
+# « raison » dans levels.json : « Toit, faîtage ou plafond probable » (aucun mur ne se dresse sur ce sol),
+# « Petite surface » (moins de 15 m² mesurés, --surface-min pour changer, sauf petite pièce fermée), et tous les
+# niveaux d'une « Scène extérieure » (vue d'avion seule). Un niveau gardé mais douteux porte « doute ».
+# La vue d'avion est gardée pour un extérieur et pour une scène mixte (dedans et dehors, site de plus de 30 m).
+# --type interieur|exterieur|mixte impose le type de scène quand on le connaît. Règles et seuils :
+# scripts/scene-map-niveaux.mjs ; mesure sur les cartes faites à la main : docs/tkt-297-publier-scene.md.
 
 ## Étape 2 : valider à la main, dans map/levels.json
 # Relire la planche. Toitures, faîtages et houppiers sont souvent pris pour des sols :
@@ -330,8 +357,8 @@ node scripts/scene-map.mjs propose public/projects/immeuble-toulon/project.json
 
 ## Étape 3 : construire les cartes (≈ 15 s par niveau intérieur, 1 à 2 min pour une vue d'avion)
 node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
-# Écrit map/<id>.webp, map/<id>-murs.png et le bloc "map" de la scène dans project.json (reste du fichier
-# inchangé ; s'il n'est pas au format JSON.stringify(…, 2), le bloc est affiché pour être recopié) :
+# Écrit map/<id>.webp, map/<id>-murs.png et le bloc "map" de la scène dans project.json (TKT-297 : seul le bloc
+# est remplacé dans le texte, le reste du fichier garde sa forme, « 1.380 » et lignes longues comprises) :
 #   "map": { "north": 0, "levels": [ {"id": "n1", "name": "RDC", "floor": -6.76,
 #            "bounds": [E0, N0, E1, N1], "photo": "./map/n1.webp", "walls": "./map/n1-murs.png"} ] }
 # bounds en (E, N) du repère source (coordinates.ts) : point moteur (x, y, z) → carte (−x, z).
@@ -354,7 +381,7 @@ node scripts/scene-map.mjs build public/projects/immeuble-toulon/project.json
 # départ (cameras[0]) et portails (project.json), sur le niveau dont le sol est le plus haut sous eux.
 # Contrôles du 07/10/2026 (lot 4) : belgentier extérieur (vue d'avion seule), intérieur (n1 « Rez-de-jardin »,
 # n2 « Étage », n3 toit écarté), studio (n1, n2 plafond écarté). Son project.json écrit « 1.380 » : le bloc
-# a été recopié à la main (le script ne réécrit qu'un fichier au format JSON.stringify(…, 2)).
+# avait été recopié à la main ; depuis le TKT-297, build le réécrit lui-même.
 
 # ===== Bascule intérieur / extérieur (TKT-272) =====
 # Une scène peut porter deux modèles du même bâtiment (extérieur net dehors, intérieur net dedans) :
