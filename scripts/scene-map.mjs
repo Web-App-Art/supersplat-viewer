@@ -5,7 +5,8 @@
 // dessus des splats coupée au-dessus du sol + carte des murs), ou une vue
 // d'avion pour un extérieur. Calculé une fois ici, lu par le visualisateur.
 //
-//   node scripts/scene-map.mjs propose <project.json> [id scène] [--lod n] [--force]
+//   node scripts/scene-map.mjs propose <project.json> [id scène] [--lod n] [--force] [--surface-min m²]
+//                                       [--type auto|interieur|exterieur|mixte] [--sans-vignettes]
 //   node scripts/scene-map.mjs build   <project.json> [id scène] [--lod n]
 //
 // 1. « propose » détecte les niveaux et écrit, dans le dossier map/ à côté du
@@ -13,8 +14,15 @@
 //    - levels.json : la liste éditable (id, name, floor, bounds, cut, keep) ;
 //    - controle.html : vues de côté avec les niveaux et une vignette par niveau.
 //    On relit la planche, on raye les faux niveaux (keep: false), on nomme les
-//    vrais. Une vue d'avion est toujours proposée (gardée seulement si aucun
-//    niveau n'est trouvé) : pour un extérieur, garder elle seule.
+//    vrais. TKT-297 : chaque niveau porte ses mesures (surface, murs, couvert)
+//    et, s'il est écarté d'office, sa raison (« raison » : « Petite surface »,
+//    « Toit ou plafond probable », « Sol à ciel ouvert », « Scène extérieure ») ;
+//    une scène extérieure reçoit la vue d'avion seule. Règles et seuils :
+//    scene-map-niveaux.mjs ; --surface-min <m²> règle le seuil de surface (15),
+//    --type impose le type de scène (extérieur : vue d'avion seule ; intérieur :
+//    jamais de vue d'avion ; mixte : les deux). Un niveau gardé mais douteux
+//    porte « doute ». Les noms proposés partent du rez-de-chaussée.
+//    La vue d'avion est toujours proposée, gardée selon la même décision.
 // 2. « build » rend, pour chaque entrée gardée, <id>.webp (photo vue de dessus)
 //    et <id>-murs.png (carte des murs, sauf vue d'avion), contrôle le recalage
 //    photo / murs, complète la planche et écrit le bloc « map » de la scène dans
@@ -36,24 +44,14 @@
 // repère du moteur, (−E, H, N). D'où la caméra en −E et la boîte en H positif.
 
 import { execFileSync } from 'child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, relative, resolve } from 'path';
 import { deflateSync } from 'zlib';
 
-// Splats retenus : opacité au-dessus de ce seuil.
-const MIN_OPACITY = 0.3;
-
-// Détection des niveaux (banc de l'audit, levels.py).
-const GRID_CELL = 0.10;                 // case de la grille d'occupation 3D
-const FREE_FROM = 0.2;                  // vide cherché de +0,2 m…
-const FREE_TO = 1.0;                    // …à +1,0 m au-dessus d'un sol (au-dessous d'un plafond)
-const HEIGHT_BIN = 0.05;                // tranches de hauteur de l'histogramme
-const PEAK_MIN_AREA = 2.0;              // pic de surface : au moins 2 m²…
-const PEAK_MIN_SHARE = 0.02;            // …et 2 % du plus grand
-const DEDUCED_SLAB = 0.30;              // plafond sans sol au-dessus : sol déduit à +0,30 m
-const GROUP_GAP = 1.0;                  // regroupement des candidats (marches, paliers)
-const MIN_STOREY = 2.20;                // espacement minimal entre niveaux
+import { spliceMapBlock } from './project-json.mjs';
+import { decideLevels, DEFAULT_RULES, detectLevels, levelBounds as boundsOf, levelNames, percentiles, readSplatsPly, SCENE_TYPES } from './scene-map-niveaux.mjs';
+import { runSplatTransform } from './splat-transform-cli.mjs';
 
 // Fonds de carte.
 const MARGIN = 1.0;                     // marge autour de l'emprise d'un niveau
@@ -89,20 +87,25 @@ const seconds = t0 => (Date.now() - t0) / 1000;
 // --- arguments ---------------------------------------------------------------
 
 const args = process.argv.slice(2);
-const opts = { lod: 1, force: false };
+const opts = { lod: 1, force: false, rules: {}, thumbs: true, type: 'auto' };
 const positional = [];
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--lod') opts.lod = Number(args[++i]);
     else if (a === '--force') opts.force = true;
+    else if (a === '--surface-min') opts.rules.minArea = Number(args[++i]);
+    else if (a === '--sans-vignettes') opts.thumbs = false;
+    else if (a === '--type') opts.type = args[++i];
     else if (a.startsWith('--')) fail(`option inconnue ${a}`);
     else positional.push(a);
 }
 const [step, projectArg, sceneArg] = positional;
 if (!['propose', 'build'].includes(step) || !projectArg) {
-    fail('usage : node scripts/scene-map.mjs propose|build <project.json> [id scène] [--lod n] [--force]');
+    fail('usage : node scripts/scene-map.mjs propose|build <project.json> [id scène] [--lod n] [--force] [--surface-min m²] [--type auto|interieur|exterieur|mixte] [--sans-vignettes]');
 }
 if (!Number.isInteger(opts.lod) || opts.lod < 0) fail('--lod attend un entier positif');
+if (!SCENE_TYPES.includes(opts.type)) fail(`--type attend ${SCENE_TYPES.join(', ')}`);
+if (opts.rules.minArea !== undefined && !(opts.rules.minArea >= 0)) fail('--surface-min attend une surface en m²');
 
 const projectPath = resolve(projectArg);
 const projectDir = dirname(projectPath);
@@ -135,17 +138,17 @@ const lodArgs = (wanted = opts.lod) => {
 
 const splatTransform = (list) => {
     try {
-        execFileSync('splat-transform', ['-q', '-w', ...list], { stdio: ['ignore', 'ignore', 'inherit'] });
+        runSplatTransform(['-w', ...list]);
     } catch (e) {
-        fail(`splat-transform a échoué (${e.message.split('\n')[0]})`);
+        const detail = String(e.stderr ?? '').trim().split('\n').slice(-3).join(' / ');
+        fail(`splat-transform a échoué (${detail || e.message.split('\n')[0]})`);
     }
 };
 
 // --- lecture des splats ----------------------------------------------------
 
-// Lit les splats en (E, H, N) avec un drapeau « surface horizontale » :
-// splat plat (plus petite échelle < 0,3 × la moyenne) dont la normale est
-// verticale (|n_y| > 0,9). Seuls les splats d'opacité > 0,3 sont gardés.
+// Splats du LOD lu, exportés en PLY dans un dossier temporaire puis lus en
+// (E, H, N) avec le drapeau « surface horizontale » (scene-map-niveaux.mjs).
 const loadSplats = () => {
     const t0 = Date.now();
     const { args: lod, lod: lodLevel } = lodArgs();
@@ -153,204 +156,20 @@ const loadSplats = () => {
     const ply = join(dir, 'splats.ply');
     try {
         splatTransform([...lod, contentPath, '-H', '0', ply]);
-        const fd = openSync(ply, 'r');
-        const head = Buffer.alloc(4096);
-        readSync(fd, head, 0, head.length, 0);
-        const headText = head.toString('latin1');
-        const end = headText.indexOf('end_header\n');
-        if (end < 0 || !headText.startsWith('ply')) fail('PLY illisible');
-        const lines = headText.slice(0, end).split('\n');
-        if (!lines.includes('format binary_little_endian 1.0')) fail('PLY attendu en binaire little-endian');
-        const count = Number(lines.find(l => l.startsWith('element vertex')).split(' ')[2]);
-        const props = lines.filter(l => l.startsWith('property ')).map((l) => {
-            const [, type, name] = l.split(' ');
-            if (type !== 'float') fail(`propriété ${name} en ${type}, float attendu`);
-            return name;
-        });
-        const stride = props.length * 4;
-        const at = (name) => {
-            const i = props.indexOf(name);
-            if (i < 0) fail(`propriété ${name} absente du PLY`);
-            return i * 4;
-        };
-        const [ox, oy, oz] = ['x', 'y', 'z'].map(at);
-        const [os0, os1, os2] = ['scale_0', 'scale_1', 'scale_2'].map(at);
-        const [ow, oqx, oqy, oqz] = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].map(at);
-        const oop = at('opacity');
-        const minLogit = Math.log(MIN_OPACITY / (1 - MIN_OPACITY));
-
-        const E = new Float32Array(count);
-        const H = new Float32Array(count);
-        const N = new Float32Array(count);
-        const horizontal = new Uint8Array(count);
-        let n = 0;
-        const chunkCount = 1 << 18;
-        const buf = Buffer.alloc(chunkCount * stride);
-        let pos = end + 'end_header\n'.length;
-        for (let done = 0; done < count;) {
-            const k = Math.min(chunkCount, count - done);
-            readSync(fd, buf, 0, k * stride, pos);
-            pos += k * stride;
-            done += k;
-            for (let i = 0; i < k; i++) {
-                const b = i * stride;
-                if (!(buf.readFloatLE(b + oop) > minLogit)) continue;
-                const x = buf.readFloatLE(b + ox), y = buf.readFloatLE(b + oy), z = buf.readFloatLE(b + oz);
-                if (!Number.isFinite(x + y + z)) continue;
-                E[n] = x;
-                H[n] = -y;
-                N[n] = z;
-                // échelles en log : comparer les log revient à comparer les échelles
-                const s0 = buf.readFloatLE(b + os0), s1 = buf.readFloatLE(b + os1), s2 = buf.readFloatLE(b + os2);
-                const kmin = s0 <= s1 ? (s0 <= s2 ? 0 : 2) : (s1 <= s2 ? 1 : 2);
-                const smin = Math.min(s0, s1, s2);
-                const smid = s0 + s1 + s2 - smin - Math.max(s0, s1, s2);
-                if (smin < smid + Math.log(0.3)) {
-                    let w = buf.readFloatLE(b + ow), qx = buf.readFloatLE(b + oqx);
-                    let qy = buf.readFloatLE(b + oqy), qz = buf.readFloatLE(b + oqz);
-                    const qn = Math.hypot(w, qx, qy, qz) + 1e-12;
-                    w /= qn; qx /= qn; qy /= qn; qz /= qn;
-                    // composante y de la colonne kmin de la matrice de rotation
-                    const ny = kmin === 0 ? 2 * (qx * qy + w * qz) :
-                        kmin === 1 ? 1 - 2 * (qx * qx + qz * qz) :
-                            2 * (qy * qz - w * qx);
-                    if (Math.abs(ny) > 0.9) horizontal[n] = 1;
-                }
-                n++;
-            }
+        let s;
+        try {
+            s = readSplatsPly(ply);
+        } catch (e) {
+            fail(e.message);
         }
-        closeSync(fd);
-        console.log(`${n.toLocaleString('fr-FR')} splats lus sur ${count.toLocaleString('fr-FR')}${lodLevel === null ? '' : ` (LOD ${lodLevel})`} en ${fmt(seconds(t0), 1)} s`);
-        return { E: E.subarray(0, n), H: H.subarray(0, n), N: N.subarray(0, n), horizontal: horizontal.subarray(0, n), n, lod: lodLevel, total: count };
+        console.log(`${s.n.toLocaleString('fr-FR')} splats lus sur ${s.total.toLocaleString('fr-FR')}${lodLevel === null ? '' : ` (LOD ${lodLevel})`} en ${fmt(seconds(t0), 1)} s`);
+        return { ...s, lod: lodLevel };
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
 };
 
-// Percentiles approchés sur un échantillon régulier (≤ 2 M valeurs).
-const percentiles = (values, ps, mask) => {
-    const step = Math.max(1, Math.floor(values.length / 2e6));
-    const sample = [];
-    for (let i = 0; i < values.length; i += step) {
-        if (!mask || mask(i)) sample.push(values[i]);
-    }
-    if (!sample.length) return ps.map(() => NaN);
-    const sorted = Float32Array.from(sample).sort();
-    return ps.map(p => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p / 100 * (sorted.length - 1))))]);
-};
-
-// --- détection des niveaux -------------------------------------------------
-
-// Port de levels.py. Un sol est une surface horizontale avec du vide de +0,2 à
-// +1,0 m au-dessus ; un plafond, avec du vide au-dessous. Les pics de surface
-// par tranche de 5 cm donnent les candidats ; un plafond sans sol juste
-// au-dessus (dalle vue seulement par en dessous) donne un sol déduit à +0,30 m.
-const detectLevels = (s) => {
-    const t0 = Date.now();
-    const [e0, e1] = percentiles(s.E, [0.1, 99.9]);
-    const [n0, n1] = percentiles(s.N, [0.1, 99.9]);
-    const [h0, h1] = percentiles(s.H, [0.1, 99.9]);
-    const cell = GRID_CELL;
-    const dx = Math.ceil((e1 - e0) / cell) + 1, dy = Math.ceil((n1 - n0) / cell) + 1, dz = Math.ceil((h1 - h0) / cell) + 1;
-    const bits = dx * dy * dz;
-    if (bits > 8e9) fail(`emprise trop grande pour la grille (${dx} × ${dy} × ${dz} cases)`);
-    const occupied = new Uint8Array(Math.ceil(bits / 8));
-    const inside = i => s.E[i] >= e0 && s.E[i] <= e1 && s.N[i] >= n0 && s.N[i] <= n1 && s.H[i] >= h0 && s.H[i] <= h1;
-    const cellOf = i => [Math.floor((s.E[i] - e0) / cell), Math.floor((s.N[i] - n0) / cell), Math.floor((s.H[i] - h0) / cell)];
-    for (let i = 0; i < s.n; i++) {
-        if (!inside(i)) continue;
-        const [ix, iy, iz] = cellOf(i);
-        const idx = (ix * dy + iy) * dz + iz;
-        occupied[Math.floor(idx / 8)] |= 1 << (idx % 8);
-    }
-    const isOccupied = (column, iz) => {
-        if (iz < 0 || iz >= dz) return 0;
-        const idx = column + iz;
-        return (occupied[Math.floor(idx / 8)] >> (idx % 8)) & 1;
-    };
-    const a0 = Math.round(FREE_FROM / cell), a1 = Math.round(FREE_TO / cell);
-    const bins = Math.floor((h1 - h0) / HEIGHT_BIN) + 2;
-    const floorCells = new Set(), ceilingCells = new Set();
-    let horizontalCount = 0;
-    for (let i = 0; i < s.n; i++) {
-        if (!s.horizontal[i] || !inside(i)) continue;
-        horizontalCount++;
-        const [ix, iy, iz] = cellOf(i);
-        const column = (ix * dy + iy) * dz;
-        let above = 0, below = 0;
-        for (let k = a0; k <= a1; k++) {
-            above += isOccupied(column, iz + k);
-            below += isOccupied(column, iz - k);
-        }
-        const key = (ix * dy + iy) * bins + Math.floor((s.H[i] - h0) / HEIGHT_BIN);
-        if (above <= 1) floorCells.add(key);
-        else if (below <= 1) ceilingCells.add(key);
-    }
-    const histogram = (set) => {
-        const v = new Float64Array(bins);
-        for (const key of set) v[key % bins] += cell * cell;
-        return Array.from(v);
-    };
-    const fa = histogram(floorCells), ca = histogram(ceilingCells);
-    const center = i => h0 + (i + 0.5) * HEIGHT_BIN;
-    const around = (v, i) => v.slice(Math.max(0, i - 2), i + 3).reduce((a, b) => a + b, 0);
-    // pics : maxima locaux à ± 25 cm, au-dessus du seuil
-    const peaks = (v) => {
-        const out = [];
-        const threshold = Math.max(PEAK_MIN_AREA, PEAK_MIN_SHARE * Math.max(...v));
-        for (let i = 0; i < v.length; i++) {
-            if (v[i] < threshold) continue;
-            const local = Math.max(...v.slice(Math.max(0, i - 5), Math.min(v.length, i + 6)));
-            if (v[i] === local && !(out.length && i - out[out.length - 1] <= 5)) out.push(i);
-        }
-        return out;
-    };
-    const fp = peaks(fa), cp = peaks(ca);
-    const candidates = fp.map(i => ({ h: center(i), area: around(fa, i), kind: 'sol' }));
-    for (const i of cp) {
-        const hc = center(i);
-        if (!candidates.some(c => c.h - hc >= 0 && c.h - hc <= 0.7)) {
-            candidates.push({ h: hc + DEDUCED_SLAB, area: around(ca, i), kind: 'déduit' });
-        }
-    }
-    candidates.sort((a, b) => a.h - b.h);
-    const groups = [];
-    for (const c of candidates) {
-        const last = groups[groups.length - 1];
-        if (last && c.h - last[last.length - 1].h < GROUP_GAP) last.push(c);
-        else groups.push([c]);
-    }
-    let levels = groups.map((g) => {
-        const best = g.reduce((a, b) => (((b.kind === 'sol') - (a.kind === 'sol') || b.area - a.area) > 0 ? b : a));
-        return { h: round(best.h), area: round(g.reduce((t, c) => t + c.area, 0), 1), kind: best.kind };
-    });
-    const kept = [];
-    for (const l of [...levels].sort((a, b) => b.area - a.area)) {
-        if (kept.every(k => Math.abs(l.h - k.h) >= MIN_STOREY)) kept.push(l);
-    }
-    levels = kept.sort((a, b) => a.h - b.h);
-    const totalFloor = fa.reduce((a, b) => a + b, 0), totalCeiling = ca.reduce((a, b) => a + b, 0);
-    console.log(`détection : ${horizontalCount.toLocaleString('fr-FR')} splats horizontaux, ${levels.length} niveau(x) en ${fmt(seconds(t0), 1)} s`);
-    return {
-        box: { E: [e0, e1], N: [n0, n1], H: [h0, h1] },
-        floors: fp.map(i => ({ h: round(center(i)), area: round(around(fa, i), 1) })),
-        ceilings: cp.map(i => ({ h: round(center(i)), area: round(around(ca, i), 1) })),
-        levels,
-        floorArea: round(totalFloor, 1),
-        ceilingArea: round(totalCeiling, 1),
-        histogram: { h0, bin: HEIGHT_BIN, floor: fa.map(v => round(v, 2)), ceiling: ca.map(v => round(v, 2)) },
-        seconds: round(seconds(t0), 1)
-    };
-};
-
-// Emprise E/N d'un niveau : percentiles 0,5 / 99,5 des splats de sa bande
-// (sol + 0,3 à sol + 2,0), plus 1 m de marge. Vue d'avion : tous les splats.
-const levelBounds = (s, floor) => {
-    const mask = floor === null ? null : i => s.H[i] > floor + WALL_FROM && s.H[i] < floor + WALL_TO;
-    const [e0, e1] = percentiles(s.E, [0.5, 99.5], mask);
-    const [n0, n1] = percentiles(s.N, [0.5, 99.5], mask);
-    return [round(e0 - MARGIN, 1), round(n0 - MARGIN, 1), round(e1 + MARGIN, 1), round(n1 + MARGIN, 1)];
-};
+const levelBounds = (s, floor) => boundsOf(s, floor, { from: WALL_FROM, to: WALL_TO, margin: MARGIN });
 
 // --- images ------------------------------------------------------------------
 
@@ -717,12 +536,14 @@ const writeControl = () => {
 
     const rows = entries.map(l => `<tr class="${l.keep ? 'keep' : 'drop'}"><td>${escapeHtml(l.id)}</td><td>${escapeHtml(l.name)}</td>` +
         `<td>${l.kind === 'avion' ? 'vue d’avion' : escapeHtml(l.kind)}</td><td class="n">${l.floor === null ? '' : fmt(l.floor)}</td>` +
-        `<td class="n">${l.area === undefined ? '' : fmt(l.area, 1)}</td><td class="n">${l.cut === null ? 'aucune' : `+${fmt(l.cut)}`}</td>` +
-        `<td class="n">${l.bounds.map(v => fmt(v, 1)).join(' ; ')}</td><td>${l.keep ? 'gardé' : 'écarté'}</td></tr>`).join('');
+        `<td class="n">${(l.surface ?? l.area) === undefined ? '' : fmt(l.surface ?? l.area, 1)}</td>` +
+        `<td class="n">${l.murs === undefined ? '' : fmt(l.murs)}</td><td class="n">${l.couvert === undefined ? '' : fmt(l.couvert)}</td>` +
+        `<td class="n">${l.cut === null ? 'aucune' : `+${fmt(l.cut)}`}</td>` +
+        `<td class="n">${l.bounds.map(v => fmt(v, 1)).join(' ; ')}</td><td class="decision">${l.keep ? 'gardé' : 'écarté'}${l.raison ? ` : ${escapeHtml(l.raison)}` : ''}${l.doute ? ` <b class="bad">à vérifier</b> : ${escapeHtml(l.doute)}` : ''}</td></tr>`).join('');
 
     const thumbs = entries.map((l) => {
         const thumb = proposal.thumbs[l.id];
-        return `<figure class="thumb ${l.keep ? 'keep' : 'drop'}">${thumb ? `<img src="controle/${thumb}" alt="">` : '<div class="none">pas de vignette (entrée ajoutée à la main)</div>'}` +
+        return `<figure class="thumb ${l.keep ? 'keep' : 'drop'}">${thumb ? `<img src="controle/${thumb}" alt="">` : '<div class="none">pas de vignette (entrée ajoutée à la main, ou propose --sans-vignettes)</div>'}` +
             `<figcaption><b>${escapeHtml(l.id)}</b> ${escapeHtml(l.name)} — ${l.floor === null ? '' : `sol ${fmt(l.floor)} m, `}${l.keep ? 'gardé' : 'écarté'}</figcaption></figure>`;
     }).join('');
 
@@ -753,7 +574,7 @@ p, figcaption { color: var(--muted); } code { font-size: 13px; }
 .sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
 figure { margin: 0; } svg, img { display: block; max-width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }
 .table { overflow-x: auto; } table { border-collapse: collapse; width: 100%; font-size: 14px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; } td.n { text-align: right; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; } td.n { text-align: right; font-variant-numeric: tabular-nums; } td.decision { white-space: normal; min-width: 18em; }
 tr.drop td { color: var(--muted); text-decoration: line-through; } tr.drop td:last-child { text-decoration: none; color: var(--drop); } tr.keep td:last-child { color: var(--keep); }
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .thumb.drop img { opacity: .45; } .thumb .none { padding: 24px; border: 1px dashed var(--line); }
@@ -768,12 +589,13 @@ label { color: var(--muted); }
 <h1>Carte de la scène « ${escapeHtml(proposal.scene)} »</h1>
 <p>${proposal.splats.toLocaleString('fr-FR')} splats lus${proposal.lod === null ? '' : ` au LOD ${proposal.lod}`}. Détection en ${fmt(proposal.detection.seconds, 1)} s :
 surfaces de sol ${fmt(proposal.detection.floorArea, 0)} m², de plafond ${fmt(proposal.detection.ceilingArea, 0)} m².
+${proposal.type ? `Scène ${proposal.typeImpose ? 'déclarée' : 'jugée'} <b>${{ interieur: 'intérieure', exterieur: 'extérieure', mixte: 'mixte (niveaux et vue d’avion)' }[proposal.type]}</b>.` : ''}
 ${built ? `Cartes construites le ${escapeHtml(built.date)}.` : 'Cartes pas encore construites.'}</p>
-<p>À faire : relire les vues de côté et les vignettes, puis éditer <code>levels.json</code> (<code>keep</code> à <code>false</code> pour un faux niveau,
+<p>À faire : relire les vues de côté et les vignettes, puis éditer <code>levels.json</code> (<code>keep</code> à <code>false</code> pour un faux niveau, à <code>true</code> pour un niveau écarté à tort,
 <code>name</code> pour les vrais, <code>floor</code>, <code>bounds</code> [E0, N0, E1, N1] ou <code>cut</code> si besoin) et lancer
 <code>node scripts/scene-map.mjs build ${escapeHtml(proposal.projectArg)}</code>.</p>
 <h2>Niveaux</h2>
-<div class="table"><table><thead><tr><th>id</th><th>nom</th><th>origine</th><th>sol (m)</th><th>surface (m²)</th><th>coupe</th><th>emprise E0 ; N0 ; E1 ; N1</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+<div class="table"><table><thead><tr><th>id</th><th>nom</th><th>origine</th><th>sol (m)</th><th>surface (m²)</th><th title="longueur de murs autour du sol, rapportée au périmètre d'un carré de même surface">murs</th><th title="part du sol qui a quelque chose au-dessus de sol + 2 m">couvert</th><th>coupe</th><th>emprise E0 ; N0 ; E1 ; N1</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
 <h2>Vues de côté</h2>
 <p>Densité des splats, sombre = dense. Vert : niveau gardé ; rouge pointillé : écarté.</p>
 <div class="sides">${proposal.sides.map(side).join('')}</div>
@@ -798,22 +620,38 @@ const propose = () => {
     mkdirSync(controlDir, { recursive: true });
     rmSync(buildPath, { force: true });
     const s = loadSplats();
-    const detection = detectLevels(s);
+    const td = Date.now();
+    let detection;
+    try {
+        detection = detectLevels(s);
+    } catch (e) {
+        fail(e.message);
+    }
+    detection.seconds = round(seconds(td), 1);
+    console.log(`détection : ${detection.horizontalCount.toLocaleString('fr-FR')} splats horizontaux, ${detection.levels.length} niveau(x) en ${fmt(detection.seconds, 1)} s`);
+    const decision = decideLevels(detection.levels, { rules: opts.rules, type: opts.type, extent: detection.extent });
+    const names = levelNames(detection.levels, decision.levels);
     const sides = writeSideViews(s);
 
-    // Sol de la vue d'avion : le plus grand sol détecté, sinon le bas du nuage.
-    const ground = detection.floors.length ?
+    // Sol de la vue d'avion : le plus étendu des niveaux qui ne sont pas des
+    // toits, sinon le plus grand sol détecté, sinon le bas du nuage.
+    const ground = decision.aerialFloor ?? (detection.floors.length ?
         detection.floors.reduce((a, b) => (b.area > a.area ? b : a)).h :
-        round(percentiles(s.H, [2])[0]);
+        round(percentiles(s.H, [2])[0]));
     const entries = detection.levels.map((l, i) => ({
         id: `n${i + 1}`,
-        name: `Niveau ${i + 1}`,
+        name: names[i],
         kind: l.kind,
         floor: l.h,
         area: l.area,
+        surface: l.surface,
+        murs: l.murs,
+        couvert: l.couvert,
         cut: DEFAULT_CUT,
         bounds: levelBounds(s, l.h),
-        keep: true
+        keep: decision.levels[i].keep,
+        ...(decision.levels[i].raison ? { raison: decision.levels[i].raison } : {}),
+        ...(decision.levels[i].doute ? { doute: decision.levels[i].doute } : {})
     }));
     entries.push({
         id: 'avion',
@@ -822,12 +660,13 @@ const propose = () => {
         floor: ground,
         cut: null,
         bounds: levelBounds(s, null),
-        keep: entries.length === 0
+        keep: decision.aerial.keep,
+        ...(decision.aerial.raison ? { raison: decision.aerial.raison } : {})
     });
     writeFileSync(levelsPath, `${JSON.stringify({ scene: scene.id, levels: entries }, null, 2)}\n`);
 
     const thumbs = {};
-    for (const l of entries) {
+    for (const l of opts.thumbs ? entries : []) {
         const [e0, n0, e1, n1] = l.bounds;
         const px = Math.max(e1 - e0, n1 - n0) / THUMB_SIDE;
         const file = `${l.id}-vignette.webp`;
@@ -841,6 +680,9 @@ const propose = () => {
         lod: s.lod,
         splats: s.n,
         detection: { ...detection, histogram: undefined },
+        rules: { ...DEFAULT_RULES, ...opts.rules },
+        type: decision.type,
+        typeImpose: opts.type !== 'auto',
         sides,
         thumbs
     }, null, 2)}\n`);
@@ -850,44 +692,29 @@ const propose = () => {
     console.log('');
     for (const l of entries) {
         console.log(`  ${l.id.padEnd(6)} ${l.kind.padEnd(7)} ${fmt(l.floor).padStart(7)} m` +
-            `${l.area === undefined ? '' : `  ${fmt(l.area, 1).padStart(8)} m²`}  ${l.keep ? 'gardé' : 'écarté'}`);
+            `${l.surface === undefined ? '' : `  ${fmt(l.surface, 1).padStart(8)} m², murs ${fmt(l.murs)}, couvert ${fmt(l.couvert)}`}` +
+            `  ${l.keep ? 'gardé' : 'écarté'}${l.raison ? ` : ${l.raison}` : ''}${l.doute ? ` (à vérifier : ${l.doute})` : ''}`);
     }
+    console.log(`scène ${opts.type === 'auto' ? 'jugée' : 'déclarée'} ${{ interieur: 'intérieure', exterieur: 'extérieure', mixte: 'mixte (niveaux et vue d’avion)' }[decision.type]}`);
     console.log(`\nproposé en ${fmt(seconds(t0), 1)} s. À relire : ${relative(process.cwd(), join(mapDir, 'controle.html'))}`);
     console.log(`puis éditer ${relative(process.cwd(), levelsPath)} et lancer l'étape build.`);
 };
 
 // --- étape « build » ------------------------------------------------------------
 
-// Écrit le bloc « map » dans la scène sans toucher au reste du fichier : le
-// project.json est réécrit seulement s'il a la forme JSON.stringify(…, 2),
-// blocs « map » compris (un niveau par ligne).
-const formatProject = (obj) => {
-    const blocks = [];
-    const copy = structuredClone(obj);
-    for (const sc of copy.scenes) {
-        if (sc.map !== undefined) {
-            blocks.push(sc.map);
-            sc.map = `__MAP_${blocks.length - 1}__`;
-        }
-    }
-    return JSON.stringify(copy, null, 2).replace(/( *)"map": "__MAP_(\d+)__"/g, (_, indent, i) => {
-        const block = blocks[Number(i)];
-        const value = v => (Array.isArray(v) ? `[${v.map(x => JSON.stringify(x)).join(', ')}]` : JSON.stringify(v));
-        const line = l => `${indent}    {${Object.entries(l).map(([k, v]) => `${JSON.stringify(k)}: ${value(v)}`).join(', ')}}`;
-        return `${indent}"map": {\n${block.north === undefined ? '' : `${indent}  "north": ${block.north},\n`}` +
-            `${indent}  "levels": [\n${(block.levels ?? []).map(line).join(',\n')}\n${indent}  ]\n${indent}}`;
-    });
-};
-
 const writeMapBlock = (block) => {
-    const original = JSON.parse(projectText);
-    if (formatProject(original) !== projectText.trim()) {
-        console.log(`\n${relative(process.cwd(), projectPath)} n'a pas la forme attendue : bloc à recopier à la main dans la scène « ${scene.id} » :`);
+    let out = null;
+    try {
+        out = spliceMapBlock(projectText, scene.id, block);
+    } catch {
+        out = null;
+    }
+    if (!out) {
+        console.log(`\n${relative(process.cwd(), projectPath)} : bloc impossible à placer sans risque, à recopier à la main dans la scène « ${scene.id} » :`);
         console.log(`"map": ${JSON.stringify(block, null, 2)}`);
         return false;
     }
-    original.scenes.find(x => x.id === scene.id).map = block;
-    writeFileSync(projectPath, `${formatProject(original)}\n`);
+    writeFileSync(projectPath, out);
     return true;
 };
 
