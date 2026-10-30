@@ -515,9 +515,11 @@ const initUI = (global: Global) => {
     // Navigation (scènes qui ont une collision) ou par la touche C, que le
     // même bandeau confirme.
     const trCollision = translator('artlight.collision');
+    // Scène verrouillée (collisionLock) : ni interrupteur, ni touche C.
     const updateCollision = () => {
-        dom.collisionSetting.classList.toggle('hidden', !state.hasCollision);
-        dom.desktopCollisionHelp.classList.toggle('hidden', !state.hasCollision);
+        const switchable = state.hasCollision && !state.collisionLocked;
+        dom.collisionSetting.classList.toggle('hidden', !switchable);
+        dom.desktopCollisionHelp.classList.toggle('hidden', !switchable);
         dom.collisionToggle.setAttribute('aria-checked', String(state.collisionEnabled));
         dom.collisionToggle.setAttribute('aria-label', trCollision('label'));
         dom.collisionToggle.title = trCollision(state.collisionEnabled ? 'on' : 'off');
@@ -526,7 +528,7 @@ const initUI = (global: Global) => {
         state.collisionEnabled = !state.collisionEnabled;
     });
     events.on('inputEvent', (type: string) => {
-        if (type !== 'toggleCollision' || !state.hasCollision) return;
+        if (type !== 'toggleCollision' || !state.hasCollision || state.collisionLocked) return;
         state.collisionEnabled = !state.collisionEnabled;
         showNavHint(trCollision(state.collisionEnabled ? 'on' : 'off'), 2500);
     });

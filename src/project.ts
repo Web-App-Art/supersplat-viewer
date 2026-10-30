@@ -122,6 +122,12 @@ type ProjectScene = {
      * 1 (très lente) à 5 (très rapide), 3 par défaut. Voir src/move-speed.ts.
      */
     speed?: number;
+    /**
+     * ARTLIGHT : la collision ne se coupe pas (ni menu ni touche C) et retient
+     * aussi la caméra en orbite. Pour une visite extérieure dont on ne doit pas
+     * entrer dans le bâtiment (Prads extérieur : la maison pleine en collision).
+     */
+    collisionLock?: boolean;
     portals?: Portal[];
     /** ARTLIGHT (TKT-268) : carte de la scène, voir src/minimap.ts. */
     map?: SceneMap;

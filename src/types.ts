@@ -37,6 +37,7 @@ type Config = {
     noanim: boolean;
     nointro: boolean;                           // ARTLIGHT: supprime l'animation d'intro générée quand la scène n'a pas d'animTrack
     speed?: unknown;                            // ARTLIGHT (TKT-241): niveau de vitesse par défaut de la scène (1 à 5), voir move-speed.ts
+    collisionLock?: boolean;                    // ARTLIGHT: collision imposée, on n'entre pas (project.json, scène « collisionLock »)
     defaultFov?: number;                        // ARTLIGHT (TKT-271): champ de vision par défaut de la scène, posé au démarrage d'après le settings.json, voir fov.ts
     nofx: boolean;                              // disable post effects
     hpr?: boolean;                              // override highPrecisionRendering (undefined = use settings)
@@ -78,6 +79,7 @@ type State = {
     walkAllowed: boolean;
     collisionOverlayEnabled: boolean;
     collisionEnabled: boolean;                  // ARTLIGHT (TKT-278): faux = le drone traverse murs et planchers
+    collisionLocked: boolean;                   // ARTLIGHT: collision imposée (ni interrupteur ni touche C), en orbite aussi
     hasPointEdges: boolean;                     // ARTLIGHT (TKT-287): contours du nuage de points (EDL) disponibles
     pointEdges: boolean;                        // ARTLIGHT (TKT-287): contours du nuage de points affichés
     hasPointXray: boolean;                      // ARTLIGHT (TKT-288): vision X disponible (mode nuage)

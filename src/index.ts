@@ -436,6 +436,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         collisionOverlayEnabled: false,
         // ARTLIGHT
         collisionEnabled: loadCollisionEnabled(),
+        collisionLocked: config.collisionLock === true,
         hasPointEdges: false,
         pointEdges: loadPointEdges(platform.mobile),
         hasPointXray: false,

@@ -45,6 +45,14 @@ const CAMERA_ANIMATION_ENABLED = false;
 // (tangente, ~1°) pour poser le centre de rotation sans bouger la vue.
 const PIVOT_CENTER_TOLERANCE = 0.02;
 
+// ARTLIGHT : scène verrouillée (collisionLock), écart gardé entre la caméra
+// en orbite et la collision, et portée du rayon qui cherche la face
+// extérieure quand le centre de rotation est dans le plein.
+const LOCK_MARGIN = 0.3;
+const LOCK_REACH = 200;
+const lockFocus = new Vec3();
+const lockDir = new Vec3();
+
 const isWalkAllowed = (bbox: BoundingBox, collision: Collision | null): boolean => {
     const { x, z } = bbox.halfExtents;
     return WALK_ENABLED && !!collision && x * 2 >= WALK_MIN_HORIZONTAL_RANGE && z * 2 >= WALK_MIN_HORIZONTAL_RANGE;
@@ -139,8 +147,44 @@ class CameraManager {
         controllers.orbit.fov = resetCamera.fov;
         controllers.fly.fov = resetCamera.fov;
         // ARTLIGHT (TKT-278) : collision désactivable (menu Navigation, touche C).
-        controllers.fly.collision = state.collisionEnabled ? collision : null;
+        // Scène verrouillée (collisionLock) : toujours active.
+        const flyCollisionOn = () => state.collisionEnabled || state.collisionLocked;
+        controllers.fly.collision = flyCollisionOn() ? collision : null;
         controllers.walk.collision = collision;
+
+        // ARTLIGHT : scène verrouillée, la caméra en orbite (rotation, recul,
+        // transitions) ne passe pas dans la collision. Rayon du centre de
+        // rotation vers la caméra : elle s'arrête LOCK_MARGIN avant le premier
+        // plein. Si le centre est lui-même dans le plein (visé à travers une
+        // porte ouverte), la caméra reste devant la face extérieure, cherchée
+        // depuis l'autre bout du rayon. Seule la vue rendue est corrigée : le
+        // recul demandé reste celui de l'orbite et revient dès qu'il est libre.
+        const keepOutside = (camera: Camera) => {
+            camera.calcFocusPoint(lockFocus);
+            lockDir.sub2(camera.position, lockFocus);
+            const length = lockDir.length();
+            if (length < 1e-6) return;
+            lockDir.mulScalar(1 / length);
+            const { x: fx, y: fy, z: fz } = lockFocus;
+            const { x: dx, y: dy, z: dz } = lockDir;
+            const hit = collision.queryRay(fx, fy, fz, dx, dy, dz, length + LOCK_MARGIN);
+            if (!hit) return;
+            const t = (hit.x - fx) * dx + (hit.y - fy) * dy + (hit.z - fz) * dz;
+            if (t > collision.voxelResolution) {
+                camera.position.copy(lockDir).mulScalar(Math.max(0, t - LOCK_MARGIN)).add(lockFocus);
+                camera.distance = Math.max(0, t - LOCK_MARGIN);
+                return;
+            }
+            // centre dans le plein : face extérieure vue depuis l'autre bout
+            const reach = length + LOCK_REACH;
+            const back = collision.queryRay(fx + dx * reach, fy + dy * reach, fz + dz * reach, -dx, -dy, -dz, reach);
+            if (!back) return;
+            const exit = (back.x - fx) * dx + (back.y - fy) * dy + (back.z - fz) * dz + LOCK_MARGIN;
+            if (length < exit) {
+                camera.position.copy(lockDir).mulScalar(exit).add(lockFocus);
+                camera.distance = exit;
+            }
+        };
 
         // ARTLIGHT (TKT-268, lot 4) : sol de la colonne (x, z). La zone libre
         // de la collision descend aussi sous le terrain : le sol est le premier
@@ -239,6 +283,10 @@ class CameraManager {
                 this.camera.lerp(from, target, easeOut(transitionTimer));
             } else {
                 this.camera.copy(target);
+            }
+
+            if (state.collisionLocked && collision && state.cameraMode === 'orbit') {
+                keepOutside(this.camera);
             }
 
             // update animation timeline
@@ -340,7 +388,7 @@ class CameraManager {
 
         this.setCollision = (value: Collision | null) => {
             collision = value;
-            controllers.fly.collision = state.collisionEnabled ? value : null;
+            controllers.fly.collision = flyCollisionOn() ? value : null;
             controllers.walk.collision = value;
             walkAllowed = isWalkAllowed(bbox, value);
         };
@@ -348,6 +396,7 @@ class CameraManager {
         // ARTLIGHT (TKT-278) : sans collision, le drone traverse murs et
         // planchers. Rétablie dans un mur, la caméra en sort en douceur.
         events.on('collisionEnabled:changed', (enabled: boolean) => {
+            if (state.collisionLocked) return;
             controllers.fly.collision = enabled ? collision : null;
             if (enabled && state.cameraMode === 'fly') {
                 startTransition();

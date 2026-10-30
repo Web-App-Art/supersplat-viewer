@@ -324,6 +324,13 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # par exemple 2 dans une pièce, 4 au-dessus d'un site. Hors projet : ?speed=2.
 # L'utilisateur le change dans Paramètres ou avec + / - ; son choix vaut pour la scène jusqu'à la fin de la session.
 
+# Visite extérieure sans entrer (prads-ext, 30/10/2026) : dans project.json, "collisionLock": true à côté de "collision".
+# La collision ne se coupe plus (ni menu ni touche C) et retient aussi la caméra en orbite (rayon centre → caméra,
+# arrêt 30 cm avant le plein ; centre visé dans le plein à travers une porte : caméra devant la face extérieure).
+# Collision = le bâtiment plein, du sol au toit mesuré par colonne : ~/Workspace/bancs/prads-ext (maison.json pour
+# le contour en (E, N), collision.py). Garder les splats intérieurs : retirés (16 % à Prads), les portes-fenêtres
+# ouvertes et les vitrages deviennent des trous sur le jardin d'en face. Pas de verrou en XR.
+
 # ===== Préparer la carte d'une scène (TKT-268) =====
 # Outil : scripts/scene-map.mjs. Fond de la mini-carte, calculé une fois ici : par niveau, une vue de dessus
 # des splats coupée de sol − 0,2 à sol + 1,8 m (map/<id>.webp) et la carte des murs (map/<id>-murs.png) ;
