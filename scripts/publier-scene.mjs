@@ -494,6 +494,12 @@ const publier = (opts) => {
                 nuage = nuages[0] ?? null;
                 if (nuage && !existsSync(nuage)) throw new Echec(CODES.sources, `${nuage} introuvable`);
                 if (nuage?.toLowerCase().endsWith('.laz') && !disponible('pdal', ['--version'])) throw new Echec(CODES.outils, 'un .laz demande PDAL (brew install pdal / apt install pdal)');
+                const i = opts.lasOptions?.indexOf('--epsg') ?? -1;
+                const epsg = i >= 0 ? Number(opts.lasOptions[i + 1]) : null;
+                const repere = opts.lasOptions?.includes('--lcc') || opts.lasOptions?.includes('--offset');
+                if (nuage && modele.epsg > 0 && !repere && epsg !== null && epsg !== modele.epsg) {
+                    throw new Echec(CODES.sources, `le nuage est déclaré en EPSG:${epsg}, le modèle est en EPSG:${modele.epsg} : choisir EPSG:${modele.epsg}, ou reprojeter le nuage`);
+                }
             }
             const niveaux = (opts.niveaux ?? Array.from({ length: Math.min(5, modele.niveaux) }, (_, k) => k));
             const hors = niveaux.filter(k => k >= modele.niveaux);
@@ -570,8 +576,14 @@ const publier = (opts) => {
                     return options;
                 };
                 let options;
-                if (opts.lasOptions) options = essai(opts.lasOptions);
-                else {
+                if (opts.lasOptions) {
+                    // Un modèle géoréférencé impose son repère : sans --lcc, le nuage garderait l'offset
+                    // du LAS et tomberait à côté des splats (780 m sur le repère de Pont-Saint-Esprit).
+                    // --epsg ne fait alors que nommer la projection d'un LAS qui n'en déclare pas.
+                    // (une projection qui contredit le modèle est refusée dès l'étape des sources)
+                    const repere = opts.lasOptions.includes('--lcc') || opts.lasOptions.includes('--offset');
+                    options = essai(modele.epsg > 0 && !repere ? ['--lcc', modele.chemin, ...opts.lasOptions] : opts.lasOptions);
+                } else {
                     const lcc = modele.epsg > 0 ? ['--lcc', modele.chemin] : [];
                     try {
                         options = essai([...lcc, ...(opts.heightRef ? ['--height-ref', opts.heightRef] : [])]);
@@ -670,7 +682,8 @@ const publier = (opts) => {
 
         // 9. project.json complet (vitesse selon le type de scène)
         suivi.etape('projet', () => {
-            const type = carte?.type ?? etat.etapes.find(e => e.etape === 'reglages')?.details.type;
+            // suivi.etapes et non etat.etapes : ce dernier n'est rempli qu'à l'écriture de etat.json (--sans-carte échouait ici)
+            const type = carte?.type ?? suivi.etapes.find(e => e.etape === 'reglages')?.details?.type;
             projet.scenes[0].speed = { interieur: 2, mixte: 3, exterieur: 4 }[type] ?? 3;
             writeFileSync(projetPath, `${JSON.stringify(projet, null, 2)}\n`);
             return { speed: projet.scenes[0].speed, nuage: !!nuage };
