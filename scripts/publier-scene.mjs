@@ -417,16 +417,23 @@ const reglagesParDefaut = camera => ({
 
 // --- publier -----------------------------------------------------------------
 
-const publier = (opts) => {
-    const { sortie, travail } = opts;
-    const staging = `${sortie}.en-cours`;
-    const journaux = join(staging, 'publication', 'journaux');
+// Options GPU de splat-transform (-g, --gpu-backend), et l'environnement qui les
+// transmet aux enfants (scene-map.mjs lit SPLAT_TRANSFORM_OPTIONS). Partagé par
+// les deux formes : « carte » les ignorait (TKT-297, lot 4), donc la carte d'une
+// scène se construisait sur l'adaptateur par défaut et non sur Vulkan.
+const optionsSplat = (opts) => {
     const optionsGpu = [
         ...(opts.gpu !== null ? ['-g', opts.gpu] : []),
         ...(opts.gpuBackend ? ['--gpu-backend', opts.gpuBackend] : [])
     ];
-    // les enfants (scene-map.mjs) héritent des mêmes options GPU
-    const envSplat = { SPLAT_TRANSFORM_OPTIONS: [...splatTransformOptions(), ...optionsGpu].join(' ') };
+    return { optionsGpu, envSplat: { SPLAT_TRANSFORM_OPTIONS: [...splatTransformOptions(), ...optionsGpu].join(' ') } };
+};
+
+const publier = (opts) => {
+    const { sortie, travail } = opts;
+    const staging = `${sortie}.en-cours`;
+    const journaux = join(staging, 'publication', 'journaux');
+    const { optionsGpu, envSplat } = optionsSplat(opts);
     const st = splatTransformCommand();
     const splat = (etape, args, code = CODES.calcul) => lancer({ journaux, etape, cmd: st.cmd, args: [...splatTransformOptions(), ...optionsGpu, ...args], code });
 
@@ -750,18 +757,19 @@ const construireCarte = (opts) => {
     const projetPath = join(scene, 'project.json');
     const etat = existsSync(etatPath) ? JSON.parse(readFileSync(etatPath, 'utf-8')) : { version: 1 };
     const suivi = creerSuivi({ total: opts.proposer ? 2 : 1, racine: () => scene, journaux });
+    const { envSplat } = optionsSplat(opts);
     try {
         if (!existsSync(projetPath)) throw new Echec(CODES.arguments, `${projetPath} introuvable`);
         if (opts.proposer) {
             suivi.etape('carte-propose', () => {
-                lancer({ journaux, etape: 'carte-propose', cmd: process.execPath, args: [join(SCRIPTS, 'scene-map.mjs'), 'propose', projetPath, '--force', '--type', opts.type], code: CODES.carte });
+                lancer({ journaux, etape: 'carte-propose', cmd: process.execPath, args: [join(SCRIPTS, 'scene-map.mjs'), 'propose', projetPath, '--force', '--type', opts.type], code: CODES.carte, env: envSplat });
                 const levels = JSON.parse(readFileSync(join(scene, 'map', 'levels.json'), 'utf-8')).levels;
                 return { niveaux: levels.map(l => ({ id: l.id, name: l.name, floor: l.floor, keep: l.keep, ...(l.raison ? { raison: l.raison } : {}) })) };
             });
         }
         const details = suivi.etape('carte-build', () => {
             if (!existsSync(join(scene, 'map', 'levels.json'))) throw new Echec(CODES.carte, 'pas de map/levels.json : proposer d\'abord (carte --proposer)');
-            lancer({ journaux, etape: 'carte-build', cmd: process.execPath, args: [join(SCRIPTS, 'scene-map.mjs'), 'build', projetPath], code: CODES.carte });
+            lancer({ journaux, etape: 'carte-build', cmd: process.execPath, args: [join(SCRIPTS, 'scene-map.mjs'), 'build', projetPath], code: CODES.carte, env: envSplat });
             const build = JSON.parse(readFileSync(join(scene, 'map', 'controle', 'build.json'), 'utf-8'));
             const projet = JSON.parse(readFileSync(projetPath, 'utf-8'));
             const bloc = projet.scenes?.[0]?.map;
