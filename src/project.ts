@@ -128,6 +128,12 @@ type ProjectScene = {
      * entrer dans le bâtiment (Prads extérieur : la maison pleine en collision).
      */
     collisionLock?: boolean;
+    /**
+     * ARTLIGHT : qualité de départ sur ordinateur pour un visiteur qui n'a rien
+     * choisi : 'auto' (défaut), 'standard', 'medium' ou 'high'. Une scène lourde
+     * s'ouvre ainsi en Moyenne. Sans effet sur mobile. Voir src/quality.ts.
+     */
+    quality?: 'auto' | 'standard' | 'medium' | 'high';
     portals?: Portal[];
     /** ARTLIGHT (TKT-268) : carte de la scène, voir src/minimap.ts. */
     map?: SceneMap;

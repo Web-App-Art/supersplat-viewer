@@ -380,7 +380,7 @@ const initCanvas = (global: Global) => {
 const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config) => {
     // ARTLIGHT (TKT-270) : l'ancien interrupteur « Mode performance » est
     // remplacé par le choix de qualité Auto / Standard / Haute.
-    const qualityChoice = loadQualityChoice(platform.mobile);
+    const qualityChoice = loadQualityChoice(platform.mobile, config.quality);
     const performanceMode = isReducedQuality(qualityChoice, 0, platform.mobile);
 
     // size the canvas backbuffer before the graphics device is created, so the swap

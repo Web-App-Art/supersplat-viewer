@@ -81,29 +81,33 @@ const parseQualityChoice = (value: unknown): QualityChoice | null => {
 };
 
 /**
- * Choix mémorisé, Auto par défaut. Oublie l'ancien mode performance.
+ * Choix mémorisé ; à défaut, celui de la scène ; à défaut, Auto. Oublie
+ * l'ancien mode performance.
  *
  * @param {boolean} mobile - Appareil mobile : Moyenne n'y est pas proposée et
  * se lit Haute.
+ * @param {unknown} [sceneDefault] - Qualité de départ de la scène sur
+ * ordinateur (project.json, « quality »), pour un visiteur qui n'a encore
+ * rien choisi : une scène lourde peut ainsi s'ouvrir en Moyenne. Sans effet
+ * sur mobile, où Auto démarre déjà en Standard.
  * @returns {QualityChoice} Le choix de départ.
  */
-const loadQualityChoice = (mobile: boolean): QualityChoice => {
+const loadQualityChoice = (mobile: boolean, sceneDefault?: unknown): QualityChoice => {
+    const fallback = mobile ? 'auto' : parseQualityChoice(sceneDefault) ?? 'auto';
     try {
         LEGACY_KEYS.forEach(key => localStorage.removeItem(key));
-        const choice = parseQualityChoice(localStorage.getItem(STORAGE_KEY)) ?? 'auto';
+        const choice = parseQualityChoice(localStorage.getItem(STORAGE_KEY)) ?? fallback;
         return choice === 'medium' && mobile ? 'high' : choice;
     } catch {
-        return 'auto';
+        return fallback;
     }
 };
 
+// Auto est mémorisé comme les autres choix : choisi à la main, il l'emporte
+// sur la qualité de départ d'une scène.
 const saveQualityChoice = (choice: QualityChoice) => {
     try {
-        if (choice === 'auto') {
-            localStorage.removeItem(STORAGE_KEY);
-        } else {
-            localStorage.setItem(STORAGE_KEY, choice);
-        }
+        localStorage.setItem(STORAGE_KEY, choice);
     } catch {
         // stockage indisponible : choix valable pour cette visite seulement
     }

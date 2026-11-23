@@ -324,6 +324,10 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # par exemple 2 dans une pièce, 4 au-dessus d'un site. Hors projet : ?speed=2.
 # L'utilisateur le change dans Paramètres ou avec + / - ; son choix vaut pour la scène jusqu'à la fin de la session.
 
+# Qualité de départ par scène (villa-la-londe, 23/11/2026) : dans project.json, "quality": "medium" ouvre la scène en
+# Moyenne (8 M) sur ordinateur pour un visiteur qui n'a encore rien choisi ("auto" par défaut, "standard", "high").
+# Sans effet sur mobile. Le choix fait dans le menu Qualité l'emporte ensuite, Auto compris.
+
 # Visite extérieure sans entrer (prads-ext, 30/10/2026) : dans project.json, "collisionLock": true à côté de "collision".
 # La collision ne se coupe plus (ni menu ni touche C) et retient aussi la caméra en orbite (rayon centre → caméra,
 # arrêt 30 cm avant le plein ; centre visé dans le plein à travers une porte : caméra devant la face extérieure).

@@ -127,6 +127,7 @@
                 }
                 sseConfig.speed ??= scene.speed;
                 sseConfig.collisionLock = scene.collisionLock === true;
+                sseConfig.quality = scene.quality;
                 sseConfig.skyboxUrl = rel(scene.skybox) || skyboxUrl;
 
                 window.sse.project = { project, projectParam, sceneId: scene.id };

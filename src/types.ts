@@ -38,6 +38,7 @@ type Config = {
     nointro: boolean;                           // ARTLIGHT: supprime l'animation d'intro générée quand la scène n'a pas d'animTrack
     speed?: unknown;                            // ARTLIGHT (TKT-241): niveau de vitesse par défaut de la scène (1 à 5), voir move-speed.ts
     collisionLock?: boolean;                    // ARTLIGHT: collision imposée, on n'entre pas (project.json, scène « collisionLock »)
+    quality?: unknown;                          // ARTLIGHT: qualité de départ de la scène sur ordinateur (project.json, « quality »), voir quality.ts
     defaultFov?: number;                        // ARTLIGHT (TKT-271): champ de vision par défaut de la scène, posé au démarrage d'après le settings.json, voir fov.ts
     nofx: boolean;                              // disable post effects
     hpr?: boolean;                              // override highPrecisionRendering (undefined = use settings)
