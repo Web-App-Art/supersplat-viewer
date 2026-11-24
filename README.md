@@ -328,6 +328,17 @@ node scripts/lcc-coordinates.mjs lcc-result/Villa_Callian.lcc settings.json
 # Moyenne (8 M) sur ordinateur pour un visiteur qui n'a encore rien choisi ("auto" par défaut, "standard", "high").
 # Sans effet sur mobile. Le choix fait dans le menu Qualité l'emporte ensuite, Auto compris.
 
+# Équipements d'un relevé (villa-la-londe, 24/11/2026) : points d'intérêt techniques (arrivées, regards, ventilations,
+# appareils), un repère par objet au sigle des plans, avec photo et fiche. Dans project.json :
+#   "equipements": "./equipements/equipements.json", "equipementsVisibles": true (repères montrés dès l'ouverture).
+# Le fichier donne "niveaux" (id, nom, court), "familles" (id, nom, court, couleur, pointille pour « à identifier »)
+# et "points" (id, sigle, famille, niveau, titre, lieu, description, marque, remarque, photos relatives au fichier
+# avec une copie agrandie dans photos/grand/, position et vue {position, cible} en repère moteur, coordonnees
+# affichées telles quelles, precision, approchee). Un repère caché par un mur s'efface (test de profondeur par le
+# picker quand la caméra s'arrête) : poser l'ancre sur la face visible de l'objet, pas en son centre.
+# Fabrication depuis un dossier de fiches CC43 + NGF : banc ~/Workspace/bancs/lalonde/poi (convertir.mjs, vues.py,
+# visite/construire.mjs). Bouton de la barre et touche I ; les repères vont aussi sur la carte.
+
 # Visite extérieure sans entrer (prads-ext, 30/10/2026) : dans project.json, "collisionLock": true à côté de "collision".
 # La collision ne se coupe plus (ni menu ni touche C) et retient aussi la caméra en orbite (rayon centre → caméra,
 # arrêt 30 cm avant le plein ; centre visé dans le plein à travers une porte : caméra devant la face extérieure).

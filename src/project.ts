@@ -139,6 +139,13 @@ type ProjectScene = {
     map?: SceneMap;
     /** ARTLIGHT (TKT-272) : modèle intérieur, affiché dans le volume du bâtiment. */
     interior?: SceneInterior;
+    /**
+     * ARTLIGHT : points d'intérêt techniques (équipements, réseaux) du relevé,
+     * fichier JSON relatif au project.json. Voir src/equipements.ts.
+     */
+    equipements?: string;
+    /** ARTLIGHT : repères des équipements affichés dès l'ouverture (masqués sinon). */
+    equipementsVisibles?: boolean;
 };
 
 type Project = {

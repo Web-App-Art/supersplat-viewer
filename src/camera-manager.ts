@@ -500,6 +500,27 @@ class CameraManager {
             events.fire('navTarget:clear');
         });
 
+        // ARTLIGHT : point de vue préparé d'un équipement (src/equipements.ts).
+        // En orbite, la caméra tourne ensuite autour de l'équipement ; sinon
+        // le drone s'y rend, la marche passe en drone.
+        events.on('equipement:goto', (position: Vec3, cible: Vec3) => {
+            sourcesByMode[state.cameraMode]?.cancel();
+            events.fire('navTarget:clear');
+            events.fire('orbitTarget:clear');
+            tmpCamera.copy(this.camera);
+            tmpCamera.fov = state.fov;
+            tmpCamera.look(position, cible);
+            if (state.cameraMode === 'orbit') {
+                controllers.orbit.goto(tmpCamera);
+            } else {
+                if (state.cameraMode !== 'fly') {
+                    state.cameraMode = 'fly';
+                }
+                controllers.fly.goto(tmpCamera);
+            }
+            startTransition();
+        });
+
         // ARTLIGHT (TKT-268, lot 3) : clic sur la carte. En drone, la caméra
         // rejoint le point en gardant sa direction ; en orbite, la cible s'y
         // déplace et la caméra la suit, même recul, même angle. Transition

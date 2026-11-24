@@ -84,7 +84,7 @@ const CLUSTER_PX = 24;
 // Zoom appliqué au clic sur un groupe.
 const CLUSTER_ZOOM = 3;
 
-type PinKind = 'portal' | 'annotation' | 'view';
+type PinKind = 'portal' | 'annotation' | 'view' | 'equipement';
 
 type Pin = {
     kind: PinKind,
@@ -96,8 +96,14 @@ type Pin = {
     title: string,
     // vue de départ : cap de la caméra, dessiné en flèche
     heading?: number,
+    // ARTLIGHT : équipement, couleur de sa famille ; pointillé = non identifié
+    color?: string,
+    dashed?: boolean,
     act: () => void
 };
+
+// ARTLIGHT : repère d'équipement transmis par src/equipements.ts (repère moteur).
+type EquipementPin = { position: number[], exterior: boolean, glyph: string, title: string, color: string, dashed: boolean, act: () => void };
 
 // Cible de clic de la dernière image de la vue agrandie.
 // close : sur téléphone, la vue agrandie se referme pour laisser voir la scène.
@@ -119,7 +125,8 @@ const COLORS = {
 const PIN_COLORS: Record<PinKind, string> = {
     portal: COLORS.accent,
     annotation: '#e5e5e5',
-    view: '#0ea5e9'
+    view: '#0ea5e9',
+    equipement: '#e5e5e5'
 };
 
 const ROOM_FONT = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -375,14 +382,43 @@ class MiniMap {
     }
 
     private hasPins() {
-        return this.pins.length > 0 || this.levels.some(level => level.rooms?.length);
+        return this.pins.length > 0 || this.equipementPins.length > 0 || this.levels.some(level => level.rooms?.length);
+    }
+
+    // ARTLIGHT : repères des équipements affichés (liste vide = calque masqué).
+    private equipementPins: Pin[] = [];
+
+    // Un équipement extérieur figure aussi sur la vue d'avion (niveau sans plan
+    // de murs), en plus du niveau que donne sa hauteur.
+    setEquipementPins(pins: EquipementPin[]) {
+        let aerial = -1;
+        this.levels.forEach((level, i) => {
+            if (!this.hasWalls(level)) aerial = i;
+        });
+        this.equipementPins = pins.flatMap((pin) => {
+            const base = {
+                kind: 'equipement' as const,
+                e: -pin.position[0],
+                n: pin.position[2],
+                glyph: pin.glyph,
+                title: pin.title,
+                color: pin.color,
+                dashed: pin.dashed,
+                act: pin.act
+            };
+            const level = this.pinLevel(pin.position);
+            return pin.exterior && aerial >= 0 && aerial !== level ? [{ ...base, level }, { ...base, level: aerial }] : [{ ...base, level }];
+        });
+        this.marksButton?.classList.toggle('hidden', !this.hasPins());
+        this.dirty = true;
     }
 
     // Repères du niveau à dessiner (annotations masquées avec celles de la scène).
     private levelPins(index: number) {
         if (!this.showPins) return [];
         const annotations = this.global.state.showAnnotations;
-        return this.pins.filter(pin => pin.level === index && (pin.kind !== 'annotation' || annotations));
+        return this.pins.filter(pin => pin.level === index && (pin.kind !== 'annotation' || annotations))
+        .concat(this.equipementPins.filter(pin => pin.level === index));
     }
 
     private hasWalls(level: SceneMapLevel) {
@@ -994,7 +1030,7 @@ class MiniMap {
         for (const pin of this.levelPins(index)) {
             ctx.beginPath();
             ctx.arc(toX(pin.e), toY(pin.n), 3, 0, Math.PI * 2);
-            ctx.fillStyle = PIN_COLORS[pin.kind];
+            ctx.fillStyle = pin.color ?? PIN_COLORS[pin.kind];
             ctx.fill();
             ctx.lineWidth = 1;
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
@@ -1088,12 +1124,18 @@ class MiniMap {
         ctx.shadowBlur = 4;
         ctx.beginPath();
         ctx.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = PIN_COLORS[pin.kind];
+        // ARTLIGHT : équipement non identifié, disque sombre à liseré pointillé
+        ctx.fillStyle = pin.dashed ? COLORS.dark : (pin.color ?? PIN_COLORS[pin.kind]);
         ctx.fill();
         ctx.shadowColor = 'transparent';
         ctx.lineWidth = 2;
-        ctx.strokeStyle = pin.kind === 'annotation' ? COLORS.dark : '#fff';
+        ctx.strokeStyle = pin.kind === 'annotation' || pin.kind === 'equipement' ? COLORS.dark : '#fff';
+        if (pin.dashed) {
+            ctx.strokeStyle = '#fff';
+            ctx.setLineDash([3, 2.5]);
+        }
         ctx.stroke();
+        ctx.setLineDash([]);
         if (pin.kind === 'view') {
             // flèche du cap de la vue de départ
             ctx.translate(x, y);
@@ -1107,8 +1149,8 @@ class MiniMap {
             ctx.closePath();
             ctx.fill();
         } else {
-            ctx.fillStyle = COLORS.dark;
-            ctx.font = `bold ${pin.glyph.length > 1 ? 10 : 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            ctx.fillStyle = pin.dashed ? '#fff' : COLORS.dark;
+            ctx.font = `bold ${pin.glyph.length > 2 ? 8 : pin.glyph.length > 1 ? 10 : 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(pin.glyph, x, y + 0.5);
@@ -1298,3 +1340,4 @@ class MiniMap {
 }
 
 export { MiniMap };
+export type { EquipementPin };

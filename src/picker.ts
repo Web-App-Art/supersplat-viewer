@@ -547,6 +547,13 @@ class Picker {
 
     release: () => void;
 
+    /**
+     * ARTLIGHT : surface vue au pixel (x, y), sans passe d'affinage. Plusieurs
+     * appels sous la même caméra relisent la même passe : un seul rendu pour
+     * tester l'occultation de tous les repères des équipements.
+     */
+    pickCoarse: (x: number, y: number) => Promise<Vec3 | null>;
+
     constructor(app: AppBase, camera: Entity) {
         const { graphicsDevice } = app;
 
@@ -918,6 +925,8 @@ class Picker {
         this.pick = (x: number, y: number) => serializePick(() => pick(x, y));
 
         this.pickSurface = (x: number, y: number) => serializePick(() => pickSurface(x, y));
+
+        this.pickCoarse = (x: number, y: number) => serializePick(async () => (await pickPosition(x, y))?.position ?? null);
 
         this.release = () => {
             if (chunksPatched) {

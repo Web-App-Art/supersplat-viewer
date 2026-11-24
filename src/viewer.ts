@@ -38,6 +38,7 @@ import { MeshCollision, SwitchableCollision, VoxelCollision } from './collision'
 import { ORBIT_PARAM, contentModeUrl } from './content-mode'; // ARTLIGHT (TKT-228, TKT-233)
 import { nearlyEquals } from './core/math';
 import { DebugPanel } from './debug';
+import { Equipements } from './equipements'; // ARTLIGHT
 import { FlatnessTool } from './flatness-tool'; // ARTLIGHT
 import { InputController } from './input-controller';
 import { InteriorSwitch } from './interior'; // ARTLIGHT (TKT-272)
@@ -198,6 +199,8 @@ class Viewer {
     interiorSwitch: InteriorSwitch | null = null; // ARTLIGHT (TKT-272)
 
     miniMap: MiniMap | null = null; // ARTLIGHT (TKT-268)
+
+    equipements: Equipements | null = null; // ARTLIGHT : points d'intérêt techniques
 
     voxelOverlay: VoxelDebugOverlay | null = null;
 
@@ -678,6 +681,13 @@ class Viewer {
 
             this.picker = new Picker(app, camera);
             this.inputController = new InputController(global, this.picker);
+
+            // ARTLIGHT : calque des équipements, si la scène en déclare.
+            if (!config.noui) {
+                Equipements.create(global, this.picker, this.miniMap).then((layer) => {
+                    this.equipements = layer;
+                });
+            }
 
             // ARTLIGHT: outils de mesure
             // Measure tool

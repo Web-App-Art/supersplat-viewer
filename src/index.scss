@@ -3140,3 +3140,604 @@ body.has-minimap #zeroBadge {
         }
     }
 }
+
+// ARTLIGHT : calque « Équipements » (src/equipements.ts) — repères posés sur
+// les objets, panneau à droite (liste puis fiche), photo agrandie.
+
+#equipementsLayer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+#ui .eq-mark {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: grid;
+    justify-items: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    // ancrage : le point bas du repère est sur l'objet (transform posé par
+    // equipements.ts, réduction comprise)
+    transform-origin: 50% 100%;
+    pointer-events: auto;
+    will-change: transform;
+
+    &.hidden {
+        display: none;
+    }
+
+    .eq-pin {
+        min-width: 30px;
+        height: 24px;
+        box-sizing: border-box;
+        padding: 0 7px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        font: 700 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        letter-spacing: 0.02em;
+        color: #0d0d0d;
+        background: var(--c);
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.5);
+    }
+
+    .eq-stem {
+        width: 2px;
+        height: 10px;
+        background: var(--c);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+    }
+
+    .eq-dot {
+        width: 8px;
+        height: 8px;
+        margin-top: -1px;
+        border-radius: 50%;
+        background: var(--c);
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+    }
+
+    .eq-tip {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: $tool-panel-bkg;
+        border: 1px solid $tool-border;
+        color: $tool-text-strong;
+        font-size: 12px;
+        white-space: nowrap;
+        opacity: 0;
+        transition: opacity 0.15s;
+        pointer-events: none;
+    }
+
+    &:hover .eq-tip,
+    &:focus-visible .eq-tip {
+        opacity: 1;
+    }
+
+    &:focus-visible .eq-pin {
+        outline: 2px solid $tool-accent;
+        outline-offset: 3px;
+    }
+
+    &.unknown {
+        .eq-pin {
+            background: rgba(20, 20, 20, 0.75);
+            color: #fff;
+            outline: 2px dashed #fff;
+            outline-offset: -2px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        .eq-stem,
+        .eq-dot {
+            background: #fff;
+        }
+    }
+
+    &.far {
+        opacity: 0.8;
+    }
+
+    &.current {
+        z-index: 1;
+
+        .eq-pin {
+            box-shadow: 0 0 0 2px #fff, 0 0 0 5px var(--c), 0 4px 14px rgba(0, 0, 0, 0.6);
+        }
+
+        .eq-tip {
+            opacity: 1;
+        }
+    }
+
+    // équipement choisi, caché par un mur : montré quand même, estompé
+    &.behind {
+        opacity: 0.55;
+
+        .eq-stem {
+            background: repeating-linear-gradient(var(--c) 0 3px, transparent 3px 5px);
+        }
+    }
+}
+
+#controlsWrap #equipements.layer-off svg {
+    opacity: 0.55;
+}
+
+.eq-panel {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    right: max(16px, env(safe-area-inset-right));
+    width: min(340px, calc(100vw - 32px));
+    max-height: calc(100vh - 16px - 76px);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    background: $tool-panel-bkg;
+    border: 1px solid $tool-border;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: $tool-text;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    z-index: 1000;
+    overflow: hidden;
+    user-select: text;
+    -webkit-user-select: text;
+
+    &.hidden,
+    .hidden {
+        display: none !important;
+    }
+
+    button {
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+    }
+
+    .eq-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 10px 10px 14px;
+        border-bottom: 1px solid $tool-border;
+
+        b {
+            color: $tool-text-strong;
+            font-size: 14px;
+        }
+
+        .eq-head-icon svg {
+            display: block;
+            width: 18px;
+            height: 18px;
+            color: $tool-accent;
+        }
+
+        .eq-count {
+            flex: 1;
+            color: $tool-text-faint;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+    }
+
+    .eq-toggle {
+        padding: 4px 10px;
+        border: 1px solid $tool-border;
+        border-radius: 999px;
+        background: none;
+        color: $tool-text-muted;
+        font-size: 12px;
+
+        &[aria-pressed="true"] {
+            border-color: transparent;
+            background: $tool-accent;
+            color: #18181b;
+            font-weight: 600;
+        }
+    }
+
+    .eq-close {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 6px;
+        background: none;
+        color: $tool-text-muted;
+        font-size: 20px;
+        line-height: 1;
+
+        &:hover {
+            background: $tool-control-bkg-hover;
+            color: $tool-text-strong;
+        }
+    }
+
+    .eq-list,
+    .eq-card {
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+    }
+
+    .eq-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 10px 12px;
+        min-height: 0;
+    }
+
+    .eq-levels {
+        flex: none;
+    }
+
+    .eq-families {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+
+    .eq-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px 3px 6px;
+        border: 1px solid $tool-border;
+        border-radius: 999px;
+        background: none;
+        color: $tool-text-faint;
+        font-size: 11.5px;
+
+        i {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--c);
+            opacity: 0.35;
+        }
+
+        &.unknown i {
+            background: none;
+            outline: 1.5px dashed #fff;
+            outline-offset: -1.5px;
+        }
+
+        &[aria-pressed="true"] {
+            color: $tool-text;
+            background: $tool-control-bkg;
+
+            i {
+                opacity: 1;
+            }
+        }
+    }
+
+    .eq-items {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .eq-list > * {
+        flex-shrink: 0;
+    }
+
+    .eq-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 8px 4px 2px;
+        color: $tool-text-muted;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+
+        &::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            background: var(--c);
+        }
+    }
+
+    .eq-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 6px;
+        border: 0;
+        border-radius: 8px;
+        background: none;
+        text-align: left;
+
+        &:hover {
+            background: $tool-control-bkg;
+        }
+
+        &.current {
+            background: $tool-control-bkg-hover;
+        }
+
+        small {
+            display: block;
+            color: $tool-text-faint;
+            font-size: 11.5px;
+        }
+    }
+
+    .eq-item-text {
+        min-width: 0;
+        color: $tool-text-strong;
+    }
+
+    .eq-sigle {
+        flex: none;
+        min-width: 34px;
+        height: 22px;
+        box-sizing: border-box;
+        padding: 0 6px;
+        display: grid;
+        place-items: center;
+        border-radius: 11px;
+        background: var(--c);
+        color: #0d0d0d;
+        font-size: 11px;
+        font-weight: 700;
+    }
+
+    .unknown .eq-sigle {
+        background: transparent;
+        color: #fff;
+        outline: 1.5px dashed #fff;
+        outline-offset: -1.5px;
+    }
+
+    .eq-empty {
+        padding: 12px 4px;
+        color: $tool-text-faint;
+    }
+
+    .eq-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 14px 14px;
+        min-height: 0;
+
+        h3 {
+            margin: 0;
+            color: $tool-text-strong;
+            font-size: 15px;
+            line-height: 1.25;
+        }
+
+        // la fiche défile : ses blocs gardent leur hauteur
+        > * {
+            flex-shrink: 0;
+        }
+    }
+
+    .eq-back {
+        align-self: flex-start;
+        padding: 2px 6px;
+        margin-left: -6px;
+        border: 0;
+        border-radius: 6px;
+        background: none;
+        color: $tool-text-muted;
+
+        &:hover {
+            color: $tool-text-strong;
+            background: $tool-control-bkg;
+        }
+    }
+
+    .eq-photo {
+        display: block;
+        padding: 0;
+        border: 0;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #000;
+        cursor: zoom-in;
+
+        img {
+            display: block;
+            width: 100%;
+            max-height: 240px;
+            object-fit: contain;
+        }
+    }
+
+    .eq-thumbs {
+        display: flex;
+        gap: 6px;
+
+        button {
+            width: 56px;
+            height: 42px;
+            padding: 0;
+            border: 2px solid transparent;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #000;
+            opacity: 0.6;
+
+            &[aria-pressed="true"] {
+                border-color: $tool-accent;
+                opacity: 1;
+            }
+        }
+
+        img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    }
+
+    .eq-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .eq-row {
+        line-height: 1.45;
+
+        b {
+            display: block;
+            margin-bottom: 1px;
+            color: $tool-text-faint;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        small {
+            display: block;
+            margin-top: 4px;
+            color: $tool-text-faint;
+            font-size: 11px;
+        }
+    }
+
+    .eq-coords {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 8px 6px 10px;
+        border-radius: 8px;
+        background: $tool-control-bkg;
+        color: $tool-text-strong;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+
+        button {
+            padding: 4px 10px;
+            border: 1px solid $tool-border;
+            border-radius: 6px;
+            background: none;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px;
+
+            &:hover {
+                background: $tool-control-bkg-hover;
+            }
+        }
+    }
+
+    .eq-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 2px;
+
+        .spacer {
+            flex: 1;
+        }
+
+        button {
+            height: 30px;
+            padding: 0 12px;
+            border: 1px solid $tool-border;
+            border-radius: 7px;
+            background: $tool-control-bkg;
+
+            &:hover:not(:disabled) {
+                background: $tool-control-bkg-hover;
+            }
+
+            &:disabled {
+                opacity: 0.35;
+                cursor: default;
+            }
+        }
+
+        .eq-goto {
+            border-color: transparent;
+            background: $tool-accent;
+            color: #18181b;
+            font-weight: 600;
+
+            &:hover:not(:disabled) {
+                background: #a3e635;
+            }
+        }
+
+        .eq-prev,
+        .eq-next {
+            width: 34px;
+            padding: 0;
+            font-size: 18px;
+        }
+    }
+
+    // téléphone : panneau en bas, au-dessus de la barre de boutons
+    @media (max-width: 720px) {
+        top: auto;
+        left: 8px;
+        right: 8px;
+        bottom: calc(68px + env(safe-area-inset-bottom));
+        width: auto;
+        // le centre de l'écran (où le point de vue met l'équipement) reste visible
+        max-height: min(40vh, calc(50vh - 76px));
+
+        .eq-head {
+            padding: 6px 8px 6px 12px;
+        }
+
+        .eq-card {
+            gap: 8px;
+            padding: 8px 12px 12px;
+        }
+
+        .eq-photo img {
+            max-height: 120px;
+        }
+    }
+}
+
+.eq-zoom {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.88);
+    cursor: zoom-out;
+
+    &.hidden {
+        display: none;
+    }
+
+    img {
+        max-width: 100%;
+        max-height: 100%;
+        border-radius: 6px;
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+    }
+}

@@ -270,7 +270,7 @@ const initUI = (global: Global) => {
         'pointEdgesRow', 'pointEdgesCheck',
         'collisionSetting', 'collisionToggle', 'desktopCollisionHelp',
         'fovLabel', 'fovValue', 'fovRange', 'fovReset',
-        'pointXray', 'pointXraySetting', 'pointXrayLabel', 'pointXrayValue', 'pointXrayRange', 'pointXrayReset',
+        'equipements', 'pointXray', 'pointXraySetting', 'pointXrayLabel', 'pointXrayValue', 'pointXrayRange', 'pointXrayReset',
         'measure',
         'areaMeasure',
         'flatnessMeasure',
@@ -1145,6 +1145,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.toolsMenu, localize('tooltip.artlight-tools'), 'top');
     tooltip.register(dom.contentMode, localize('tooltip.artlight-pointcloud'), 'top');
     tooltip.register(dom.pointXray, localize('tooltip.artlight-xray'), 'top');
+    tooltip.register(dom.equipements, localize('tooltip.artlight-equipements'), 'top');
     tooltip.register(dom.qualityMenu, localize('tooltip.artlight-quality'), 'top');
     tooltip.register(dom.settings, localize('tooltip.settings'), 'top');
     tooltip.register(dom.info, localize('tooltip.help'), 'top');
