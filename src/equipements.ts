@@ -58,14 +58,14 @@ type Equipement = {
 type Fichier = { version: number, repere?: string, niveaux?: Niveau[], familles?: Famille[], points?: Equipement[] };
 
 // Au-delà, les repères ne sont plus dessinés (m).
-const MAX_DISTANCE = 30;
+const MAX_DISTANCE = 20;
 // Au-delà, repère réduit et un peu estompé (m).
 const FAR_DISTANCE = 9;
 // Marge du test d'occultation : surface vue plus proche que le repère d'au
 // moins max(MIN, REL × distance) = repère caché. Couvre l'épaisseur de l'objet
 // devant son point d'ancrage (poêle, casier) et le bruit des splats.
 const OCCLUSION_MIN = 0.35;
-const OCCLUSION_REL = 0.06;
+const OCCLUSION_REL = 0.04;
 // Test lancé quand la caméra est arrêtée depuis IDLE_MS, ou pendant un
 // mouvement continu au plus toutes les MOVING_MS.
 const IDLE_MS = 160;
