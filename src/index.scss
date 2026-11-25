@@ -3305,6 +3305,19 @@ body.has-minimap #zeroBadge {
         display: none !important;
     }
 
+    // la règle globale `* { touch-action: none }` bloque le défilement au
+    // doigt (Safari iOS) : la liste et la fiche défilent verticalement
+    &,
+    * {
+        touch-action: pan-y;
+    }
+
+    .eq-list,
+    .eq-card {
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
     button {
         font: inherit;
         color: inherit;
